@@ -72,12 +72,21 @@ export default function ChatInterface({ onOpenContractGenerator }: ChatInterface
     isLoading, 
     error, 
     clearError,
+    clearLoadingState,
     getCurrentChat
   } = useChatStore();
   
   const [inputMessage, setInputMessage] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const currentChat = getCurrentChat();
+
+  // Clear loading state when chat changes
+  useEffect(() => {
+    if (currentChatId) {
+      // Clear loading state immediately when switching chats
+      clearLoadingState();
+    }
+  }, [currentChatId, clearLoadingState]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -253,7 +262,7 @@ export default function ChatInterface({ onOpenContractGenerator }: ChatInterface
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+          transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
           className="p-4 md:p-6 space-y-3 md:space-y-4 pb-4"
           style={{ minHeight: '100%' }}
         >
@@ -354,11 +363,11 @@ export default function ChatInterface({ onOpenContractGenerator }: ChatInterface
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -10, scale: 0.95 }}
                 transition={{ 
-                  delay: index * 0.01,
-                  duration: 0.3,
+                  delay: Math.min(index * 0.01, 0.1), // Cap the delay to prevent long animations
+                  duration: 0.2,
                   type: "spring",
-                  stiffness: 300,
-                  damping: 25
+                  stiffness: 400,
+                  damping: 30
                 }}
                 className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'} px-2 md:px-0`}
               >
@@ -467,13 +476,13 @@ export default function ChatInterface({ onOpenContractGenerator }: ChatInterface
               </motion.div>
             ))}
 
-            {/* Loading Indicator */}
-            {isLoading && (
+            {/* Loading Indicator - only show when actually sending a message */}
+            {isLoading && currentMessages.length > 0 && (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
+                transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
                 className="flex justify-start px-2 md:px-0"
               >
                 <motion.div

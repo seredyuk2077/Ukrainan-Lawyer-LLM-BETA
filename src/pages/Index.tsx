@@ -9,20 +9,34 @@ import { Scale, Sparkles, Crown, Zap, Database, Menu, X } from 'lucide-react';
 type ViewMode = 'chat' | 'contracts';
 
 export default function Index() {
-  const { createNewChat, selectChat, currentChatId, loadChats } = useChatStore();
+  const { createNewChat, selectChat, currentChatId, loadChats, chats } = useChatStore();
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hoverSidebar, setHoverSidebar] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
     // Load chats from Supabase on component mount
-    loadChats();
+    const initializeApp = async () => {
+      try {
+        await loadChats();
+        
+        // Only create initial chat if no chats exist and no current chat is selected
+        if (!currentChatId && chats.length === 0) {
+          await createNewChat();
+        }
+        
+        setIsInitialized(true);
+      } catch (error) {
+        console.error('Error initializing app:', error);
+        setIsInitialized(true);
+      }
+    };
     
-    // Create initial chat if none exists
-    if (!currentChatId) {
-      createNewChat();
+    if (!isInitialized) {
+      initializeApp();
     }
-  }, [currentChatId, createNewChat, loadChats]);
+  }, [isInitialized, currentChatId, chats.length, loadChats, createNewChat]);
 
   const handleNewChat = () => {
     createNewChat();
@@ -30,6 +44,9 @@ export default function Index() {
   };
 
   const handleSelectChat = (chatId: string) => {
+    // Prevent switching to the same chat
+    if (chatId === currentChatId) return;
+    
     selectChat(chatId);
     setViewMode('chat');
   };
@@ -41,6 +58,41 @@ export default function Index() {
   const handleBackToChat = () => {
     setViewMode('chat');
   };
+
+  // Show loading screen during initialization
+  if (!isInitialized) {
+    return (
+      <div className="h-screen overflow-hidden bg-gradient-to-br from-slate-50 to-white relative flex items-center justify-center">
+        <motion.div 
+          className="text-center"
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        >
+          <motion.div
+            animate={{ 
+              rotate: 360,
+              scale: [1, 1.1, 1]
+            }}
+            transition={{ 
+              rotate: { duration: 20, repeat: Infinity, ease: "linear" },
+              scale: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+            }}
+            className="relative"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-amber-400 to-orange-500 rounded-full blur-xl opacity-30"></div>
+            <Scale className="h-20 w-20 mx-auto mb-6 text-amber-500 relative z-10" />
+          </motion.div>
+          <h3 className="text-2xl font-bold bg-gradient-to-r from-slate-700 to-slate-900 bg-clip-text text-transparent mb-3">
+            Завантаження...
+          </h3>
+          <p className="text-slate-600 text-lg">
+            Ініціалізація системи
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen overflow-hidden bg-gradient-to-br from-slate-50 to-white relative">

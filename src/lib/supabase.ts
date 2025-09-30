@@ -120,15 +120,87 @@ export const chatSessionService = {
     return data;
   },
 
+  async updateTitle(sessionId: string, title: string): Promise<ChatSession> {
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .update({ 
+        title: title.trim(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', sessionId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating chat title:', error);
+      throw new Error('Помилка оновлення назви чату');
+    }
+
+    return data;
+  },
+
   async delete(sessionId: string): Promise<void> {
+    // First delete all messages for this session
+    const { error: messagesError } = await supabase
+      .from('chat_messages')
+      .delete()
+      .eq('session_id', sessionId);
+
+    if (messagesError) {
+      console.error('Error deleting messages:', messagesError);
+      throw new Error('Помилка видалення повідомлень');
+    }
+
+    // Then delete the session
     const { error } = await supabase
       .from('chat_sessions')
-      .update({ is_active: false })
+      .delete()
       .eq('id', sessionId);
 
     if (error) {
       console.error('Error deleting chat session:', error);
       throw new Error('Помилка видалення сесії чату');
+    }
+  },
+
+  async deleteAll(): Promise<void> {
+    // First, get all active sessions
+    const { data: sessions, error: fetchError } = await supabase
+      .from('chat_sessions')
+      .select('id')
+      .eq('is_active', true);
+
+    if (fetchError) {
+      console.error('Error fetching sessions for deletion:', fetchError);
+      throw new Error('Помилка отримання сесій для видалення');
+    }
+
+    if (!sessions || sessions.length === 0) {
+      return; // No sessions to delete
+    }
+
+    const sessionIds = sessions.map(session => session.id);
+
+    // Delete all messages for these sessions first
+    const { error: messagesError } = await supabase
+      .from('chat_messages')
+      .delete()
+      .in('session_id', sessionIds);
+
+    if (messagesError) {
+      console.error('Error deleting messages:', messagesError);
+      throw new Error('Помилка видалення повідомлень');
+    }
+
+    // Then delete all sessions
+    const { error: sessionsError } = await supabase
+      .from('chat_sessions')
+      .delete()
+      .in('id', sessionIds);
+
+    if (sessionsError) {
+      console.error('Error deleting sessions:', sessionsError);
+      throw new Error('Помилка видалення сесій');
     }
   }
 };

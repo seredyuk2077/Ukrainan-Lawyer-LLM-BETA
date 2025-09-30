@@ -9,7 +9,11 @@ import {
   Trash2, 
   Calendar,
   Clock,
-  Sparkles
+  Sparkles,
+  Loader2,
+  Edit3,
+  Check,
+  X
 } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -20,8 +24,10 @@ interface ChatHistoryProps {
 }
 
 export default function ChatHistory({ onSelectChat, onNewChat }: ChatHistoryProps) {
-  const { chats, currentChatId, deleteChat } = useChatStore();
+  const { chats, currentChatId, deleteChat, deleteAllChats, renameChat, isLoading } = useChatStore();
   const [searchTerm, setSearchTerm] = useState('');
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
 
   const filteredChats = chats.filter(chat =>
     chat.title.toLowerCase().includes(searchTerm.toLowerCase())
@@ -46,6 +52,38 @@ export default function ChatHistory({ onSelectChat, onNewChat }: ChatHistoryProp
       day: 'numeric',
       month: 'short'
     });
+  };
+
+  const handleStartEdit = (chatId: string, currentTitle: string) => {
+    setEditingChatId(chatId);
+    setEditingTitle(currentTitle);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingChatId(null);
+    setEditingTitle('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingChatId || !editingTitle.trim()) {
+      handleCancelEdit();
+      return;
+    }
+
+    try {
+      await renameChat(editingChatId, editingTitle.trim());
+      handleCancelEdit();
+    } catch (error) {
+      console.error('Error renaming chat:', error);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit();
+    } else if (e.key === 'Escape') {
+      handleCancelEdit();
+    }
   };
 
   return (
@@ -74,16 +112,21 @@ export default function ChatHistory({ onSelectChat, onNewChat }: ChatHistoryProp
             </Button>
             {chats.length > 0 && (
               <Button
-                onClick={() => {
-                  if (confirm('Ви впевнені, що хочете видалити всі чати?')) {
-                    chats.forEach(chat => deleteChat(chat.id));
+                onClick={async () => {
+                  if (confirm('Ви впевнені, що хочете видалити всі чати? Цю дію неможливо скасувати.')) {
+                    await deleteAllChats();
                   }
                 }}
                 size="sm"
                 variant="ghost"
-                className="text-slate-400 hover:text-red-500 hover:bg-red-50 p-1 rounded-md flex-shrink-0"
+                disabled={isLoading}
+                className="text-slate-400 hover:text-red-500 hover:bg-red-50 p-1 rounded-md flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Trash2 className="h-3 w-3" />
+                {isLoading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
               </Button>
             )}
           </div>
@@ -143,13 +186,58 @@ export default function ChatHistory({ onSelectChat, onNewChat }: ChatHistoryProp
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0 pr-3">
-                      <h3 
-                        className={`text-sm font-semibold truncate mb-2 ${
-                          currentChatId === chat.id ? 'text-blue-800' : 'text-slate-800'
-                        }`}
-                      >
-                        {chat.title}
-                      </h3>
+                      {editingChatId === chat.id ? (
+                        <div className="flex items-center space-x-2 mb-2">
+                          <Input
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            onBlur={handleSaveEdit}
+                            className="text-sm font-semibold h-7 px-2 py-1 border-blue-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20"
+                            autoFocus
+                            maxLength={50}
+                          />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSaveEdit();
+                            }}
+                            className="h-6 w-6 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
+                          >
+                            <Check className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancelEdit();
+                            }}
+                            className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div 
+                          className="flex items-center space-x-2 mb-2 group cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStartEdit(chat.id, chat.title);
+                          }}
+                        >
+                          <h3 
+                            className={`text-sm font-semibold truncate flex-1 ${
+                              currentChatId === chat.id ? 'text-blue-800' : 'text-slate-800'
+                            }`}
+                          >
+                            {chat.title}
+                          </h3>
+                          <Edit3 className="h-3 w-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                        </div>
+                      )}
                       
                       <div className="flex items-center text-xs text-slate-500 space-x-3">
                         <div className="flex items-center">

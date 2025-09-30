@@ -30,10 +30,13 @@ interface ChatStore {
   selectChat: (chatId: string) => Promise<void>;
   addMessage: (message: Omit<ChatMessage, 'id'>) => Promise<void>;
   deleteChat: (chatId: string) => Promise<void>;
+  deleteAllChats: () => Promise<void>;
+  renameChat: (chatId: string, newTitle: string) => Promise<void>;
   loadChats: () => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   cancelMessage: () => void;
   clearError: () => void;
+  clearLoadingState: () => void;
   
   // Utility functions
   getCurrentChat: () => Chat | null;
@@ -79,6 +82,8 @@ export const useChatStore = create<ChatStore>()(
 
       clearError: () => set({ error: null }),
 
+      clearLoadingState: () => set({ isLoading: false }),
+
       createNewChat: async () => {
         try {
           set({ isLoading: true, error: null });
@@ -103,8 +108,8 @@ export const useChatStore = create<ChatStore>()(
 
       selectChat: async (chatId: string) => {
         try {
-          // Don't show loading state for chat switching to avoid visual artifacts
-          set({ error: null });
+          // Clear any existing loading state and error immediately
+          set({ error: null, isLoading: false });
           
           const messages = await chatMessageService.getBySessionId(chatId);
           const convertedMessages = messages.map(convertSupabaseMessage);
@@ -309,6 +314,48 @@ export const useChatStore = create<ChatStore>()(
         } catch (error) {
           console.error('Error deleting chat:', error);
           set({ error: error instanceof Error ? error.message : 'Помилка видалення чату' });
+        }
+      },
+
+      deleteAllChats: async () => {
+        try {
+          set({ isLoading: true, error: null });
+          
+          await chatSessionService.deleteAll();
+          
+          set({
+            chats: [],
+            currentChatId: null,
+            currentMessages: [],
+            isLoading: false
+          });
+        } catch (error) {
+          console.error('Error deleting all chats:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Помилка видалення всіх чатів',
+            isLoading: false 
+          });
+        }
+      },
+
+      renameChat: async (chatId: string, newTitle: string) => {
+        try {
+          if (!newTitle.trim()) {
+            throw new Error('Назва чату не може бути порожньою');
+          }
+
+          await chatSessionService.updateTitle(chatId, newTitle.trim());
+          
+          set(state => ({
+            chats: state.chats.map(chat => 
+              chat.id === chatId 
+                ? { ...chat, title: newTitle.trim(), updatedAt: new Date() }
+                : chat
+            )
+          }));
+        } catch (error) {
+          console.error('Error renaming chat:', error);
+          set({ error: error instanceof Error ? error.message : 'Помилка перейменування чату' });
         }
       },
 
