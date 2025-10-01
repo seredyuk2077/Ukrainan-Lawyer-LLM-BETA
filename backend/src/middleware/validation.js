@@ -51,6 +51,18 @@ const schemas = {
       .min(0)
       .optional()
       .default(0)
+  }),
+
+  searchLaws: Joi.object({
+    query: Joi.string()
+      .min(1)
+      .max(100)
+      .required()
+      .messages({
+        'string.empty': 'Пошуковий запит не може бути порожнім',
+        'string.min': 'Пошуковий запит занадто короткий',
+        'string.max': 'Пошуковий запит занадто довгий (максимум 100 символів)'
+      })
   })
 };
 

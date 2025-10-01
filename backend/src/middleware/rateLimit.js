@@ -1,5 +1,5 @@
 const rateLimit = require('express-rate-limit');
-const { cache } = require('../config/database');
+const { cache } = require('../config/supabase');
 const logger = require('../utils/logger');
 
 // Custom store using Redis
