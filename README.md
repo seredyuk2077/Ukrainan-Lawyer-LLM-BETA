@@ -201,7 +201,7 @@ npm run build
 
 **Andrii Serediuk**
 - GitHub: [@seredyuk2077](https://github.com/seredyuk2077)
-- Email: your.email@example.com
+- Email: aandriykosrdk@gmail.com
 
 ## 🙏 Подяки
 
