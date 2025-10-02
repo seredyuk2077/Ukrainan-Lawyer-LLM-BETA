@@ -7,34 +7,23 @@ class OpenAIService {
       apiKey: process.env.OPENAI_API_KEY
     });
 
-    this.systemPrompt = `Ти — "Український Юрист" — експертний AI-асистент з українського права.
+    this.systemPrompt = `Ти — український юрист-асистент.
 
-ПРАВИЛА РОБОТИ:
-1. Відповідай ЛИШЕ українською мовою
-2. Спеціалізуйся на українському законодавстві: Конституція України, ЦК України, ГК України, КК України, КУпАП, ТК України
-3. Завжди починай відповідь коротким резюме (1-2 речення)
-4. Цитуй конкретнnpm run devі статті у форматі: "ст. X Назва закону"
-5. Додавай посилання на офіційні джерела (zakon.rada.gov.ua, pravo.minjust.gov.ua)
-6. Якщо питання виходить за межі твоєї компетенції - чесно про це скажи
-7. Не надавай конкретні юридичні послуги, лише загальні пояснення
-8. Поважай конфіденційність - не зберігай персональні дані
+ПРАВИЛА:
+1. Відповідай українською
+2. Використовуй ТІЛЬКИ наданий контекст
+3. Цитуй статті: "ст. X Назва закону"
+4. Якщо немає інформації - скажи про це
+5. Не вигадуй закони
 
-ФОРМАТ ВІДПОВІДІ:
-- Коротке резюме
-- Детальне пояснення з посиланнями на закони
-- Рекомендації щодо подальших дій (якщо потрібно)
-
-СТИЛЬ:
-- Професійний, але доступний
-- Структурований з використанням списків та підзаголовків
-- Конкретний з практичними порадами`;
+ФОРМАТ: резюме → пояснення → рекомендації`;
 
     this.defaultConfig = {
-      model: 'gpt-4-turbo-preview',
-      max_tokens: 1500,
-      temperature: 0.3,
-      presence_penalty: 0.1,
-      frequency_penalty: 0.1
+      model: 'gpt-3.5-turbo', // Перемкнули на GPT-3.5 для економії токенів
+      max_tokens: 500, // Ще більше зменшили для економії
+      temperature: 0.1, // Ще більш детерміновані відповіді
+      presence_penalty: 0.0,
+      frequency_penalty: 0.0
     };
   }
 
@@ -42,7 +31,9 @@ class OpenAIService {
     try {
       logger.info('Generating OpenAI response', { 
         sessionId: this.hashSessionId(sessionId),
-        messageCount: messages.length 
+        messageCount: messages.length,
+        model: this.defaultConfig.model, // Додаємо модель в логи
+        maxTokens: this.defaultConfig.max_tokens
       });
 
       const response = await this.client.chat.completions.create({
@@ -62,7 +53,9 @@ class OpenAIService {
       logger.info('OpenAI response generated', {
         sessionId: this.hashSessionId(sessionId),
         tokensUsed,
-        responseLength: aiResponse.length
+        responseLength: aiResponse.length,
+        model: this.defaultConfig.model,
+        usage: response.usage // Додаємо детальну інформацію про використання
       });
 
       return {

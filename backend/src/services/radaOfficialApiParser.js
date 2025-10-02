@@ -131,8 +131,8 @@ class RadaOfficialApiParser {
     try {
       await this.respectRateLimit();
 
-      // Використовуємо список всіх документів згідно з документацією
-      const documentsUrl = `${this.baseUrl}/laws/main/a`;
+      // Використовуємо список нових документів (30 днів) згідно з документацією
+      const documentsUrl = `${this.baseUrl}/laws/main/n`;
       
       logger.info('🔍 Getting documents list from API', { 
         url: documentsUrl,
@@ -157,7 +157,7 @@ class RadaOfficialApiParser {
       });
 
       // Парсимо HTML для отримання посилань на документи
-      const documents = this.parseDocumentsFromHtml(response.data, 100); // Беремо більше для фільтрації
+      const documents = await this.parseDocumentsFromHtml(response.data, 200); // Беремо більше для фільтрації
       
       logger.info('📋 Documents parsed from HTML', { 
         found: documents.length,
@@ -183,9 +183,9 @@ class RadaOfficialApiParser {
   /**
    * Парсимо документи з HTML згідно з документацією API
    */
-  parseDocumentsFromHtml(html, limit) {
+  async parseDocumentsFromHtml(html, limit) {
     try {
-      const cheerio = require('cheerio');
+      const cheerio = await import('cheerio');
       const $ = cheerio.load(html);
       const documents = [];
 
@@ -194,16 +194,16 @@ class RadaOfficialApiParser {
         limit 
       });
 
-      // Шукаємо посилання на закони в різних форматах згідно з реальною структурою
+      // Шукаємо посилання на закони згідно з документацією API
       const selectors = [
-        'a[href*="/go/"]',  // Основні посилання на документи
-        'a[href*="/laws/meta/"]',  // Мета-посилання на документи
-        'a[href*="/laws/show/"]',
-        'a[href*="/laws/card/"]',
-        '.law-item a',
-        '.document-item a',
-        'tr a[href*="/laws/"]',
-        'li a'  // Посилання в списках
+        'a[href*="/laws/show/"]',  // Основні посилання на документи
+        'a[href*="/laws/card/"]',  // Картки документів
+        'a[href*="/go/"]',  // Скорочені посилання
+        'a[href*="/laws/meta/"]',  // Мета-посилання
+        'tr a[href*="/laws/"]',  // Посилання в таблицях
+        'li a[href*="/laws/"]',  // Посилання в списках
+        'td a[href*="/laws/"]',  // Посилання в комірках таблиць
+        'a[href*="nreg"]'  // Посилання з nreg
       ];
 
       selectors.forEach(selector => {
@@ -220,11 +220,22 @@ class RadaOfficialApiParser {
           if (href && title && title.length > 10) {
             logger.info(`📄 Found link: ${href} - ${title.substring(0, 50)}...`);
             
-            // Витягуємо ID документа з різних форматів URL
+            // Витягуємо ID документа з різних форматів URL згідно з документацією
             let id = null;
             let fullUrl = href.startsWith('http') ? href : `${this.baseUrl}${href}`;
             
-            if (href.includes('/go/')) {
+            if (href.includes('/laws/show/')) {
+              // Формат /laws/show/n0388500-25 -> n0388500-25
+              id = href.match(/\/laws\/show\/([^\/\?]+)/)?.[1];
+            } else if (href.includes('/laws/card/')) {
+              // Формат /laws/card/n0388500-25 -> n0388500-25
+              id = href.match(/\/laws\/card\/([^\/\?]+)/)?.[1];
+              // Конвертуємо в формат для laws/show
+              if (id) {
+                fullUrl = `${this.baseUrl}/laws/show/${id}`;
+                logger.info(`✅ Converted /laws/card/ to laws/show: ${id}`);
+              }
+            } else if (href.includes('/go/')) {
               // Формат /go/n0388500-25 -> n0388500-25
               id = href.match(/\/go\/([^\/\?]+)/)?.[1];
               // Конвертуємо в формат для laws/show
@@ -240,10 +251,14 @@ class RadaOfficialApiParser {
                 fullUrl = `${this.baseUrl}/laws/show/${id}`;
                 logger.info(`✅ Converted /laws/meta/ to laws/show: ${id}`);
               }
-            } else if (href.includes('/laws/show/')) {
-              id = href.match(/\/laws\/show\/([^\/\?]+)/)?.[1];
-            } else if (href.includes('/laws/card/')) {
-              id = href.match(/\/laws\/card\/([^\/\?]+)/)?.[1];
+            } else if (href.includes('nreg')) {
+              // Шукаємо nreg в URL
+              const nregMatch = href.match(/([0-9nprvz][0-9\/\_\-a-zа-яїіёєґ]{3,11})/);
+              if (nregMatch) {
+                id = nregMatch[1];
+                fullUrl = `${this.baseUrl}/laws/show/${id}`;
+                logger.info(`✅ Found nreg in URL: ${id}`);
+              }
             }
 
             if (id) {
@@ -359,28 +374,36 @@ class RadaOfficialApiParser {
       
       if (token) {
         try {
-          // Використовуємо JSON формат згідно з документацією
-          const jsonUrl = `${this.baseUrl}/laws/show/${doc.id}.json`;
-          response = await axios.get(jsonUrl, {
-            headers: {
-              'User-Agent': token,
-              'Accept': 'application/json'
-            },
-            timeout: 15000
-          });
-          contentType = 'json';
-        } catch (jsonError) {
-          logger.warn('JSON format failed, trying TXT', { error: jsonError.message });
-          // Якщо JSON не працює, використовуємо TXT
+          // Використовуємо TXT формат як основний (містить повний контент)
           const txtUrl = `${this.baseUrl}/laws/show/${doc.id}.txt`;
           response = await axios.get(txtUrl, {
             headers: {
+              'Authorization': `Bearer ${token}`,
               'User-Agent': this.userAgent,
               'Accept': 'text/plain'
             },
             timeout: 15000
           });
           contentType = 'txt';
+          logger.info('✅ TXT format successful', { id: doc.id });
+        } catch (txtError) {
+          logger.warn('TXT format failed, trying JSON', { 
+            id: doc.id,
+            error: txtError.message,
+            status: txtError.response?.status 
+          });
+          // Якщо TXT не працює, використовуємо JSON для метаданих
+          const jsonUrl = `${this.baseUrl}/laws/show/${doc.id}.json`;
+          response = await axios.get(jsonUrl, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'User-Agent': this.userAgent,
+              'Accept': 'application/json'
+            },
+            timeout: 15000
+          });
+          contentType = 'json';
+          logger.info('✅ JSON format successful (fallback)', { id: doc.id });
         }
       } else {
         // Використовуємо TXT формат
@@ -393,6 +416,7 @@ class RadaOfficialApiParser {
           timeout: 15000
         });
         contentType = 'txt';
+        logger.info('✅ TXT format successful (no token)', { id: doc.id });
       }
 
       logger.info('📄 Document details received', { 
@@ -406,18 +430,50 @@ class RadaOfficialApiParser {
       let content, lawNumber, documentType, date;
 
       if (contentType === 'json') {
-        // JSON формат згідно з документацією
+        // JSON формат - витягуємо метадані
         const data = response.data;
-        content = data.stru?.map(s => s.text).join(' ') || data.text || '';
-        lawNumber = data.doc?.nreg || doc.id;
+        
+        // JSON містить лише метадані, контент порожній
+        content = data.nazva || ''; // Використовуємо назву як контент
+        
+        // Витягуємо реквізити документа з нової структури
+        lawNumber = data.nreg || doc.id;
         documentType = this.detectDocumentTypeFromJson(data);
-        date = data.doc?.datred || new Date().toISOString().split('T')[0];
+        
+        // Конвертуємо дату з формату 20250925 в ISO
+        if (data.datred) {
+          const dateStr = data.datred.toString();
+          if (dateStr.length === 8) {
+            const year = dateStr.substring(0, 4);
+            const month = dateStr.substring(4, 6);
+            const day = dateStr.substring(6, 8);
+            date = `${year}-${month}-${day}`;
+          } else {
+            date = new Date().toISOString().split('T')[0];
+          }
+        } else {
+          date = new Date().toISOString().split('T')[0];
+        }
+        
+        logger.info('📄 JSON content extracted', { 
+          id: doc.id,
+          contentLength: content.length,
+          lawNumber,
+          documentType
+        });
       } else {
         // TXT формат
         content = response.data;
         lawNumber = this.extractLawNumberFromText(content, doc.id);
         documentType = this.detectDocumentTypeFromText(content);
         date = this.extractDateFromText(content);
+        
+        logger.info('📄 TXT content extracted', { 
+          id: doc.id,
+          contentLength: content.length,
+          lawNumber,
+          documentType
+        });
       }
 
       if (!content || content.length < 100) {
@@ -430,11 +486,13 @@ class RadaOfficialApiParser {
 
       const result = {
         title: doc.title,
-        content: content.substring(0, 5000), // Обмежуємо розмір
+        content: content, // Повний контент без обмежень
         law_number: lawNumber,
         document_type: documentType,
-        source_url: doc.url,
+        source_url: doc.url || `https://data.rada.gov.ua/laws/show/${doc.id}`,
         keywords: this.extractKeywords(doc.title, content),
+        category: this.determineCategory(doc.title, lawNumber),
+        date_created: date,
         snippet: content.substring(0, 200) + '...'
       };
 
@@ -461,20 +519,51 @@ class RadaOfficialApiParser {
    * Визначаємо тип документа з JSON
    */
   detectDocumentTypeFromJson(data) {
-    const title = (data.title || '').toLowerCase();
-    const type = (data.type || '').toLowerCase();
+    const title = (data.nazva || '').toLowerCase();
+    const nreg = (data.nreg || '').toLowerCase();
 
-    if (title.includes('закон') || type.includes('закон')) {
+    if (title.includes('закон') || nreg.includes('закон')) {
       return 'Закон України';
-    } else if (title.includes('постанова') || type.includes('постанова')) {
+    } else if (title.includes('постанова') || nreg.includes('постанова') || nreg.includes('-п')) {
       return 'Постанова';
-    } else if (title.includes('кодекс') || type.includes('кодекс')) {
+    } else if (title.includes('кодекс') || nreg.includes('кодекс')) {
       return 'Кодекс';
-    } else if (title.includes('указ') || type.includes('указ')) {
+    } else if (title.includes('указ') || nreg.includes('указ')) {
       return 'Указ';
+    } else if (title.includes('розпорядження') || nreg.includes('розпорядження') || nreg.includes('-р')) {
+      return 'Розпорядження';
     } else {
       return 'НПА';
     }
+  }
+
+  /**
+   * Визначаємо категорію документа
+   */
+  determineCategory(title, lawNumber) {
+    const titleLower = title.toLowerCase();
+    
+    if (titleLower.includes('цивільний') || titleLower.includes('цивільно')) {
+      return 'Цивільне право';
+    } else if (titleLower.includes('трудовий') || titleLower.includes('трудове')) {
+      return 'Трудове право';
+    } else if (titleLower.includes('кримінальний') || titleLower.includes('кримінальне')) {
+      return 'Кримінальне право';
+    } else if (titleLower.includes('податковий') || titleLower.includes('податкове')) {
+      return 'Податкове право';
+    } else if (titleLower.includes('земельний') || titleLower.includes('земельне')) {
+      return 'Земельне право';
+    } else if (titleLower.includes('сімейний') || titleLower.includes('сімейне')) {
+      return 'Сімейне право';
+    } else if (titleLower.includes('господарський') || titleLower.includes('господарське')) {
+      return 'Господарське право';
+    } else if (titleLower.includes('адміністративний') || titleLower.includes('адміністративне')) {
+      return 'Адміністративне право';
+    } else if (titleLower.includes('процесуальний') || titleLower.includes('процесуальне')) {
+      return 'Процесуальне право';
+    }
+    
+    return 'Інше';
   }
 
   /**
@@ -513,7 +602,15 @@ class RadaOfficialApiParser {
   extractDateFromText(content) {
     const dateMatch = content.match(/(\d{1,2}\.\d{1,2}\.\d{4})/);
     if (dateMatch) {
-      return dateMatch[1];
+      const dateStr = dateMatch[1];
+      // Конвертуємо з dd.mm.yyyy в yyyy-mm-dd
+      const parts = dateStr.split('.');
+      if (parts.length === 3) {
+        const day = parts[0].padStart(2, '0');
+        const month = parts[1].padStart(2, '0');
+        const year = parts[2];
+        return `${year}-${month}-${day}`;
+      }
     }
     return new Date().toISOString().split('T')[0];
   }
@@ -554,9 +651,12 @@ class RadaOfficialApiParser {
           data: {
             title: law.title,
             content: law.content,
-            law_number: law.law_number,
             source_url: law.source_url,
-            keywords: law.keywords
+            law_number: law.law_number,
+            keywords: law.keywords || [],
+            articles: law.articles || [],
+            category: law.category || 'Інше',
+            date_created: law.date_created || new Date().toISOString().split('T')[0]
           },
           onConflict: 'source_url'
         });
@@ -613,4 +713,6 @@ class RadaOfficialApiParser {
   }
 }
 
-module.exports = new RadaOfficialApiParser();
+const radaOfficialApiParserInstance = new RadaOfficialApiParser();
+
+module.exports = radaOfficialApiParserInstance;

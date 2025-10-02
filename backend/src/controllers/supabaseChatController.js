@@ -127,7 +127,7 @@ class SupabaseChatController {
         {
           validation: validation,
           sources: sources,
-          fromCache: legalContext?.fromCache || false
+          fromCache: legalContext && legalContext.fromCache ? true : false
         }
       );
 
@@ -147,7 +147,7 @@ class SupabaseChatController {
         {
           validationScore: validation?.score,
           sourcesCount: sources.length,
-          fromCache: legalContext?.fromCache || false
+          fromCache: legalContext && legalContext.fromCache ? true : false
         }
       );
 
@@ -180,7 +180,7 @@ class SupabaseChatController {
             suggestions: validation.suggestions
           } : null,
           sources: sources,
-          fromCache: legalContext?.fromCache || false
+          fromCache: legalContext && legalContext.fromCache ? true : false
         }
       });
 

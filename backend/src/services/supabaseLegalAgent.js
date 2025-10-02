@@ -5,30 +5,16 @@ const crypto = require('crypto');
 
 class SupabaseLegalAgent {
   constructor() {
-    this.systemPrompt = `Ти — "Український Юрист" — експертний AI-асистент з українського права.
+    this.systemPrompt = `Український юрист-асистент.
 
-ПРАВИЛА РОБОТИ:
-1. Відповідай ЛИШЕ українською мовою
-2. Спеціалізуйся на українському законодавстві
-3. Завжди починай відповідь коротким резюме (1-2 речення)
-4. Цитуй конкретні статті у форматі: "ст. X Назва закону"
-5. Додавай посилання на офіційні джерела (zakon.rada.gov.ua)
-6. Якщо питання виходить за межі твоєї компетенції - чесно про це скажи
-7. Не надавай конкретні юридичні послуги, лише загальні пояснення
-8. Поважай конфіденційність - не зберігай персональні дані
-9. ВИКОРИСТОВУЙ ТІЛЬКИ НАДАНИЙ КОНТЕКСТ - не вигадуй закони
-10. Якщо в контексті немає інформації - скажи про це
+ПРАВИЛА:
+1. Відповідай українською
+2. Використовуй ТІЛЬКИ наданий контекст
+3. Цитуй статті: "ст. X Назва закону"
+4. Якщо немає інформації - скажи про це
+5. Не вигадуй закони
 
-ФОРМАТ ВІДПОВІДІ:
-- Коротке резюме
-- Детальне пояснення з посиланнями на закони
-- Рекомендації щодо подальших дій (якщо потрібно)
-- Джерела інформації
-
-СТИЛЬ:
-- Професійний, але доступний
-- Структурований з використанням списків та підзаголовків
-- Конкретний з практичними порадами`;
+ФОРМАТ: резюме → пояснення → рекомендації`;
 
     this.legalCategories = {
       'цивільне': ['договір', 'власність', 'спадщина', 'шкода', 'відшкодування', 'купівля', 'продаж'],
@@ -238,10 +224,10 @@ class SupabaseLegalAgent {
   // Пошук в базі даних
   async searchInDatabase(keywords, limit) {
     try {
-      // Спочатку шукаємо в локальній базі
+      // Спочатку шукаємо в локальній базі - отримуємо більше записів для кращого фільтрування
       const result = await query('legal_laws', 'select', {
         select: 'id, title, content, law_number, source_url, articles',
-        limit: limit
+        limit: limit * 3 // Отримуємо в 3 рази більше для кращого фільтрування
       });
 
       // Filter results using text search
@@ -250,10 +236,14 @@ class SupabaseLegalAgent {
         return keywords.some(keyword => text.includes(keyword.toLowerCase()));
       });
 
-      const localLaws = filteredResults.map(row => ({
-        ...row,
-        rank: 1.0 // Basic ranking for now
-      }));
+      // Сортуємо за релевантністю та обмежуємо до потрібної кількості
+      const localLaws = filteredResults
+        .map(row => ({
+          ...row,
+          rank: this.calculateRelevanceScore(row, keywords)
+        }))
+        .sort((a, b) => b.rank - a.rank)
+        .slice(0, limit);
 
       // Якщо в локальній базі мало результатів, шукаємо через API
       if (localLaws.length < 2) {
@@ -290,6 +280,36 @@ class SupabaseLegalAgent {
     }
   }
 
+  // Розрахунок релевантності
+  calculateRelevanceScore(row, keywords) {
+    let score = 0;
+    const title = row.title ? row.title.toLowerCase() : '';
+    const content = row.content ? row.content.toLowerCase() : '';
+    
+    // Бонус за збіг ключових слів в заголовку
+    keywords.forEach(keyword => {
+      const lowerKeyword = keyword.toLowerCase();
+      if (title.includes(lowerKeyword)) {
+        score += 2.0; // Високий бонус за збіг в заголовку
+      }
+      if (content.includes(lowerKeyword)) {
+        score += 0.5; // Менший бонус за збіг в контенті
+      }
+    });
+    
+    // Бонус за прямий збіг назви закону
+    if (title.includes('прокуратур') && keywords.some(k => k.toLowerCase().includes('прокуратур'))) {
+      score += 3.0;
+    }
+    
+    // Бонус за збіг з конкретними статтями
+    if (content.includes('стаття 2') && keywords.some(k => k.toLowerCase().includes('стаття'))) {
+      score += 1.5;
+    }
+    
+    return score;
+  }
+
   // Ранжування результатів
   rankResults(results, questionAnalysis) {
     return results.map(result => {
@@ -310,48 +330,37 @@ class SupabaseLegalAgent {
     }).sort((a, b) => b.relevanceScore - a.relevanceScore);
   }
 
-  // Побудова покращеного контексту
+  // Побудова покращеного контексту (оптимізовано для токенів)
   buildEnhancedContext(questionAnalysis, relevantContext, conversationHistory) {
     let context = this.systemPrompt + '\n\n';
     
-    // Додавання релевантних законів
+    // Додавання релевантних законів (скорочено)
     if (relevantContext.laws.length > 0) {
-      context += 'РЕЛЕВАНТНІ ПРАВОВІ ДЖЕРЕЛА:\n\n';
+      context += 'ЗАКОНИ:\n';
       
-      relevantContext.laws.forEach((law, index) => {
+      relevantContext.laws.slice(0, 2).forEach((law, index) => { // Тільки 2 найрелевантніших
         context += `${index + 1}. ${law.title}\n`;
-        if (law.law_number) {
-          context += `   Номер: ${law.law_number}\n`;
-        }
-        context += `   Джерело: ${law.source_url || law.link}\n`;
-        context += `   Зміст: ${law.content.substring(0, 500)}...\n\n`;
+        if (law.law_number) context += `   №: ${law.law_number}\n`;
+        // Скорочуємо контент до 300 символів
+        const shortContent = law.content.substring(0, 300);
+        context += `   ${shortContent}${law.content.length > 300 ? '...' : ''}\n\n`;
       });
     }
 
-    // Додавання контексту розмови (якщо є)
+    // Контекст розмови (тільки останнє повідомлення)
     if (conversationHistory.length > 0) {
-      context += 'КОНТЕКСТ РОЗМОВИ:\n';
-      conversationHistory.slice(-3).forEach(msg => {
-        context += `${msg.role}: ${msg.content}\n`;
-      });
-      context += '\n';
+      const lastMessage = conversationHistory[conversationHistory.length - 1];
+      context += `ПОПЕРЕДНЄ: ${lastMessage.role}: ${lastMessage.content}\n\n`;
     }
 
-    // Додавання аналізу питання
-    context += `АНАЛІЗ ПИТАННЯ:\n`;
-    context += `- Категорія права: ${questionAnalysis.primaryCategory}\n`;
-    context += `- Тип питання: ${questionAnalysis.questionType}\n`;
-    context += `- Складність: ${questionAnalysis.complexity}\n`;
-    context += `- Ключові слова: ${questionAnalysis.keywords.join(', ')}\n\n`;
-
-    context += `ПИТАННЯ КОРИСТУВАЧА: ${questionAnalysis.originalMessage}\n\n`;
-    context += `ВІДПОВІДЬ (використовуй ТІЛЬКИ надану вище інформацію):`;
+    context += `ПИТАННЯ: ${questionAnalysis.originalMessage}\n\n`;
+    context += `ВІДПОВІДЬ:`;
 
     return context;
   }
 
   // Оптимізація контексту для токенів
-  optimizeContextForTokens(context, maxTokens = 3000) {
+  optimizeContextForTokens(context, maxTokens = 1500) { // Зменшили з 3000 до 1500
     const estimatedTokens = this.estimateTokens(context);
     
     if (estimatedTokens <= maxTokens) {

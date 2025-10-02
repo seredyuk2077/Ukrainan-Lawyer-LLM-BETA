@@ -8,7 +8,9 @@
     "dev": "nodemon src/app-supabase.js",
     "test": "jest",
     "init-kb:official-rada": "node src/scripts/initOfficialRadaKB.js",
-    "init-kb:static": "node src/scripts/initStaticKB.js"
+    "init-kb:static": "node src/scripts/initStaticKB.js",
+    "populate:core-laws": "node src/scripts/populateCoreLaws.js",
+    "fix:legal-laws": "node src/scripts/fixLegalLawsTable.js"
   },
   "dependencies": {
     "express": "^4.18.2",
