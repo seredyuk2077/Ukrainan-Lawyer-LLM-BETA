@@ -10,13 +10,15 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database types
+type MetadataPayload = Record<string, unknown>;
+
 export interface ChatSession {
   id: string;
   user_id?: string;
   title: string;
   created_at: string;
   updated_at: string;
-  metadata: Record<string, any>;
+  metadata: MetadataPayload;
   is_active: boolean;
 }
 
@@ -27,7 +29,7 @@ export interface ChatMessage {
   content: string;
   created_at: string;
   tokens_used: number;
-  metadata: Record<string, any>;
+  metadata: MetadataPayload;
 }
 
 // Chat session operations

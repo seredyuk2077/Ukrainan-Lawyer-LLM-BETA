@@ -55,6 +55,22 @@ interface ChatAPIError {
   requestId?: string;
 }
 
+interface PersistedChatMessage {
+  id: string;
+  type: ChatMessage['type'];
+  content: string;
+  timestamp: string;
+  tokensUsed?: number;
+}
+
+interface PersistedChat {
+  id: string;
+  title: string;
+  messages: PersistedChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 const convertSupabaseMessage = (msg: SupabaseChatMessage): ChatMessage => ({
   id: msg.id,
   type: msg.role === 'assistant' ? 'agent' : msg.role as 'user' | 'system',
@@ -411,11 +427,11 @@ export const useChatStore = create<ChatStore>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.chats) {
-          state.chats = state.chats.map((chat: any) => ({
+          state.chats = state.chats.map((chat: PersistedChat) => ({
             ...chat,
             createdAt: new Date(chat.createdAt),
             updatedAt: new Date(chat.updatedAt),
-            messages: chat.messages.map((msg: any) => ({
+            messages: chat.messages.map((msg: PersistedChatMessage) => ({
               ...msg,
               timestamp: new Date(msg.timestamp)
             }))
