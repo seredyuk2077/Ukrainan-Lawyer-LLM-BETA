@@ -79,6 +79,181 @@ interface QuestionAnalysis {
   complexity: 'low' | 'medium' | 'high';
 }
 
+type RouterBranch =
+  | 'criminal'
+  | 'civil'
+  | 'administrative'
+  | 'tax'
+  | 'labour'
+  | 'constitutional'
+  | 'commercial'
+  | 'military'
+  | 'other';
+
+interface RouterDecision {
+  branch: RouterBranch;
+  recommended_nreg: string | null;
+  confidence: number;
+  reasoning: string;
+}
+
+interface RouterWhitelistLaw {
+  nreg: string;
+  title: string;
+  branch: RouterBranch;
+  category?: string | null;
+  keywords?: string[];
+  themeCode?: string | null;
+  storageBucket?: string | null;
+  storagePath?: string | null;
+  source: 'manual' | 'storage';
+}
+
+interface RouterWhitelistPayload {
+  manual: RouterWhitelistLaw[];
+  storage: RouterWhitelistLaw[];
+  index: Map<string, RouterWhitelistLaw>;
+}
+
+const ROUTER_BRANCH_META: Record<
+  RouterBranch,
+  { category: string; defaultCodex?: string }
+> = {
+  criminal: {
+    category: 'кримінальне',
+    defaultCodex: 'Кримінальний кодекс України'
+  },
+  civil: {
+    category: 'цивільне',
+    defaultCodex: 'Цивільний кодекс України'
+  },
+  administrative: {
+    category: 'адміністративне',
+    defaultCodex: 'Кодекс України про адміністративні правопорушення'
+  },
+  tax: {
+    category: 'податкове',
+    defaultCodex: 'Податковий кодекс України'
+  },
+  labour: {
+    category: 'трудове',
+    defaultCodex: 'Кодекс законів про працю України'
+  },
+  constitutional: {
+    category: 'конституційне',
+    defaultCodex: 'Конституція України'
+  },
+  commercial: {
+    category: 'господарське',
+    defaultCodex: 'Господарський кодекс України'
+  },
+  military: {
+    category: 'оборонне',
+    defaultCodex: 'Закон України "Про мобілізаційну підготовку та мобілізацію"'
+  },
+  other: {
+    category: 'загальне'
+  }
+};
+
+const ROUTER_ALLOWED_BRANCHES: RouterBranch[] = Object.keys(
+  ROUTER_BRANCH_META
+) as RouterBranch[];
+
+const ROUTER_SYSTEM_PROMPT = `Ти — Router українського LegalTech-асистента.
+- Визначай правову гілку питання з переліку ${ROUTER_ALLOWED_BRANCHES.join(', ')}.
+- Якщо питання явно не про право України, встанови branch="other" і recommended_nreg=null.
+- Коли вибираєш recommended_nreg, використовуй ЛИШЕ значення зі списку whitelist, які я надам нижче.
+- Якщо впевненості немає, став recommended_nreg=null, але все одно вкажи branch і поясни чому.
+- Вихід лише у форматі валідного JSON:
+{
+  "branch": "...",
+  "recommended_nreg": "...",
+  "confidence": 0.0-1.0,
+  "reasoning": "1-2 речення"
+}`;
+
+const SYSTEM_PROMPT_GPT3_ANSWER = `Ти — український юрист. Користуйся лише наданими статтями (жодних зовнішніх знань). Формат Harvey AI:
+1. Норми — стисло, з посиланнями (“п. 1 ч. 1 ст. 5”, “ст. 12–15”).
+2. Аналіз — юридична логіка без вигадок.
+3. Застосування — практичні наслідки для ситуації.
+4. Висновок — короткий підсумок.
+Цитуй не більше 1–2 речень дослівно; для наборів норм узагальнюй блоками (“ст. 5–7 встановлюють …”). Заборонено вигадувати закони, змішувати кодекси або створювати нові дефініції. Якщо інформації немає в статтях — прямо зазнач. Стиль офіційний, лаконічний, без емоцій.`;
+
+const SYSTEM_PROMPT_CLAUDE_HAIKU_ANSWER = `Ти — український юрист. Джерело — тільки статті з контексту. Формат Harvey AI:
+1. Норми — коротко, з посиланнями (“ч. 2 ст. 23”, “ст. 5–7”).
+2. Аналіз — структурний юридичний розбір.
+3. Застосування — поясни наслідки для кейсу.
+4. Висновок — лаконічна рекомендація.
+Дозволено узагальнювати групи норм, але заборонено вигадувати чи цитувати поза текстом, змішувати закони або вводити нові терміни. Якщо даних недостатньо, повідом про це. Пиши офіційно, стисло, без емоцій.`;
+
+const DEFAULT_MAIN_PROVIDER = 'openai';
+const DEFAULT_OPENAI_MODEL = 'gpt-3.5-turbo';
+const DEFAULT_ANTHROPIC_MODEL = 'claude-3-haiku-20240307';
+
+function mapCategoryToBranch(category?: string | null): RouterBranch {
+  if (!category) {
+    return 'other';
+  }
+  const normalized = category.toLowerCase();
+  if (normalized.includes('кримін') || normalized.includes('crime') || normalized.includes('law-enforcement')) {
+    return 'criminal';
+  }
+  if (
+    normalized.includes('адмін') ||
+    normalized.includes('administr') ||
+    normalized.includes('поліц') ||
+    normalized.includes('public order')
+  ) {
+    return 'administrative';
+  }
+  if (normalized.includes('подат') || normalized.includes('tax')) {
+    return 'tax';
+  }
+  if (normalized.includes('труд') || normalized.includes('labour') || normalized.includes('labor') || normalized.includes('employment')) {
+    return 'labour';
+  }
+  if (normalized.includes('конститу') || normalized.includes('constitution')) {
+    return 'constitutional';
+  }
+  if (
+    normalized.includes('господар') ||
+    normalized.includes('комер') ||
+    normalized.includes('business') ||
+    normalized.includes('economic') ||
+    normalized.includes('commerce')
+  ) {
+    return 'commercial';
+  }
+  if (
+    normalized.includes('оборон') ||
+    normalized.includes('військ') ||
+    normalized.includes('мобіліз') ||
+    normalized.includes('повіст') ||
+    normalized.includes('military') ||
+    normalized.includes('defence') ||
+    normalized.includes('defense')
+  ) {
+    return 'military';
+  }
+  if (
+    normalized.includes('сімей') ||
+    normalized.includes('family') ||
+    normalized.includes('житл') ||
+    normalized.includes('housing')
+  ) {
+    return 'civil';
+  }
+  if (normalized.includes('цивіл') || normalized.includes('civil')) {
+    return 'civil';
+  }
+  return 'other';
+}
+
+function branchToCategoryMeta(branch: RouterBranch) {
+  return ROUTER_BRANCH_META[branch] || ROUTER_BRANCH_META.other;
+}
+
 // Enhanced Legal Agent Class
 class LegalAgent {
   private legalCategories = {
@@ -339,7 +514,7 @@ class LegalAgent {
       storageCategoryPath: 'CONSUMER-RIGHTS',
       storageLawFolderName: 'zu-consumer-protection',
       themeCode: 'CONSUMER-RIGHTS',
-      keywords: ['споживач', 'гарантія', 'повернення', 'штраф']
+      keywords: ['споживач', 'гарантія', 'повернення']
     },
     {
       nreg: '393/96-ВР',
@@ -859,11 +1034,25 @@ class LegalAgent {
     }) || null;
   }
 
-  private getManualLawMappingByNreg(nreg: string | null | undefined): ManualLawMapping | null {
+  getManualLawMappingByNreg(nreg: string | null | undefined): ManualLawMapping | null {
     if (!nreg) {
       return null;
     }
     return this.manualLawMappings.find(m => m.nreg === nreg) || null;
+  }
+
+  getManualWhitelistForRouter(): RouterWhitelistLaw[] {
+    return this.manualLawMappings.map(mapping => ({
+      nreg: mapping.nreg,
+      title: mapping.title,
+      branch: mapCategoryToBranch(mapping.category),
+      category: mapping.category,
+      keywords: mapping.keywords || [],
+      themeCode: mapping.themeCode || null,
+      storageBucket: mapping.storageBucket || 'zu',
+      storagePath: null,
+      source: 'manual' as const
+    }));
   }
 
   private tokenizeNormalizedText(text: string): string[] {
@@ -1007,6 +1196,46 @@ class LegalAgent {
     }
 
     throw new Error(`manual law ${manualMatch.nreg} could not be fetched`);
+  }
+
+  async loadDocumentByNreg(
+    supabase: any,
+    nreg: string | null | undefined,
+    classification: QuestionClassification
+  ): Promise<Document | null> {
+    if (!nreg) {
+      return null;
+    }
+
+    const manualMatch = this.getManualLawMappingByNreg(nreg);
+    if (manualMatch) {
+      try {
+        return await this.ensureManualLawAvailability(supabase, manualMatch, classification);
+      } catch (error) {
+        console.warn(`⚠️ Failed to load manual law by NREG ${nreg}:`, error);
+      }
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('legal_documents_storage')
+        .select('storage_bucket, storage_path, title, rada_nreg, law_number, category, source_url')
+        .eq('rada_nreg', nreg)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (error || !data) {
+        if (error) {
+          console.warn(`⚠️ loadDocumentByNreg: metadata not found for ${nreg}:`, error);
+        }
+        return null;
+      }
+
+      return await this.loadDocumentFromStorageRecord(supabase, data, classification);
+    } catch (error) {
+      console.error(`❌ loadDocumentByNreg: unexpected error for ${nreg}:`, error);
+      return null;
+    }
   }
 
   private async tryLoadStoredManualDocument(
@@ -2039,6 +2268,74 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
     };
   }
 
+  mergeClassificationWithRouterSignals(
+    classification: QuestionClassification,
+    decision: RouterDecision | null,
+    options: { userMessage: string; whitelistIndex?: Map<string, RouterWhitelistLaw> } = {
+      userMessage: ''
+    }
+  ): QuestionClassification {
+    if (!decision) {
+      return classification;
+    }
+
+    const updated: QuestionClassification = { ...classification };
+    const whitelistEntry = decision.recommended_nreg
+      ? options.whitelistIndex?.get(decision.recommended_nreg)
+      : null;
+
+    let normalizedBranch = decision.branch;
+    if (normalizedBranch === 'other' && whitelistEntry?.branch) {
+      normalizedBranch = whitelistEntry.branch;
+    }
+
+    if (normalizedBranch === 'other' && decision.confidence < 0.4) {
+      updated.isLegalQuestion = false;
+      updated.requiredCodex = null;
+      updated.category = 'загальне';
+      updated.confidence = Math.min(updated.confidence || 0.3, decision.confidence);
+      return updated;
+    }
+
+    const branchMeta = branchToCategoryMeta(normalizedBranch);
+    updated.isLegalQuestion = true;
+    updated.category = branchMeta.category;
+    if (branchMeta.defaultCodex) {
+      updated.requiredCodex = branchMeta.defaultCodex;
+    }
+    updated.confidence = Math.max(updated.confidence || 0.5, decision.confidence);
+
+    const manualMatch = decision.recommended_nreg
+      ? this.getManualLawMappingByNreg(decision.recommended_nreg)
+      : null;
+    if (manualMatch) {
+      return this.enrichClassificationWithManualMatch(
+        updated,
+        manualMatch,
+        options.userMessage
+      );
+    }
+
+    if (whitelistEntry) {
+      updated.requiredCodex = whitelistEntry.title || updated.requiredCodex;
+      if (whitelistEntry.category) {
+        updated.category = whitelistEntry.category;
+      }
+      const keywords = new Set(updated.searchKeywords || []);
+      (whitelistEntry.keywords || []).forEach(keyword => keywords.add(keyword));
+      if (whitelistEntry.title) {
+        keywords.add(whitelistEntry.title);
+      }
+      updated.searchKeywords = Array.from(keywords).filter(Boolean);
+    }
+
+    if (!updated.searchKeywords || updated.searchKeywords.length === 0) {
+      updated.searchKeywords = this.extractKeywords(options.userMessage.toLowerCase());
+    }
+
+    return updated;
+  }
+
   // Пошук статей через Supabase функцію search_relevant_articles
   async searchArticlesInDatabase(
     supabase: any,
@@ -2647,8 +2944,11 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
                 // Завантажуємо файл з Storage
                 // Використовуємо той самий supabase клієнт (він вже має service_role key)
                 console.log(`📥 Attempting to download: ${docMeta.storage_path}`);
+                const resolvedBucket =
+                  docMeta.storage_bucket ||
+                  (docMeta.storage_path.startsWith('ZU/') ? 'zu' : 'legal-documents');
                 const { data: fileData, error: downloadError } = await supabase.storage
-                  .from('legal-documents')
+                  .from(resolvedBucket)
                   .download(docMeta.storage_path);
                 
                 if (downloadError) {
@@ -2658,7 +2958,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
                   const altPath = docMeta.storage_path.replace('KUAP', 'КУпАП');
                   console.log(`🔄 Trying alternative path: ${altPath}`);
                   const { data: altFileData, error: altError } = await supabase.storage
-                    .from('legal-documents')
+                    .from(resolvedBucket)
                     .download(altPath);
                   if (!altError && altFileData) {
                     console.log(`✅ Successfully downloaded from alternative path`);
@@ -2897,7 +3197,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
     supabase: any,
     classification: QuestionClassification,
     limit: number = 5,
-    options?: { manualMatch?: ManualLawMapping | null; userMessage?: string | null }
+    options?: { manualMatch?: ManualLawMapping | null; userMessage?: string | null; targetNreg?: string | null }
   ): Promise<Document[]> {
     try {
       if (options?.manualMatch) {
@@ -2912,6 +3212,19 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
           return [manualDoc];
         }
         console.warn('⚠️ Manual law could not be loaded, continuing with generic search');
+      }
+
+      if (options?.targetNreg) {
+        const targetedDoc = await this.loadDocumentByNreg(
+          supabase,
+          options.targetNreg,
+          classification
+        );
+        if (targetedDoc) {
+          console.log(`🎯 Loaded router-targeted document ${options.targetNreg}`);
+          return [targetedDoc];
+        }
+        console.warn(`⚠️ Router-targeted document ${options.targetNreg} not available in storage`);
       }
 
       // СПОЧАТКУ шукаємо в Storage (новий пріоритетний метод)
@@ -3663,6 +3976,285 @@ ${articlesText}
 // Initialize Legal Agent
 const legalAgent = new LegalAgent();
 
+async function buildRouterWhitelist(
+  supabase: any,
+  agent: LegalAgent
+): Promise<RouterWhitelistPayload> {
+  const manualEntries = agent.getManualWhitelistForRouter();
+  let storageEntries: RouterWhitelistLaw[] = [];
+
+  try {
+    const { data, error } = await supabase
+      .from('legal_documents_storage')
+      .select('rada_nreg, title, category, theme_code, storage_bucket, storage_path')
+      .eq('is_active', true);
+
+    if (!error && Array.isArray(data)) {
+      storageEntries = data
+        .filter(record => record?.rada_nreg && record?.title)
+        .map(record => ({
+          nreg: record.rada_nreg,
+          title: record.title,
+          branch: mapCategoryToBranch(record.category),
+          category: record.category,
+          keywords: [],
+          themeCode: record.theme_code,
+          storageBucket: record.storage_bucket,
+          storagePath: record.storage_path,
+          source: 'storage' as const
+        }));
+    } else if (error) {
+      console.warn('⚠️ Failed to load storage whitelist:', error);
+    }
+  } catch (error) {
+    console.error('❌ Unexpected error while building storage whitelist:', error);
+  }
+
+  const index = new Map<string, RouterWhitelistLaw>();
+  [...storageEntries, ...manualEntries].forEach(entry => {
+    if (entry.nreg) {
+      index.set(entry.nreg, entry);
+    }
+  });
+
+  return { manual: manualEntries, storage: storageEntries, index };
+}
+
+async function runRouterModel(options: {
+  client: OpenAI;
+  userMessage: string;
+  conversationHistory: any[];
+  whitelist: RouterWhitelistPayload;
+}): Promise<RouterDecision | null> {
+  const { client, userMessage, conversationHistory, whitelist } = options;
+
+  const historyContext = conversationHistory
+    .slice(-2)
+    .map(msg => {
+      if (!msg || typeof msg !== 'object') {
+        return '';
+      }
+      const role = msg.role || 'user';
+      const content =
+        typeof msg.content === 'string'
+          ? msg.content
+          : Array.isArray(msg.content)
+          ? msg.content.map((item: any) => (typeof item === 'string' ? item : JSON.stringify(item))).join(' ')
+          : JSON.stringify(msg.content || '');
+      return `${role}: ${content}`;
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  const formatEntries = (entries: RouterWhitelistLaw[], limit?: number) => {
+    if (!entries.length) {
+      return '';
+    }
+    const sliceEnd = limit ? Math.min(limit, entries.length) : entries.length;
+    const summary = entries
+      .slice(0, sliceEnd)
+      .map(
+        entry =>
+          `${entry.nreg} — ${entry.title} — гілка: ${entry.branch}${
+            entry.category ? ` — категорія: ${entry.category}` : ''
+          }`
+      )
+      .join('\n');
+    if (entries.length > sliceEnd) {
+      return `${summary}\n... і ще ${entries.length - sliceEnd} документів`;
+    }
+    return summary;
+  };
+
+  const manualSummary = formatEntries(whitelist.manual, 60) || 'Немає ручних законів';
+  const storageSummary = formatEntries(whitelist.storage, 60) || 'Немає законів у storage';
+
+  const routerPrompt = [
+    `Питання користувача: "${userMessage}"`,
+    historyContext ? `Контекст діалогу:\n${historyContext}` : '',
+    'Whitelist ручних законів:',
+    manualSummary,
+    '\nWhitelist законів зі storage:',
+    storageSummary,
+    '\nПоясни коротко свій вибір у полі reasoning.'
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  let completion;
+  try {
+    completion = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0,
+      max_tokens: 200,
+      messages: [
+        { role: 'system', content: ROUTER_SYSTEM_PROMPT },
+        { role: 'user', content: routerPrompt }
+      ],
+      response_format: { type: 'json_object' }
+    });
+  } catch (error) {
+    console.warn('Router JSON response_format unsupported, retrying without strict mode');
+    completion = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0,
+      max_tokens: 200,
+      messages: [
+        { role: 'system', content: ROUTER_SYSTEM_PROMPT },
+        { role: 'user', content: routerPrompt }
+      ]
+    });
+  }
+
+  const responseText = completion.choices[0]?.message?.content || '';
+  const parsed = JSON.parse(responseText) as RouterDecision;
+
+  const normalizedBranch = typeof parsed.branch === 'string'
+    ? (parsed.branch as string).toLowerCase()
+    : 'other';
+  parsed.branch = ROUTER_ALLOWED_BRANCHES.includes(normalizedBranch as RouterBranch)
+    ? (normalizedBranch as RouterBranch)
+    : 'other';
+
+  if (
+    parsed.recommended_nreg &&
+    !whitelist.index.has(parsed.recommended_nreg)
+  ) {
+    parsed.recommended_nreg = null;
+  }
+  if (parsed.recommended_nreg) {
+    parsed.recommended_nreg = parsed.recommended_nreg.trim();
+  }
+  parsed.confidence = Math.max(0, Math.min(1, parsed.confidence));
+  parsed.reasoning = parsed.reasoning?.trim() || '';
+
+  return parsed;
+}
+
+type NormalizedChatMessage = { role: 'user' | 'assistant'; content: string };
+
+interface SelectedLLM {
+  provider: string;
+  model: string;
+  systemPrompt: string;
+  sendChat: (payload: {
+    system: string;
+    messages: NormalizedChatMessage[];
+    temperature: number;
+    maxTokens: number;
+  }) => Promise<{ response: string; tokensUsed: number }>;
+}
+
+async function callAnthropicMessages(apiKey: string, payload: Record<string, unknown>) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Anthropic API error: ${response.status} ${errorBody}`);
+  }
+
+  return response.json();
+}
+
+function selectMainModel(options: {
+  provider?: string | null;
+  model?: string | null;
+  openaiClient: OpenAI;
+  anthropicApiKey?: string | null;
+}): SelectedLLM {
+  const provider = (options.provider || DEFAULT_MAIN_PROVIDER).toLowerCase();
+
+  if (provider === 'anthropic') {
+    if (!options.anthropicApiKey) {
+      throw new Error('ANTHROPIC_API_KEY is not configured');
+    }
+    const model = options.model || DEFAULT_ANTHROPIC_MODEL;
+    return {
+      provider: 'anthropic',
+      model,
+      systemPrompt: SYSTEM_PROMPT_CLAUDE_HAIKU_ANSWER,
+      sendChat: async ({ system, messages, temperature, maxTokens }) => {
+        const anthropicMessages = messages.map(message => ({
+          role: message.role,
+          content: [{ type: 'text', text: message.content }]
+        }));
+        const payload = {
+          model,
+          max_tokens: maxTokens,
+          temperature,
+          system,
+          messages: anthropicMessages
+        };
+        const result = await callAnthropicMessages(options.anthropicApiKey!, payload);
+        const text = Array.isArray(result?.content)
+          ? result.content.map((block: any) => block?.text || '').join('\n').trim()
+          : '';
+        const usage = result?.usage || {};
+        const tokensUsed = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+        return { response: text, tokensUsed };
+      }
+    };
+  }
+
+  const model = options.model || DEFAULT_OPENAI_MODEL;
+  return {
+    provider: 'openai',
+    model,
+    systemPrompt: SYSTEM_PROMPT_GPT3_ANSWER,
+    sendChat: async ({ system, messages, temperature, maxTokens }) => {
+      const completion = await options.openaiClient.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: system },
+          ...messages
+        ],
+        temperature,
+        max_tokens: maxTokens
+      });
+      const content = completion.choices[0]?.message?.content?.trim() || '';
+      const tokensUsed = completion.usage?.total_tokens || 0;
+      return { response: content, tokensUsed };
+    }
+  };
+}
+
+function normalizeChatHistory(rawMessages: any[], limit: number = 5): NormalizedChatMessage[] {
+  if (!Array.isArray(rawMessages)) {
+    return [];
+  }
+
+  const normalized: NormalizedChatMessage[] = [];
+  for (const message of rawMessages) {
+    if (!message) {
+      continue;
+    }
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+    const content = typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+      ? message.content.map((chunk: any) =>
+          typeof chunk === 'string' ? chunk : JSON.stringify(chunk)
+        ).join(' ')
+      : typeof message.content === 'object' && message.content !== null && 'text' in message.content
+      ? String(message.content.text)
+      : JSON.stringify(message.content ?? '');
+
+    if (content && content.trim()) {
+      normalized.push({ role, content: content.trim() });
+    }
+  }
+
+  return normalized.slice(-limit);
+}
+
 // Main handler
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -3687,7 +4279,9 @@ Deno.serve(async (req) => {
   try {
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseServiceKey =
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ||
+      Deno.env.get('SERVICE_KEY_NEW_SUPABASE');
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const supabaseKey = supabaseServiceKey || supabaseAnonKey;
     
@@ -3720,6 +4314,14 @@ Deno.serve(async (req) => {
     console.log('✅ OpenAI configured');
 
     const openai = new OpenAI({ apiKey: openaiApiKey });
+    const routerApiKey =
+      Deno.env.get('OPENAI_ROUTER_API_KEY') || Deno.env.get('GPT_ROUTER_API_KEY');
+    const routerClient = routerApiKey ? new OpenAI({ apiKey: routerApiKey }) : null;
+    if (!routerClient) {
+      console.warn('⚠️ Router API key not provided, falling back to legacy classification');
+    }
+    const anthropicApiKey =
+      Deno.env.get('ANTHROPIC_API_KEY') || Deno.env.get('CLAUDE_API_KEY');
 
     // Parse request body (body вже оголошено вище)
     try {
@@ -3790,27 +4392,66 @@ Deno.serve(async (req) => {
       );
     }
 
-    // КРОК 1: Багатоетапна класифікація питання через GPT
-    let classification: QuestionClassification;
-    try {
-      classification = await legalAgent.classifyQuestionMultiStage(openai, userMessage, messageHistory);
-      console.log('Question classified (multi-stage):', classification);
-    } catch (classificationError) {
-      console.error('Multi-stage classification failed, using simple:', classificationError);
+    let routerWhitelist: RouterWhitelistPayload | null = null;
+    let routerDecision: RouterDecision | null = null;
+    if (routerClient) {
       try {
-        classification = await legalAgent.classifyQuestion(openai, userMessage);
-        console.log('Question classified (simple):', classification);
-      } catch (simpleError) {
-        console.error('Simple classification failed, using fallback:', simpleError);
-        classification = legalAgent.fallbackClassification(userMessage);
-        console.log('Using fallback classification:', classification);
+        routerWhitelist = await buildRouterWhitelist(supabase, legalAgent);
+        routerDecision = await runRouterModel({
+          client: routerClient,
+          userMessage,
+          conversationHistory: messageHistory,
+          whitelist: routerWhitelist
+        });
+        console.log('Router decision:', routerDecision);
+      } catch (routerError) {
+        console.error('Router classification failed:', routerError);
       }
     }
 
-    const manualMatch = legalAgent.detectManualLawTarget(userMessage, classification);
+    let classification: QuestionClassification;
+    try {
+      classification = await legalAgent.classifyQuestion(openai, userMessage);
+      console.log('Question classified:', classification);
+    } catch (classificationError) {
+      console.error('Classification failed, using fallback:', classificationError);
+      classification = legalAgent.fallbackClassification(userMessage);
+      console.log('Using fallback classification:', classification);
+    }
+
+    classification = legalAgent.mergeClassificationWithRouterSignals(classification, routerDecision, {
+      userMessage,
+      whitelistIndex: routerWhitelist?.index
+    });
+
+    const routerSuggestedNreg = routerDecision?.recommended_nreg || null;
+
+    let manualMatch: ManualLawMapping | null = null;
+    if (routerSuggestedNreg) {
+      manualMatch = legalAgent.getManualLawMappingByNreg(routerSuggestedNreg);
+      if (manualMatch) {
+        classification = legalAgent.enrichClassificationWithManualMatch(
+          classification,
+          manualMatch,
+          userMessage
+        );
+      }
+    }
+
+    if (!manualMatch && !routerSuggestedNreg) {
+      const detectedManual = legalAgent.detectManualLawTarget(userMessage, classification);
+      if (detectedManual) {
+        manualMatch = detectedManual;
+        classification = legalAgent.enrichClassificationWithManualMatch(
+          classification,
+          manualMatch,
+          userMessage
+        );
+      }
+    }
+
     if (manualMatch) {
       console.log(`📘 Detected manual law candidate: ${manualMatch.title} (${manualMatch.nreg})`);
-      classification = legalAgent.enrichClassificationWithManualMatch(classification, manualMatch, userMessage);
     }
 
     let context: string;
@@ -3819,6 +4460,7 @@ Deno.serve(async (req) => {
     let relevantArticles: Article[] = [];
     let documents: Document[] = [];
     let manualDocument: Document | null = null;
+    let routerDocument: Document | null = null;
 
     if (manualMatch) {
       try {
@@ -3838,6 +4480,21 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (!manualMatch && routerSuggestedNreg) {
+      try {
+        routerDocument = await legalAgent.loadDocumentByNreg(
+          supabase,
+          routerSuggestedNreg,
+          classification
+        );
+        if (routerDocument) {
+          console.log(`📘 Router document loaded for NREG ${routerSuggestedNreg}`);
+        }
+      } catch (error) {
+        console.error(`❌ Router document fetch error for ${routerSuggestedNreg}:`, error);
+      }
+    }
+
     // КРОК 2: Якщо це юридичне питання - шукаємо закони
     if (classification.isLegalQuestion && classification.confidence > 0.5) {
       // Спочатку шукаємо в локальній базі (використовуємо Supabase функції)
@@ -3849,10 +4506,13 @@ Deno.serve(async (req) => {
       
       if (manualDocument) {
         documents = [manualDocument];
+      } else if (routerDocument) {
+        documents = [routerDocument];
       } else {
         documents = await legalAgent.searchInDatabase(supabase, classification, 5, {
           manualMatch,
-          userMessage
+          userMessage,
+          targetNreg: routerSuggestedNreg
         });
       }
       
@@ -3861,7 +4521,7 @@ Deno.serve(async (req) => {
       // Якщо не знайдено в локальній базі - викликаємо Backend API для Rada API
       // ВИКЛИКАЄМО ЗАВЖДИ для актуальних законів (якщо це юридичне питання)
       const shouldSearchAPI =
-        (!manualDocument || documents.length === 0) &&
+        ((!manualDocument && !routerDocument) || documents.length === 0) &&
         classification.isLegalQuestion &&
         classification.confidence > 0.6;
       
@@ -3930,7 +4590,7 @@ Deno.serve(async (req) => {
         
         // Витягуємо конкретні статті (спочатку з legal_articles, потім з документів)
         const extractionLimit = classification.articleNumber ? 3 : 6;
-        const skipDbArticles = !!manualDocument;
+        const skipDbArticles = !!manualDocument || !!routerDocument;
         relevantArticles = await legalAgent.extractRelevantArticles(
           supabase,
           documents,
@@ -4039,11 +4699,34 @@ Deno.serve(async (req) => {
       context = legalAgent.buildSimpleContext(userMessage);
     }
 
-    // КРОК 3: Генерація відповіді через GPT з валідацією
-    const openaiMessages = [
-      { role: 'system' as const, content: context },
-      ...messageHistory.slice(-5) // Останні 5 повідомлень для контексту
-    ];
+    // КРОК 3: Генерація відповіді через LLM з валідацією
+    const normalizedHistory = normalizeChatHistory(messageHistory, 5);
+    if (
+      normalizedHistory.length === 0 ||
+      normalizedHistory[normalizedHistory.length - 1].role !== 'user'
+    ) {
+      normalizedHistory.push({ role: 'user', content: userMessage });
+    }
+
+    let selectedModel: SelectedLLM;
+    try {
+      selectedModel = selectMainModel({
+        provider: Deno.env.get('MAIN_LLM_PROVIDER'),
+        model: Deno.env.get('MAIN_LLM_MODEL'),
+        openaiClient: openai,
+        anthropicApiKey
+      });
+    } catch (modelSelectionError) {
+      console.warn('⚠️ LLM selection failed, falling back to OpenAI:', modelSelectionError);
+      selectedModel = selectMainModel({
+        provider: 'openai',
+        model: DEFAULT_OPENAI_MODEL,
+        openaiClient: openai
+      });
+    }
+
+    const baseSystemMessage = `${selectedModel.systemPrompt}\n\n${context}`;
+    let dynamicSystemMessage = baseSystemMessage;
 
     let response = '';
     let tokensUsed: number = 0;
@@ -4051,15 +4734,15 @@ Deno.serve(async (req) => {
     const maxValidationAttempts = 2;
 
     while (validationAttempts <= maxValidationAttempts) {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: openaiMessages,
-        temperature: validationAttempts === 0 ? 0.7 : 0.3, // Нижча температура при регенерації
-        max_tokens: 1000
+      const result = await selectedModel.sendChat({
+        system: dynamicSystemMessage,
+        messages: normalizedHistory,
+        temperature: validationAttempts === 0 ? 0.7 : 0.3,
+        maxTokens: 1000
       });
 
-      response = completion.choices[0]?.message?.content || 'Вибачте, не вдалося згенерувати відповідь.';
-      tokensUsed = completion.usage?.total_tokens || 0;
+      response = result.response || 'Вибачте, не вдалося згенерувати відповідь.';
+      tokensUsed = result.tokensUsed || 0;
 
       // Валідація відповіді (тільки якщо є статті)
       if (sources.length > 0 && relevantArticles && relevantArticles.length > 0) {
@@ -4079,8 +4762,7 @@ Deno.serve(async (req) => {
         // Якщо є проблеми - додаємо більш строгі інструкції та регенеруємо
         if (validation.needsRegeneration) {
           console.log(`Regenerating response (attempt ${validationAttempts + 1}/${maxValidationAttempts})`);
-          const stricterContext = context + `\n\nУВАГА: Попередня відповідь містила помилки. Відповідай ТІЛЬКИ на основі наданих статей, обов'язково цитуй конкретні статті.`;
-          openaiMessages[0] = { role: 'system' as const, content: stricterContext };
+          dynamicSystemMessage = `${baseSystemMessage}\n\nУВАГА: Попередня відповідь містила помилки. Відповідай ТІЛЬКИ на основі наданих статей, обов'язково цитуй конкретні статті.`;
           validationAttempts++;
           continue;
         }
@@ -4094,7 +4776,9 @@ Deno.serve(async (req) => {
       sourcesCount: sources.length,
       documentsFound: documents.length,
       articlesFound: relevantArticles.length,
-      classification: classification.isLegalQuestion ? classification.requiredCodex : 'not legal'
+      classification: classification.isLegalQuestion ? classification.requiredCodex : 'not legal',
+      llmProvider: selectedModel.provider,
+      llmModel: selectedModel.model
     });
 
     // Зберігаємо в кеш (якщо це юридичне питання)
@@ -4145,6 +4829,11 @@ Deno.serve(async (req) => {
       },
       environment: {
         supabaseKeyType
+      },
+      router: routerDecision,
+      llm: {
+        provider: selectedModel.provider,
+        model: selectedModel.model
       }
     };
 
