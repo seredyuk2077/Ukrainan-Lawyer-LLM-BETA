@@ -45,9 +45,9 @@ presence_penalty: 0.1,
 frequency_penalty: 0.1
 ```
 
-### На GPT-4o (найновіша модель):
+### На Claude 3 Haiku:
 ```typescript
-model: 'gpt-4o',
+model: 'claude-3-haiku-20240307',
 max_tokens: 2000,
 temperature: 0.2,
 presence_penalty: 0.0,

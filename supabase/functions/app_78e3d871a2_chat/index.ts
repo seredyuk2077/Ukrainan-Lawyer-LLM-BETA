@@ -2,6 +2,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // @ts-ignore - Deno edge function imports
 import OpenAI from "https://esm.sh/openai@4";
+import { SupremeCourtCaseLawService } from "./supremeCourtCaseLawService.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -4322,6 +4323,7 @@ Deno.serve(async (req) => {
     }
     const anthropicApiKey =
       Deno.env.get('ANTHROPIC_API_KEY') || Deno.env.get('CLAUDE_API_KEY');
+    const supremeCourtService = new SupremeCourtCaseLawService({ supabase, openai });
 
     // Parse request body (body вже оголошено вище)
     try {
@@ -4350,6 +4352,7 @@ Deno.serve(async (req) => {
     }
 
     const { messages, sessionId, userMessage } = body;
+    const isPremiumUser = Boolean(body?.isPremiumUser);
 
     if (!userMessage) {
       console.error('❌ Missing userMessage in request');
@@ -4461,6 +4464,8 @@ Deno.serve(async (req) => {
     let documents: Document[] = [];
     let manualDocument: Document | null = null;
     let routerDocument: Document | null = null;
+    let supremeCourtCases: any[] = [];
+    let supremeCourtDurationMs = 0;
 
     if (manualMatch) {
       try {
@@ -4699,6 +4704,31 @@ Deno.serve(async (req) => {
       context = legalAgent.buildSimpleContext(userMessage);
     }
 
+    const supremeCourtStart = Date.now();
+    try {
+      const shouldUseSupremeCourt = await supremeCourtService.shouldUseSupremeCourt({
+        userMessage,
+        classification,
+        isPremiumUser
+      });
+
+      if (shouldUseSupremeCourt) {
+        supremeCourtCases = await supremeCourtService.vectorSearch({
+          query: userMessage,
+          isPremiumUser,
+          limit: 3
+        });
+        const supremeCourtContext = supremeCourtService.formatCaseLawForLLM(supremeCourtCases);
+        if (supremeCourtContext) {
+          context = `${context}\n\n${supremeCourtContext}`;
+        }
+      }
+    } catch (supremeError) {
+      console.error('Supreme Court integration failed:', supremeError);
+    } finally {
+      supremeCourtDurationMs = Date.now() - supremeCourtStart;
+    }
+
     // КРОК 3: Генерація відповіді через LLM з валідацією
     const normalizedHistory = normalizeChatHistory(messageHistory, 5);
     if (
@@ -4781,6 +4811,13 @@ Deno.serve(async (req) => {
       llmModel: selectedModel.model
     });
 
+    const supremeCourtAnswerBlock = SupremeCourtCaseLawService.formatCaseLawForAnswer(
+      supremeCourtCases
+    );
+    if (supremeCourtAnswerBlock) {
+      response = `${response}\n${supremeCourtAnswerBlock}`;
+    }
+
     // Зберігаємо в кеш (якщо це юридичне питання)
     if (classification.isLegalQuestion && response && response.length > 50) {
       legalAgent.saveToCache(
@@ -4831,6 +4868,23 @@ Deno.serve(async (req) => {
         supabaseKeyType
       },
       router: routerDecision,
+      supremeCourt: {
+        enabled: supremeCourtCases.length > 0,
+        cases: supremeCourtCases.length,
+        caseIds: supremeCourtCases.map((c: any) => c.id).filter(Boolean),
+        similarities: supremeCourtCases
+          .map((c: any) => c.similarity)
+          .filter((s: any) => typeof s === 'number'),
+        durationMs: supremeCourtDurationMs,
+        embeddingModel: 'text-embedding-3-small',
+        datasetYear: (() => {
+          const years = supremeCourtCases
+            .map((c: any) => c.metadata?.datasetYear)
+            .filter((y: any) => typeof y === 'number');
+          return years.length ? Math.min(...years) : null;
+        })(),
+        classifierUsed: true
+      },
       llm: {
         provider: selectedModel.provider,
         model: selectedModel.model
@@ -4844,6 +4898,7 @@ Deno.serve(async (req) => {
         sessionId: sessionId || 'unknown',
         sources,
         classification: debugInfo.classification,
+        supremeCourtCases,
         fromCache: false,
         debug: debugInfo // Додаємо для тестування
       }),

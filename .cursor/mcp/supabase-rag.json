@@ -1,0 +1,8 @@
+{
+  "name": "supabase-rag",
+  "type": "supabase",
+  "project_ref": "rlsmswjhrueumzbesole",
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsc21zd2pocnVldW16YmVzb2xlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjIyMTUxMCwiZXhwIjoyMDgxNzk3NTEwfQ.ML-eMhv6w5_htxAYcB0NSgdU33tzTMMZkMXteGA_whg",
+  "schema": ["public"]
+}
+

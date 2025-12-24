@@ -18,7 +18,7 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies
-    WHERE polname = 'Authenticated users can read zu bucket'
+    WHERE policyname = 'Authenticated users can read zu bucket'
       AND tablename = 'objects'
       AND schemaname = 'storage'
   ) THEN
@@ -32,7 +32,7 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies
-    WHERE polname = 'Service role can manage zu bucket'
+    WHERE policyname = 'Service role can manage zu bucket'
       AND tablename = 'objects'
       AND schemaname = 'storage'
   ) THEN
@@ -51,7 +51,7 @@ END $$;
 
 -- Metadata table for stored laws
 CREATE TABLE IF NOT EXISTS legal_documents_storage (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   rada_dokid bigint,
   rada_nreg text UNIQUE NOT NULL,
   title text NOT NULL,

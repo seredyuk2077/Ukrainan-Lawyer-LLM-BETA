@@ -1,0 +1,5 @@
+{
+  "db": {
+    "connection_string": "postgres://postgres.lhltmmzwvikdgxxakbcl:eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxobHRtbXp3dmlrZGd4eGFrYmNsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1ODkwMjU4OSwiZXhwIjoyMDc0NDc4NTg5fQ.83H3lDQpZAJpG6dZR3dtRLgTEqYiGoFpmRggI4fwq2Y@aws-1-eu-north-1.supabase.com:5432/postgres"
+  }
+}
