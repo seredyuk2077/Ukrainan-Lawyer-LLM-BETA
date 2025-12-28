@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { query } = require('../config/supabase');
+const { queryLegislation } = require('../config/supabaseLegislation');
 const logger = require('../utils/logger');
 
 class RadaOfficialApiParser {
@@ -647,7 +648,7 @@ class RadaOfficialApiParser {
 
     try {
       for (const law of laws) {
-        await query('legal_laws', 'upsert', {
+        await queryLegislation('legal_laws', 'upsert', {
           data: {
             title: law.title,
             content: law.content,

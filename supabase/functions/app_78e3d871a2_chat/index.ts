@@ -1177,6 +1177,7 @@ class LegalAgent {
 
   async ensureManualLawAvailability(
     supabase: any,
+    legislationSupabase: any,
     manualMatch: ManualLawMapping,
     classification: QuestionClassification,
     userMessage?: string | null
@@ -1188,6 +1189,7 @@ class LegalAgent {
 
     const fetched = await this.fetchLawFromRadaDirectly(
       supabase,
+      legislationSupabase,
       manualMatch,
       classification,
       userMessage
@@ -1201,6 +1203,7 @@ class LegalAgent {
 
   async loadDocumentByNreg(
     supabase: any,
+    legislationSupabase: any,
     nreg: string | null | undefined,
     classification: QuestionClassification
   ): Promise<Document | null> {
@@ -1211,14 +1214,14 @@ class LegalAgent {
     const manualMatch = this.getManualLawMappingByNreg(nreg);
     if (manualMatch) {
       try {
-        return await this.ensureManualLawAvailability(supabase, manualMatch, classification);
+        return await this.ensureManualLawAvailability(supabase, legislationSupabase, manualMatch, classification);
       } catch (error) {
         console.warn(`⚠️ Failed to load manual law by NREG ${nreg}:`, error);
       }
     }
 
     try {
-      const { data, error } = await supabase
+      const { data, error } = await legislationSupabase
         .from('legal_documents_storage')
         .select('storage_bucket, storage_path, title, rada_nreg, law_number, category, source_url')
         .eq('rada_nreg', nreg)
@@ -1381,6 +1384,7 @@ class LegalAgent {
 
   private async fetchLawFromRadaDirectly(
     supabase: any,
+    legislationSupabase: any,
     manualMatch: ManualLawMapping,
     classification: QuestionClassification,
     userMessage?: string | null
@@ -1462,7 +1466,7 @@ class LegalAgent {
         articles: articles || undefined
       };
 
-      await this.persistManualDocumentToStorage(supabase, {
+      await this.persistManualDocumentToStorage(supabase, legislationSupabase, {
         document,
         manualMatch,
         jsonStructure: jsonData,
@@ -1480,6 +1484,7 @@ class LegalAgent {
 
   private async persistManualDocumentToStorage(
     supabase: any,
+    legislationSupabase: any,
     options: {
       document: Document;
       manualMatch: ManualLawMapping;
@@ -1569,7 +1574,7 @@ class LegalAgent {
       updated_at: new Date().toISOString()
     };
 
-    const { error: metadataError } = await supabase
+      const { error: metadataError } = await legislationSupabase
       .from('legal_documents_storage')
       .upsert(metadataRecord, { onConflict: 'rada_nreg' });
 
@@ -1742,6 +1747,7 @@ class LegalAgent {
 
   private async softSearchStorageBySignals(
     supabase: any,
+    legislationSupabase: any,
     signals: SoftSearchSignals,
     classification: QuestionClassification,
     limit: number
@@ -1768,7 +1774,7 @@ class LegalAgent {
       return [];
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await legislationSupabase
       .from('legal_documents_storage')
       .select('storage_bucket, storage_path, title, rada_nreg, law_number, category, source_url')
       .eq('is_active', true)
@@ -1901,10 +1907,11 @@ class LegalAgent {
   async classifyQuestionMultiStage(
     openai: OpenAI,
     userMessage: string,
-    conversationHistory: any[] = []
+    conversationHistory: any[] = [],
+    modelName: string = 'gpt-3.5-turbo'
   ): Promise<QuestionClassification> {
     // Етап 1: Швидка перевірка чи це юридичне питання
-    const isLegal = await this.quickLegalCheck(openai, userMessage, conversationHistory);
+    const isLegal = await this.quickLegalCheck(openai, userMessage, conversationHistory, modelName);
     
     if (!isLegal) {
       return {
@@ -1922,7 +1929,7 @@ class LegalAgent {
     }
 
     // Етап 2: Детальна класифікація
-    const detailed = await this.classifyQuestion(openai, userMessage);
+    const detailed = await this.classifyQuestion(openai, userMessage, modelName);
     
     // Етап 3: Валідація класифікації
     const validated = this.validateClassification(detailed, userMessage);
@@ -1934,7 +1941,8 @@ class LegalAgent {
   private async quickLegalCheck(
     openai: OpenAI,
     userMessage: string,
-    conversationHistory: any[]
+    conversationHistory: any[],
+    modelName: string = 'gpt-3.5-turbo'
   ): Promise<boolean> {
     // Аналізуємо контекст розмови
     const context = conversationHistory
@@ -1950,7 +1958,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
 
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: modelName,
         messages: [
           { role: 'system', content: 'Ти експерт з визначення юридичних питань. Відповідай ТІЛЬКИ "true" або "false".' },
           { role: 'user', content: prompt }
@@ -2028,7 +2036,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
   }
 
   // Інтелектуальна класифікація питання через GPT-3.5-turbo
-  async classifyQuestion(openai: OpenAI, userMessage: string): Promise<QuestionClassification> {
+  async classifyQuestion(openai: OpenAI, userMessage: string, modelName: string = 'gpt-3.5-turbo'): Promise<QuestionClassification> {
     try {
       // Спочатку перевіряємо маппінг злочинів
       const crimeMapping = this.getCrimeArticleMapping(userMessage);
@@ -2128,7 +2136,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       try {
         // Спробуємо з response_format (працює з новішими версіями)
         completion = await openai.chat.completions.create({
-          model: 'gpt-3.5-turbo',
+          model: modelName,
           messages: [
             { role: 'system', content: 'Ти експерт з класифікації юридичних питань. Відповідай ТІЛЬКИ валідним JSON без додаткових символів. Формат: {"isLegalQuestion": true/false, "confidence": 0.0-1.0, "requiredCodex": "ККУ"|null, "articleNumber": "115"|null, "articlePart": "2"|null, "articlePoint": "4"|null, "articleSubPoint": "1"|null, "searchKeywords": ["слово1"], "questionType": "punishment"|"rights"|"procedure"|"definition"|"general", "category": "кримінальне"|"цивільне"|...}' },
             { role: 'user', content: classificationPrompt }
@@ -2141,7 +2149,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
         // Якщо response_format не підтримується, використовуємо без нього
         console.warn('response_format not supported, using fallback');
         completion = await openai.chat.completions.create({
-          model: 'gpt-3.5-turbo',
+          model: modelName,
           messages: [
             { role: 'system', content: 'Ти експерт з класифікації юридичних питань. Відповідай ТІЛЬКИ валідним JSON без додаткових символів. Якщо в питанні згадано частину/пункт/підпункт статті, включи поля "articlePart", "articlePoint", "articleSubPoint".' },
             { role: 'user', content: classificationPrompt }
@@ -2340,6 +2348,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
   // Пошук статей через Supabase функцію search_relevant_articles
   async searchArticlesInDatabase(
     supabase: any,
+    legislationSupabase: any,
     classification: QuestionClassification,
     limit: number = 10
   ): Promise<Article[]> {
@@ -2352,7 +2361,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
 
       // Використовуємо Supabase функцію для пошуку статей
       try {
-        const { data: articleResults, error: articleError } = await supabase.rpc('search_relevant_articles', {
+        const { data: articleResults, error: articleError } = await legislationSupabase.rpc('search_relevant_articles', {
           search_query: searchQuery,
           max_results: limit
         });
@@ -2371,7 +2380,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
 
       // Fallback: пошук в таблиці legal_articles напряму
       if (classification.articleNumber) {
-        const { data: specificArticles, error: specificError } = await supabase
+        const { data: specificArticles, error: specificError } = await legislationSupabase
           .from('legal_articles')
           .select('*, legal_laws(title, law_number)')
           .eq('article_number', classification.articleNumber)
@@ -2388,7 +2397,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       }
 
       // Загальний пошук за ключовими словами
-      const { data: keywordArticles, error: keywordError } = await supabase
+      const { data: keywordArticles, error: keywordError } = await legislationSupabase
         .from('legal_articles')
         .select('*, legal_laws(title, law_number)')
         .ilike('content', `%${classification.searchKeywords[0] || ''}%`)
@@ -2413,6 +2422,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
   // Витягування конкретних статей з документів (покращена версія)
   async extractRelevantArticles(
     supabase: any,
+    legislationSupabase: any,
     documents: Document[],
     classification: QuestionClassification,
     maxArticles: number = 3,
@@ -2422,7 +2432,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
     
     // Спочатку спробуємо знайти статті в таблиці legal_articles
     if (!options?.skipDatabaseLookup) {
-      const dbArticles = await this.searchArticlesInDatabase(supabase, classification, maxArticles);
+      const dbArticles = await this.searchArticlesInDatabase(supabase, legislationSupabase, classification, maxArticles);
       if (dbArticles.length > 0) {
         console.log(`✅ Using ${dbArticles.length} articles from legal_articles table`);
         return dbArticles.slice(0, maxArticles);
@@ -3196,6 +3206,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
   // Пошук в базі даних з покращеною логікою (використовує Supabase функції)
   async searchInDatabase(
     supabase: any,
+    legislationSupabase: any,
     classification: QuestionClassification,
     limit: number = 5,
     options?: { manualMatch?: ManualLawMapping | null; userMessage?: string | null; targetNreg?: string | null }
@@ -3205,6 +3216,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
         console.log(`📘 Manual law detected: ${options.manualMatch.title}`);
         const manualDoc = await this.ensureManualLawAvailability(
           supabase,
+          legislationSupabase,
           options.manualMatch,
           classification,
           options.userMessage
@@ -3218,6 +3230,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       if (options?.targetNreg) {
         const targetedDoc = await this.loadDocumentByNreg(
           supabase,
+          legislationSupabase,
           options.targetNreg,
           classification
         );
@@ -3255,7 +3268,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
           // Спочатку спробуємо використати Supabase функцію для пошуку
           try {
             const searchQuery = codexInfo.fullName;
-            const { data: functionResults, error: functionError } = await supabase.rpc('search_relevant_laws', {
+            const { data: functionResults, error: functionError } = await legislationSupabase.rpc('search_relevant_laws', {
               search_query: searchQuery,
               max_results: limit
             });
@@ -3265,7 +3278,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
               // Отримуємо повні дані з таблиці
               const fullResults = await Promise.all(
                 functionResults.map(async (law: any) => {
-                  const { data: fullLaw } = await supabase
+                  const { data: fullLaw } = await legislationSupabase
                     .from('legal_laws')
                     .select('*')
                     .eq('id', law.id)
@@ -3286,7 +3299,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
           ];
 
           for (const searchTerm of searchVariants) {
-            const { data: codexResults, error: codexError } = await supabase
+            const { data: codexResults, error: codexError } = await legislationSupabase
               .from('legal_laws')
               .select('*')
               .ilike('title', `%${searchTerm}%`)
@@ -3304,7 +3317,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       if (classification.articleNumber) {
         try {
           // Спробуємо повнотекстовий пошук
-        const { data: articleResults, error: articleError } = await supabase
+        const { data: articleResults, error: articleError } = await legislationSupabase
           .from('legal_laws')
           .select('*')
             .textSearch('content', `стаття ${classification.articleNumber}`, {
@@ -3359,7 +3372,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
         } catch (textSearchError) {
           // Fallback на ILIKE пошук якщо textSearch не працює
           console.warn('textSearch failed, using ILIKE fallback:', textSearchError);
-          const { data: articleResults, error: articleError } = await supabase
+          const { data: articleResults, error: articleError } = await legislationSupabase
           .from('legal_laws')
           .select('*')
             .ilike('content', `%стаття ${classification.articleNumber}%`)
@@ -3377,7 +3390,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       if (searchTerms) {
         try {
           // Спочатку спробуємо використати Supabase функцію
-          const { data: functionResults, error: functionError } = await supabase.rpc('search_relevant_laws', {
+          const { data: functionResults, error: functionError } = await legislationSupabase.rpc('search_relevant_laws', {
             search_query: searchTerms,
             max_results: limit
           });
@@ -3399,7 +3412,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
 
         // Fallback на textSearch
         try {
-          const { data: textResults, error: textError } = await supabase
+          const { data: textResults, error: textError } = await legislationSupabase
           .from('legal_laws')
           .select('*')
             .textSearch('content', searchTerms, {
@@ -3417,7 +3430,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
           console.warn('textSearch failed, using ILIKE fallback:', textSearchError);
           const firstKeyword = classification.searchKeywords[0];
           if (firstKeyword) {
-            const { data: textResults, error: textError } = await supabase
+            const { data: textResults, error: textError } = await legislationSupabase
           .from('legal_laws')
           .select('*')
               .ilike('content', `%${firstKeyword}%`)
@@ -3439,6 +3452,7 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
       );
       const softResults = await this.softSearchStorageBySignals(
         supabase,
+        legislationSupabase,
         signals,
         classification,
         limit
@@ -3574,9 +3588,9 @@ ${context ? `Контекст розмови:\n${context}\n\n` : ''}Питанн
   }
 
   // Збереження закону в базу
-  async saveLawToDatabase(supabase: any, law: Document): Promise<void> {
+  async saveLawToDatabase(legislationSupabase: any, law: Document): Promise<void> {
     try {
-      await supabase
+      await legislationSupabase
           .from('legal_laws')
         .upsert({
           title: law.title,
@@ -3938,6 +3952,7 @@ ${articlesText}
   // Збереження статей в таблицю legal_articles
   async saveArticlesToDatabase(
     supabase: any,
+    legislationSupabase: any,
     lawId: string,
     articles: Article[],
     keywords: string[] = []
@@ -3945,7 +3960,7 @@ ${articlesText}
     try {
       for (const article of articles) {
         // Перевіряємо чи стаття вже існує
-        const { data: existing } = await supabase
+        const { data: existing } = await legislationSupabase
           .from('legal_articles')
           .select('id')
           .eq('law_id', lawId)
@@ -3954,7 +3969,7 @@ ${articlesText}
 
         if (!existing) {
           // Зберігаємо нову статтю
-          await supabase
+          await legislationSupabase
             .from('legal_articles')
             .insert({
               law_id: lawId,
@@ -3978,14 +3993,14 @@ ${articlesText}
 const legalAgent = new LegalAgent();
 
 async function buildRouterWhitelist(
-  supabase: any,
+  legislationSupabase: any,
   agent: LegalAgent
 ): Promise<RouterWhitelistPayload> {
   const manualEntries = agent.getManualWhitelistForRouter();
   let storageEntries: RouterWhitelistLaw[] = [];
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await legislationSupabase
       .from('legal_documents_storage')
       .select('rada_nreg, title, category, theme_code, storage_bucket, storage_path')
       .eq('is_active', true);
@@ -4305,16 +4320,56 @@ Deno.serve(async (req) => {
       }
     });
 
-    // Initialize OpenAI
+    // Initialize Legislation Supabase client (separate project)
+    const legislationUrl = Deno.env.get('SUPABASE_LEGISLATION_URL');
+    const legislationServiceKey = Deno.env.get('SUPABASE_LEGISLATION_SERVICE_ROLE_KEY') || 
+                                   Deno.env.get('SUPABASE_LEGISLATION_ANON_KEY');
+    
+    let legislationSupabase: any = null;
+    if (legislationUrl && legislationServiceKey) {
+      legislationSupabase = createClient(legislationUrl, legislationServiceKey, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      });
+      console.log('✅ Legislation Supabase client configured');
+    } else {
+      console.warn('⚠️ Legislation Supabase environment variables not set, falling back to core client');
+      // Fallback to core client if legislation client is not configured
+      legislationSupabase = supabase;
+    }
+
+    // Initialize OpenAI or OpenRouter
+    const openrouterApiKey = Deno.env.get('OPENROUTER_API_KEY');
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY');
-    if (!openaiApiKey) {
-      console.error('❌ Missing OpenAI API key');
-      throw new Error('OpenAI API key not set');
+    
+    let openai: OpenAI;
+    let usingOpenRouter = false;
+    
+    if (openrouterApiKey) {
+      // Use OpenRouter if API key is available
+      console.log('✅ Using OpenRouter API');
+      openai = new OpenAI({
+        apiKey: openrouterApiKey,
+        baseURL: 'https://openrouter.ai/api/v1',
+        defaultHeaders: {
+          'HTTP-Referer': 'https://lhltmmzwvikdgxxakbcl.supabase.co',
+          'X-Title': 'Legal Assistant'
+        }
+      });
+      usingOpenRouter = true;
+    } else if (openaiApiKey) {
+      // Fallback to OpenAI
+      console.log('✅ Using OpenAI API');
+      openai = new OpenAI({ apiKey: openaiApiKey });
+    } else {
+      console.error('❌ Missing API key (OPENROUTER_API_KEY or OPENAI_API_KEY)');
+      throw new Error('No API key configured');
     }
     
-    console.log('✅ OpenAI configured');
-
-    const openai = new OpenAI({ apiKey: openaiApiKey });
+    // Set model name based on provider (OpenRouter uses "openai/model-name" format)
+    const modelName = usingOpenRouter ? 'openai/gpt-3.5-turbo' : 'gpt-3.5-turbo';
     const routerApiKey =
       Deno.env.get('OPENAI_ROUTER_API_KEY') || Deno.env.get('GPT_ROUTER_API_KEY');
     const routerClient = routerApiKey ? new OpenAI({ apiKey: routerApiKey }) : null;
@@ -4373,6 +4428,62 @@ Deno.serve(async (req) => {
       userMessagePreview: userMessage.substring(0, 100)
     });
 
+    // КРОК 0.5: Перевірка/створення сесії та збереження user message
+    let actualSessionId = sessionId;
+    if (sessionId) {
+      // Перевіряємо чи існує сесія
+      const { data: existingSession, error: sessionCheckError } = await supabase
+        .from('chat_sessions')
+        .select('id')
+        .eq('id', sessionId)
+        .single();
+
+      if (sessionCheckError || !existingSession) {
+        console.warn(`⚠️ Session ${sessionId} not found, creating new one`);
+        // Створюємо нову сесію якщо не знайдено
+        const { data: newSession, error: createError } = await supabase
+          .from('chat_sessions')
+          .insert({
+            id: sessionId,
+            user_id: null, // Анонімний користувач
+            title: userMessage.substring(0, 50),
+            metadata: {}
+          })
+          .select()
+          .single();
+
+        if (createError) {
+          console.error('❌ Failed to create session:', createError);
+          // Продовжуємо без збереження в БД
+        } else {
+          actualSessionId = newSession.id;
+          console.log(`✅ Created new session: ${actualSessionId}`);
+        }
+      }
+
+      // Зберігаємо user message
+      try {
+        const { error: userMsgError } = await supabase
+          .from('chat_messages')
+          .insert({
+            session_id: actualSessionId,
+            role: 'user',
+            content: userMessage,
+            tokens_used: 0,
+            metadata: {}
+          });
+
+        if (userMsgError) {
+          console.error('❌ Failed to save user message:', userMsgError);
+          // Продовжуємо без збереження
+        } else {
+          console.log('✅ User message saved to database');
+        }
+      } catch (msgError) {
+        console.error('❌ Error saving user message:', msgError);
+      }
+    }
+
     // КРОК 0: Перевірка кешу
     const questionHash = await legalAgent.hashQuestion(userMessage);
     const cachedResponse = await legalAgent.getCachedResponse(supabase, questionHash);
@@ -4399,7 +4510,7 @@ Deno.serve(async (req) => {
     let routerDecision: RouterDecision | null = null;
     if (routerClient) {
       try {
-        routerWhitelist = await buildRouterWhitelist(supabase, legalAgent);
+        routerWhitelist = await buildRouterWhitelist(legislationSupabase, legalAgent);
         routerDecision = await runRouterModel({
           client: routerClient,
           userMessage,
@@ -4414,7 +4525,7 @@ Deno.serve(async (req) => {
 
     let classification: QuestionClassification;
     try {
-      classification = await legalAgent.classifyQuestion(openai, userMessage);
+      classification = await legalAgent.classifyQuestion(openai, userMessage, modelName);
       console.log('Question classified:', classification);
     } catch (classificationError) {
       console.error('Classification failed, using fallback:', classificationError);
@@ -4471,6 +4582,7 @@ Deno.serve(async (req) => {
       try {
         manualDocument = await legalAgent.ensureManualLawAvailability(
           supabase,
+          legislationSupabase,
           manualMatch,
           classification,
           userMessage
@@ -4489,6 +4601,7 @@ Deno.serve(async (req) => {
       try {
         routerDocument = await legalAgent.loadDocumentByNreg(
           supabase,
+          legislationSupabase,
           routerSuggestedNreg,
           classification
         );
@@ -4514,7 +4627,7 @@ Deno.serve(async (req) => {
       } else if (routerDocument) {
         documents = [routerDocument];
       } else {
-        documents = await legalAgent.searchInDatabase(supabase, classification, 5, {
+        documents = await legalAgent.searchInDatabase(supabase, legislationSupabase, classification, 5, {
           manualMatch,
           userMessage,
           targetNreg: routerSuggestedNreg
@@ -4538,7 +4651,7 @@ Deno.serve(async (req) => {
           // Зберігаємо нові закони в базу
           for (const law of backendLaws) {
             try {
-              await legalAgent.saveLawToDatabase(supabase, law);
+              await legalAgent.saveLawToDatabase(legislationSupabase, law);
               console.log(`💾 Saved law to database: ${law.title}`);
             } catch (saveError) {
               console.warn('Failed to save law:', saveError);
@@ -4562,30 +4675,38 @@ Deno.serve(async (req) => {
       }
       
       // Якщо все ще не знайдено - спробуємо пошук за категорією
-      if (documents.length === 0 && classification.category !== 'загальне') {
-        const { data: categoryResults } = await supabase
-          .from('legal_laws')
-          .select('*')
-          .ilike('category', `%${classification.category}%`)
-          .limit(3);
-        
-        if (categoryResults && categoryResults.length > 0) {
-          documents = categoryResults;
-          console.log(`Found ${documents.length} documents by category`);
+      if (documents.length === 0 && classification.category !== 'загальне' && legislationSupabase) {
+        try {
+          const { data: categoryResults } = await legislationSupabase
+            .from('legal_laws')
+            .select('*')
+            .ilike('category', `%${classification.category}%`)
+            .limit(3);
+          
+          if (categoryResults && categoryResults.length > 0) {
+            documents = categoryResults;
+            console.log(`Found ${documents.length} documents by category`);
+          }
+        } catch (error) {
+          console.warn('Error searching by category:', error);
         }
       }
       
       // Якщо все ще не знайдено - використовуємо загальний пошук
-      if (documents.length === 0 && classification.searchKeywords.length > 0) {
-        const { data: keywordResults } = await supabase
-        .from('legal_laws')
-        .select('*')
-          .ilike('title', `%${classification.searchKeywords[0]}%`)
-          .limit(3);
-        
-        if (keywordResults && keywordResults.length > 0) {
-          documents = keywordResults;
-          console.log(`Found ${documents.length} documents by keywords`);
+      if (documents.length === 0 && classification.searchKeywords.length > 0 && legislationSupabase) {
+        try {
+          const { data: keywordResults } = await legislationSupabase
+          .from('legal_laws')
+          .select('*')
+            .ilike('title', `%${classification.searchKeywords[0]}%`)
+            .limit(3);
+          
+          if (keywordResults && keywordResults.length > 0) {
+            documents = keywordResults;
+            console.log(`Found ${documents.length} documents by keywords`);
+          }
+        } catch (error) {
+          console.warn('Error searching by keywords:', error);
         }
       }
 
@@ -4598,6 +4719,7 @@ Deno.serve(async (req) => {
         const skipDbArticles = !!manualDocument || !!routerDocument;
         relevantArticles = await legalAgent.extractRelevantArticles(
           supabase,
+          legislationSupabase,
           documents,
           classification,
           extractionLimit,
@@ -4644,6 +4766,7 @@ Deno.serve(async (req) => {
           console.log('No articles found, parsing from text...');
           const parsedArticles = await legalAgent.extractRelevantArticles(
             supabase,
+            legislationSupabase,
             documents.map(d => ({ ...d, articles: undefined })), // Примусово парсимо з тексту
             classification,
             extractionLimit,
@@ -4837,11 +4960,39 @@ Deno.serve(async (req) => {
         if (doc.id) {
           legalAgent.saveArticlesToDatabase(
             supabase,
+            legislationSupabase,
             doc.id,
             relevantArticles,
             classification.searchKeywords
           ).catch(err => console.error('Articles save error:', err));
         }
+      }
+    }
+
+    // Зберігаємо assistant message в базу даних
+    if (actualSessionId && response) {
+      try {
+        const { error: assistantMsgError } = await supabase
+          .from('chat_messages')
+          .insert({
+            session_id: actualSessionId,
+            role: 'assistant',
+            content: response,
+            tokens_used: tokensUsed,
+            metadata: {
+              sources: sources,
+              classification: classification,
+              supremeCourtCases: supremeCourtCases.length
+            }
+          });
+
+        if (assistantMsgError) {
+          console.error('❌ Failed to save assistant message:', assistantMsgError);
+        } else {
+          console.log('✅ Assistant message saved to database');
+        }
+      } catch (msgError) {
+        console.error('❌ Error saving assistant message:', msgError);
       }
     }
 
@@ -4895,7 +5046,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         response,
         tokensUsed,
-        sessionId: sessionId || 'unknown',
+        sessionId: actualSessionId || sessionId || 'unknown',
         sources,
         classification: debugInfo.classification,
         supremeCourtCases,

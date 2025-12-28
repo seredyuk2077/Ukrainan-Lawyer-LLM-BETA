@@ -1,0 +1,121 @@
+feat: Supreme Court RAG integration, repository cleanup, and major infrastructure updates
+
+## 🎯 Major Features
+
+### Supreme Court Case Law RAG System
+- ✅ Full integration of Supreme Court case law retrieval system
+- ✅ New `SupremeCourtCaseLawService` for intelligent case matching
+- ✅ Vector search with pgvector for semantic similarity
+- ✅ Automatic case relevance detection and filtering
+- ✅ Integration with main Edge Function for hybrid RAG (laws + case law)
+- ✅ Support for premium user features
+
+### Database Migrations
+- ✅ Enable pgvector extension for vector operations
+- ✅ Create `legal_cases` table with embeddings support
+- ✅ Add significance scoring system for case filtering
+- ✅ Enhance legal_cases with hybrid search capabilities
+- ✅ Add RPC function `match_supreme_court_cases` for vector search
+- ✅ Optimize indexes for performance (case_number, decision_date, court, embeddings)
+
+### New Frontend
+- ✅ Complete new frontend implementation (`new-frontend/`)
+- ✅ Modern React 18 + TypeScript + Vite setup
+- ✅ New UI components and workspace layout
+- ✅ Chat interface with improved UX
+- ✅ Brand assets and logo system
+
+## 🏗️ Infrastructure & Architecture
+
+### Repository Organization
+- ✅ Created `scripts/` directory for deployment and utility scripts
+  - Moved `deploy-functions.cjs` → `scripts/deploy-functions.cjs`
+  - Moved `r2.mjs` (MCP server) → `scripts/r2.mjs`
+- ✅ Created `config/` directory for non-build configs
+  - Moved `template_config.json` → `config/template_config.json`
+- ✅ Created `docs/archive/` for historical reports
+  - Moved `STORAGE_AUDIT_REPORT.md` → `docs/archive/`
+- ✅ Moved `deno.lock` → `supabase/deno.lock` (proper location)
+
+### Documentation
+- ✅ Created comprehensive project documentation:
+  - `docs/overview.md` - Project overview and setup instructions
+  - `docs/repo-map.md` - Repository structure map
+  - `docs/cleanup-report.md` - Cleanup and organization report
+  - `docs/root-files-audit.md` - Root files audit
+  - `docs/supreme_court_rag.md` - Supreme Court RAG architecture
+  - `docs/supreme_court_benchmark.md` - Performance benchmarks
+
+### Testing Infrastructure
+- ✅ Added comprehensive test suite for Supreme Court integration:
+  - `supremeCourtCaseLawService.test.ts` - Service unit tests
+  - `supremeCourtIntegration.test.ts` - Integration tests
+  - `httpIntegration.test.ts` - HTTP endpoint tests
+
+## 🔧 Technical Improvements
+
+### Edge Function Enhancements
+- ✅ Integrated Supreme Court case law service into main chat function
+- ✅ Added premium user support
+- ✅ Enhanced response metadata with Supreme Court context
+- ✅ Improved error handling and logging
+
+### Configuration Updates
+- ✅ Updated `.gitignore` with comprehensive ignore rules
+- ✅ Updated `package.json` scripts to use new script paths
+- ✅ Updated TypeScript configurations
+- ✅ Added Vitest configuration
+
+### Dependencies
+- ✅ Updated pnpm-lock.yaml with new dependencies
+- ✅ Added support for vector embeddings and RAG operations
+
+## 🧹 Cleanup & Maintenance
+
+### Removed Files
+- ❌ Removed `backend/supabase.env.example` (moved to proper location)
+- ❌ Removed old test files (`tests/claude/`, `tests/gpt/`)
+- ❌ Removed `template_config.json` from root (moved to config/)
+
+### Code Quality
+- ✅ Improved code organization and structure
+- ✅ Better separation of concerns
+- ✅ Enhanced documentation throughout
+
+## 📊 Database Schema
+
+### New Tables
+- `legal_cases` - Supreme Court case law with embeddings
+  - Vector embeddings for semantic search
+  - Significance scoring system
+  - Comprehensive metadata support
+
+### New Functions
+- `match_supreme_court_cases()` - Vector similarity search
+- `trg_legal_cases_updated_at()` - Auto-update trigger
+
+### Indexes
+- Vector index (ivfflat) for fast similarity search
+- B-tree indexes for case_number, decision_date, court
+
+## 🚀 Deployment
+
+### Scripts
+- ✅ Updated deployment scripts
+- ✅ Improved function deployment process
+- ✅ Better error handling in deployment
+
+## 📝 Notes
+
+- Both frontends (legacy and new) are maintained separately
+- Supreme Court RAG is fully integrated but can be toggled
+- All migrations are backward compatible
+- Documentation is comprehensive and up-to-date
+
+## 🔗 Related
+
+- Supabase project separation completed
+- Full Supreme Court data import completed
+- RAG system now supports hybrid search (laws + case law)
+- Premium features infrastructure ready
+

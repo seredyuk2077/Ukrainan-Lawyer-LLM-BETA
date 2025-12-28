@@ -104,6 +104,9 @@ dependencies:
   '@types/file-saver':
     specifier: ^2.0.7
     version: 2.0.7
+  '@types/iconv-lite':
+    specifier: ^0.0.1
+    version: 0.0.1
   cheerio:
     specifier: ^1.1.2
     version: 1.1.2
@@ -4058,6 +4061,13 @@ packages:
 
   /@types/file-saver@2.0.7:
     resolution: {integrity: sha512-dNKVfHd/jk0SkR/exKGj2ggkB45MAkzvWCaqLUUgkyjITkGNzH8H+yUwr+BLJUBjZOe9w8X3wgmXhZDRg1ED6A==}
+    dev: false
+
+  /@types/iconv-lite@0.0.1:
+    resolution: {integrity: sha512-SsRBQxGw7/2/NxYJfBdiUx5a7Ms/voaUhOO9u2y9FTeTNBO1PXohzE4i3JfD8q2Te42HLTn5pyZtDf8j1bPKgQ==}
+    deprecated: This is a stub types definition for iconv-lite (https://github.com/ashtuchkin/iconv-lite). iconv-lite provides its own type definitions, so you don\'t need @types/iconv-lite installed!
+    dependencies:
+      '@types/node': 22.18.6
     dev: false
 
   /@types/json-schema@7.0.15:

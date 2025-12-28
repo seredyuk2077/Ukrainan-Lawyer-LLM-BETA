@@ -1,4 +1,5 @@
 const { query } = require('../config/supabase');
+const { queryLegislation } = require('../config/supabaseLegislation');
 const radaOfficialApiParser = require('./radaOfficialApiParser');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
@@ -225,7 +226,7 @@ class SupabaseLegalAgent {
   async searchInDatabase(keywords, limit) {
     try {
       // Спочатку шукаємо в локальній базі - отримуємо більше записів для кращого фільтрування
-      const result = await query('legal_laws', 'select', {
+      const result = await queryLegislation('legal_laws', 'select', {
         select: 'id, title, content, law_number, source_url, articles',
         limit: limit * 3 // Отримуємо в 3 рази більше для кращого фільтрування
       });
@@ -465,7 +466,7 @@ class SupabaseLegalAgent {
   // Отримання статистики
   async getStats() {
     try {
-      const result = await query('legal_laws', 'select', {
+      const result = await queryLegislation('legal_laws', 'select', {
         select: 'count(*) as total_laws',
         limit: 1
       });

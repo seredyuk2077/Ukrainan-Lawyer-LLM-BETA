@@ -1,0 +1,35 @@
+feat(legislation): finalize architecture & Open Data Portal index
+
+Завершено повну архітектурну фазу та Phase 2 реалізації Legislation RAG підсистеми.
+
+Архітектура (docs/legislation-rag/):
+- Повна документація системи (10 документів)
+- Canonical data model та R2 формат
+- Ingestion pipeline design
+- Storage strategy та DB readiness checkpoint
+- RAG retrieval механізми
+
+Phase 2 Implementation (scripts/legislation/):
+- Open Data Portal інтеграція (radaDocIndex.ts)
+- TSV парсинг з Windows-1251 → UTF-8 конвертацією
+- Стабільний індекс 289,079 документів
+- CLI lookup інструмент з кешуванням (TTL 6 годин)
+- Видалено HTML crawling залежність
+- Canonical nreg helpers та raw fetch utilities
+
+Технічні деталі:
+- Використовує каталог відкритих даних ВРУ (/open/data/docs)
+- Stream parsing для великих файлів (без stack overflow)
+- Memory-safe обробка масивів
+- Автоматичне оновлення кешу (ETag/Last-Modified)
+- Нормалізація текстів для пошуку (діакритики, пунктуація)
+
+Готовність:
+✅ Phase 1 (Planning & Architecture) — COMPLETE
+✅ Phase 2 (Stable Index & Lookup) — COMPLETE
+⏭️  Phase 3 (DB Schema Design) — READY TO START
+
+Наступний крок:
+- Проектування та створення Supabase Legislation RAG схеми
+- Реалізація bulk importer (2k–5k актів)
+
