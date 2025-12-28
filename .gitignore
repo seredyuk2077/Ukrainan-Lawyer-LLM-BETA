@@ -175,3 +175,4 @@ tmp/
 temp/
 outputs/
 *.cache
+tmp/rada-open-data/
