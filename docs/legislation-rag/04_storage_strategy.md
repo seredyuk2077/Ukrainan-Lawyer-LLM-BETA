@@ -79,50 +79,43 @@ CREATE INDEX ON legislation_documents USING GIN (keywords);
 CREATE INDEX ON legislation_documents USING gin (to_tsvector('ukrainian', title));
 ```
 
-### Таблиця `legislation_articles` (опціонально)
+### Таблиця `legislation_chunks` (замість articles)
 
-**Призначення:** Статті для точного пошуку на рівні статей.
+**Призначення:** Semantic search index. Містить ТІЛЬКИ вектори та посилання на дані в R2.
 
 **Структура:**
 
 ```sql
-legislation_articles (
+legislation_chunks (
   -- Ідентифікатори
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   document_nreg VARCHAR(100) REFERENCES legislation_documents(rada_nreg) ON DELETE CASCADE,
   
-  -- Метадані статті
-  article_number VARCHAR(50) NOT NULL,  -- "123", "123-1"
-  title VARCHAR(500),                   -- "Стаття 123"
-  content TEXT NOT NULL,                -- Текст статті
+  -- Retrieval Pointers (Вказівники на контент)
+  r2_key TEXT NOT NULL,                 -- Шлях до файлу (civil/435-15.json)
+  json_path TEXT NOT NULL,              -- JSONPath до тексту (articles[0].content)
+  chunk_index INTEGER NOT NULL,         -- Порядок сортування
   
   -- Пошук
-  embedding vector(1536),               -- Embedding статті
-  keywords JSONB DEFAULT '[]',          -- Ключові слова статті
+  embedding vector(1536) NOT NULL,      -- Вектор (NO NULLS allowed for search)
+  article_number VARCHAR(50),           -- Метадані для фільтрації
   
-  -- Метадані
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-  
-  -- Індекси для швидкого пошуку
-  UNIQUE(document_nreg, article_number)
+  -- Технічні
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 )
 ```
 
 **Індекси:**
 
 ```sql
--- Для векторного пошуку
-CREATE INDEX ON legislation_articles USING ivfflat (embedding vector_cosine_ops);
+-- Головний векторний індекс
+CREATE INDEX ON legislation_chunks USING ivfflat (embedding vector_cosine_ops);
 
--- Для документа
-CREATE INDEX ON legislation_articles (document_nreg);
-
--- Для номерів статей
-CREATE INDEX ON legislation_articles (article_number);
-
--- Для ключових слів
-CREATE INDEX ON legislation_articles USING GIN (keywords);
+-- Для видалення/оновлення документа
+CREATE INDEX ON legislation_chunks (document_nreg);
 ```
+
+⚠️ **ВАЖЛИВО:** У цій таблиці немає колонки `content` або `text`. Весь текст живе в R2 JSON файлі.
 
 ### Таблиця `legislation_import_jobs` (для batch імпорту)
 
@@ -323,7 +316,7 @@ legislation/
 - Назви: `snake_case`
 - Приклади:
   - `legislation_documents`
-  - `legislation_articles`
+  - `legislation_chunks`
   - `legislation_import_jobs`
 
 ### R2 файли

@@ -404,12 +404,12 @@ Batch 2 [nreg21, nreg22, ..., nreg40]
 - **Input:** `title`, фрагмент контенту
 - **Output:** `keywords` (масив рядків)
 
-**4. Генерація embeddings:**
-- **Де:** Після витягування структури
+**4. Генерація embeddings (Chunks):**
+- **Де:** Після розбиття на чанки (chunking)
 - **Чому:** Потрібні для семантичного пошуку
 - **Модель:** `text-embedding-3-small` (OpenAI)
-- **Input:** Конкатенація `title + summary + content_fragment`
-- **Output:** `embedding` (vector 1536 dimensions)
+- **Input:** Текст чанку
+- **Output:** `embedding` (vector 1536 dimensions) для кожного чанку
 
 ### Оптимізація AI викликів
 
@@ -457,19 +457,21 @@ Batch 2 [nreg21, nreg22, ..., nreg40]
    - Базові метадані (`title`, `document_type`, `category`)
    - Дати (`rada_datred`, `imported_at`, `updated_at`)
    - Версійність (`content_hash`)
-   - **Embeddings** (`embedding` vector(1536))
+   - **Embeddings** (опціонально для документа в цілому)
    - Keywords (JSONB)
-   - Посилання (`r2_path`, `source_url`)
-   - Статистика (`articles_count`)
+   - Посилання (`r2_key`, `source_url`)
+   - Статистика (`chunks_count`)
 
-2. **legislation_articles** (опціонально):
-   - Статті для точного пошуку
-   - Embeddings статей
-   - Keywords статей
+2. **legislation_chunks** (замість articles):
+   - **Embeddings** (vector 1536) — основний індекс
+   - Посилання на R2 (`r2_key`, `json_path`)
+   - Метадані для фільтрації (`article_number`)
+   - **НЕМАЄ тексту** (тільки вектори)
 
 **Розмір:**
-- ~6KB на документ (включно з embedding)
-- Для 50k документів: ~300MB
+- ~6KB на чанк (включно з embedding)
+- Для 50k документів (по ~20 чанків): ~6GB (потрібне партиціонування або шардинг)
+- Для пілоту (2k документів): ~240MB (вміщується в ліміт)
 
 ### Розділення відповідальностей
 

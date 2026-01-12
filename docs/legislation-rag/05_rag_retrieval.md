@@ -93,7 +93,7 @@ interface QuestionClassification {
    LIMIT 10;
    ```
 
-3. **Параметри:**
+   *Примітка: Це пошук на рівні всього документа (coarse routing). Детальний пошук відбувається по чанках.*
    - `similarity threshold`: 0.7 (мінімальна схожість)
    - `limit`: 10-20 документів
 
@@ -179,55 +179,46 @@ combined_score = (semantic_score * 0.7) + (lexical_score * 0.3)
 - Мінімальний `combined_score`: 0.6
 - Максимум результатів: 10-20 документів
 
-## Крок 3: Пошук на рівні статей
+## Крок 3: Пошук чанків (Semantic Search)
 
 ### Ціль
 
-Якщо класифікація визначила конкретну статтю або якщо потрібен точний пошук.
+Знайти найбільш релевантні фрагменти тексту (чанки) за допомогою векторного пошуку.
 
 ### Метод
 
-1. **Точний пошук статті:**
+1. **Векторний пошук:**
    ```sql
    SELECT 
-     article_number,
-     title,
-     content,
-     document_nreg
-   FROM legislation_articles
-   WHERE document_nreg = $1
-     AND article_number = $2;
-   ```
-
-2. **Векторний пошук статей:**
-   ```sql
-   SELECT 
-     article_number,
-     title,
-     content,
+     id,
      document_nreg,
+     r2_key,
+     json_path,
      1 - (embedding <=> $1::vector) as similarity
-   FROM legislation_articles
-   WHERE document_nreg = ANY($2::text[])  -- В документах з попереднього пошуку
+   FROM legislation_chunks
+   WHERE 1 - (embedding <=> $1::vector) > 0.7  -- Поріг схожості
+     AND document_nreg = ANY($2::text[])       -- Фільтр за документами (опціонально)
    ORDER BY embedding <=> $1::vector
-   LIMIT 5;
+   LIMIT 10;
    ```
 
-3. **Фільтрація за частиною/пунктом:**
-   - Якщо `articlePart` або `articlePoint` вказані
-   - Витягуємо відповідний фрагмент з контенту статті
-   - Regex або парсинг структури
+2. **Отримання контексту:**
+   - Отримуємо список `(r2_key, json_path)`
+   - Завантажуємо JSON з R2
+   - Витягуємо текст за `json_path`
 
 ### Результат
 
 ```typescript
-interface ArticleMatch {
-  rada_nreg: string;
-  article_number: string;
-  article_title: string;
-  content: string;
-  excerpt?: string;          // Фрагмент (частина/пункт)
-  similarity?: number;       // Якщо векторний пошук
+interface ChunkMatch {
+  id: string;
+  document_nreg: string;
+  content: string;           // Витягнуто з R2
+  similarity: number;
+  metadata: {
+    article_number?: string;
+    page_number?: number;
+  };
 }
 ```
 
@@ -297,7 +288,10 @@ interface ArticleMatch {
    - Максимум 10-15 статей
    - Максимум 10,000 токенів контексту
 
-## Крок 6: Генерація відповіді з цитуваннями
+**Важливо:**
+- Текст **ніколи** не береться з БД.
+- БД повертає тільки посилання (`r2_key`, `json_path`).
+- Application Server завантажує текст з R2.
 
 ### Ціль
 

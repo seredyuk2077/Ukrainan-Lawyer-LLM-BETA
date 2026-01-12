@@ -71,29 +71,30 @@
 - 1 Document → N Articles (one-to-many)
 - 1 Document → 1 Import Job (optional, для batch імпорту)
 
-### 2. Article (Стаття)
+### 2. Chunk (Чанк)
 
 **Визначення:**
-Окрема стаття документа, основна одиниця для цитування.
+Найменша одиниця для векторного пошуку. Це може бути стаття, частина статті, або логічний фрагмент тексту.
+**Призначення:** Semantic search для LLM.
 
 **Атрибути:**
 - `id` (uuid, primary key): Унікальний ідентифікатор
 - `document_nreg` (string, foreign key): Посилання на документ
-- `article_number` (string): Номер статті ("123", "123-1")
-- `title` (string): Назва статті ("Стаття 123")
-- `content` (text): Текст статті
-- `created_at` (timestamp): Час створення
+- `chunk_index` (integer): Порядковий номер чанку в документі
+- `r2_key` (text): Шлях до файлу в R2 (наприклад "civil/435-15.json")
+- `json_path` (text): Шлях до тексту всередині JSON (наприклад "articles[5].content")
+- `article_number` (string): Номер статті для цитування (опціонально)
+- `token_count` (integer): Кількість токенів
 
 **AI-згенеровані атрибути:**
-- `embedding` (vector, optional): Векторне представлення статті (1536 dimensions)
-- `keywords` (array, optional): Ключові слова статті
+- `embedding` (vector): Векторне представлення (1536 dimensions) - **ОБОВ'ЯЗКОВО**
 
 **Зв'язки:**
-- N Articles → 1 Document (many-to-one)
+- N Chunks → 1 Document
 
 **Примітка:**
-- Таблиця опціональна (можна витягувати з R2 при потребі)
-- Рекомендовано для точного пошуку на рівні статей
+- ⚠️ **Текст (content) НЕ зберігається в БД**. Лише вектори та посилання на R2.
+- Це критично для економії місця (Supabase limit).
 
 ### 3. Import Job (Завдання імпорту)
 
@@ -139,16 +140,16 @@ Import Job (опціонально)
     │
     └─→ Document (1)
             │
-            └─→ Articles (N)
+            └─→ Chunks (N)
 ```
 
 ### Детальний опис
 
-**1. Document ↔ Article:**
+**1. Document ↔ Chunk:**
 - **Тип:** One-to-Many
-- **Cardinality:** 1 Document → N Articles (0..N)
-- **Foreign Key:** `articles.document_nreg` → `documents.rada_nreg`
-- **Cascade:** ON DELETE CASCADE (видалення документа видаляє статті)
+- **Cardinality:** 1 Document → N Chunks (0..N)
+- **Foreign Key:** `chunks.document_nreg` → `documents.rada_nreg`
+- **Cascade:** ON DELETE CASCADE (видалення документа видаляє чанки)
 
 **2. Import Job ↔ Document:**
 - **Тип:** One-to-Many (опціонально)
@@ -217,35 +218,33 @@ ORDER BY rada_datred DESC;
 - ✅ B-tree індекс на `category`
 - ✅ B-tree індекс на `rada_datred` (для сортування)
 
-### 5. Пошук статей за документом
+### 5. Пошук чанків за документом
 
 **Паттерн:**
 ```sql
-SELECT * FROM legislation_articles
+SELECT * FROM legislation_chunks
 WHERE document_nreg = $1
-  AND article_number = $2  -- Опціонально для конкретної статті
-ORDER BY article_number;
+ORDER BY chunk_index;
 ```
 
 **Вимоги:**
 - ✅ B-tree індекс на `document_nreg`
-- ✅ B-tree індекс на `(document_nreg, article_number)` (UNIQUE constraint)
-- ✅ Сортування за номером статті
+- ✅ Текст завантажується з R2 за `r2_key` + `json_path`
 
-### 6. Векторний пошук статей
+### 6. Векторний пошук (Основний сценарій)
 
 **Паттерн:**
 ```sql
-SELECT * FROM legislation_articles
-WHERE document_nreg = ANY($1::text[])  -- Документи з попереднього пошуку
-  AND embedding <=> $2::vector < threshold
-ORDER BY embedding <=> $2::vector
+SELECT id, document_nreg, json_path, r2_key, embedding <=> $1::vector as distance
+FROM legislation_chunks
+WHERE embedding <=> $1::vector < threshold
+ORDER BY distance
 LIMIT 5;
 ```
 
 **Вимоги:**
 - ✅ IVFFlat індекс на `embedding`
-- ✅ B-tree індекс на `document_nreg`
+- ✅ Швидке отримання посилань на контент
 
 ### 7. Перевірка наявності документа
 
@@ -366,15 +365,19 @@ LIMIT 1;
 - B-tree індекс на `imported_at` (сортування)
 - B-tree індекс на `sync_status` (фільтрація)
 
-### legislation_articles
+### legislation_chunks
 
-**Обов'язкові індекси (якщо таблиця існує):**
+**Обов'язкові індекси:**
 1. PRIMARY KEY на `id` (UUID)
-2. UNIQUE constraint на `(document_nreg, article_number)`
-3. B-tree індекс на `document_nreg` (foreign key lookup)
-4. B-tree індекс на `article_number` (пошук за номером)
-5. IVFFlat індекс на `embedding` (векторний пошук, якщо є)
-6. GIN індекс на `keywords` (JSONB contains, якщо є)
+2. IVFFlat індекс на `embedding` (векторний пошук)
+3. B-tree індекс на `document_nreg`
+4. B-tree індекс на `article_number` (для фільтрації)
+
+**Constraints:**
+- FOREIGN KEY `document_nreg`
+- NOT NULL `r2_key`
+- NOT NULL `json_path`
+- NOT NULL `embedding`
 
 ### legislation_import_jobs
 
@@ -400,29 +403,31 @@ LIMIT 1;
 - `content_hash`
 - `source_url`
 
-### legislation_articles
+### legislation_chunks
 
 **UNIQUE constraints:**
-- `(document_nreg, article_number)`
+- Немає (один документ може мати багато чанків, іноді без номерів)
 
 **FOREIGN KEY constraints:**
 - `document_nreg` REFERENCES `legislation_documents(rada_nreg)` ON DELETE CASCADE
 
 **NOT NULL constraints:**
 - `document_nreg`
-- `article_number`
-- `content`
+- `r2_key`
+- `json_path`
+- `embedding`
+- `chunk_index`
 
 ## Готовність до проектування БД
 
 ### ✅ Всі необхідні рішення прийняті
 
 1. **Сутності визначені:**
-   - Document, Article, Import Job
-   - Структурні одиниці не зберігаються окремо
+   - Document, Chunk (замість Article), Import Job
+   - Текст повністю винесено в R2
 
 2. **Зв'язки визначені:**
-   - Document ↔ Article (one-to-many)
+   - Document ↔ Chunk (one-to-many)
    - Import Job ↔ Document (one-to-many, опціонально)
 
 3. **Query patterns визначені:**

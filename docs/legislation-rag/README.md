@@ -98,6 +98,15 @@
 - Derived data
 - Підтвердження готовності
 
+### 11. [State Snapshot](./state_snapshot.md)
+Фактичний стан Supabase DB та Cloudflare R2 (проміжний етап).
+
+**Ключові теми:**
+- Поточні таблиці та row counts
+- Embeddings тип/розмірність
+- R2 файли та розміри (verified by script)
+- Статус імпорту Конституції
+
 ## 🎯 Як читати документацію
 
 ### Для архітекторів:
@@ -134,6 +143,12 @@
 - ✅ [08_canonical_data_model.md](./08_canonical_data_model.md) — Завершено
 - ✅ [09_r2_format.md](./09_r2_format.md) — Завершено
 - ✅ [10_db_readiness.md](./10_db_readiness.md) — Завершено
+
+### Phase 3: Реалізація та тестування
+- ✅ [11_gap_analysis_and_required_changes.md](./11_gap_analysis_and_required_changes.md) — Завершено
+- ✅ [12_pilot_import_constitution_report.md](./12_pilot_import_constitution_report.md) — Завершено
+- ✅ [13_r2_upload_implementation_report.md](./13_r2_upload_implementation_report.md) — Завершено
+- ✅ [state_snapshot.md](./state_snapshot.md) — Поточний стан (2025-01-10)
 
 ## 🔗 Пов'язані документи
 
