@@ -7,7 +7,7 @@
 **Дата:** 2025-12-28  
 **Готовність до Phase 3 (DB Design):** ✅ READY
 
-Детальний опис Phase 2: [PHASE2.md](./PHASE2.md)
+Детальний опис Phase 2: [docs/legislation-rag/PHASE2.md](../../docs/legislation-rag/PHASE2.md)
 
 ## 📁 Структура
 

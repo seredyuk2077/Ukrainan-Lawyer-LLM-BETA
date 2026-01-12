@@ -1,219 +1,86 @@
-# 🏛️ Український Юрист - AI Правовий Консультант
+# 📚 Документація проєкту Ukrainian-Lawyer-LLM-BETA
 
-> **BETA версія** - AI-асистент для консультацій з українського права на базі GPT-4 та Supabase
+Ця папка містить всю документацію проєкту, організовану за темами та призначенням.
 
-![Ukrainian Lawyer](https://img.shields.io/badge/Status-BETA-orange) ![React](https://img.shields.io/badge/React-18-blue) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![Supabase](https://img.shields.io/badge/Supabase-Backend-green) ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-purple)
+## 📁 Структура документації
 
-## 📋 Опис проекту
+### 🏛️ Legislation RAG
+**Папка:** [`legislation-rag/`](./legislation-rag/)
 
-**Український Юрист** - це інноваційний AI-асистент, який надає професійні консультації з українського права. Проект створено для допомоги громадянам України в розумінні правових питань та отриманні кваліфікованих рекомендацій.
+Повна архітектурна документація системи Legislation RAG:
+- Архітектура та дизайн
+- Джерела даних (rada.gov.ua API)
+- Паіплайн імпорту
+- Стратегія зберігання (Supabase + R2)
+- RAG retrieval
+- Звіти про реалізацію та тестування
 
-### ✨ Ключові функції
+**Головний індекс:** [`legislation-rag/README.md`](./legislation-rag/README.md)
 
-- 🤖 **AI Консультант Mike Ross** - експертні відповіді на правові питання
-- 💬 **Інтерактивний чат** - зручний інтерфейс для спілкування
-- 📚 **База знань** - Конституція, ЦК, ГК, КК, КУпАП, ТК України
-- 📄 **Генератор договорів** - створення правових документів
-- 💾 **Історія чатів** - збереження всіх консультацій
-- 🔐 **Безпека** - захист персональних даних
+### ⚖️ Supreme Court RAG
+**Файли:**
+- [`supreme_court_rag.md`](./supreme_court_rag.md) — Архітектура Supreme Court RAG
+- [`supreme_court_benchmark.md`](./supreme_court_benchmark.md) — Бенчмарки та тестування
 
-## 🛠️ Технологічний стек
+### 📊 API Документація
+**Файли:**
+- [`RADA_API_ANALYSIS.md`](./RADA_API_ANALYSIS.md) — Детальний аналіз rada.gov.ua API
+- [`RADA_API_DOCUMENTATION.md`](./RADA_API_DOCUMENTATION.md) — Документація API
 
-### Frontend
-- **React 18** + **TypeScript** - сучасний UI
-- **Tailwind CSS** - стилізація
-- **Shadcn/ui** - компоненти інтерфейсу  
-- **Framer Motion** - анімації
-- **Zustand** - управління станом
+### 🔧 Інтеграція та Deployment
+**Файли:**
+- [`README_INTEGRATION.md`](./README_INTEGRATION.md) — Інструкції з інтеграції
+- [`INTEGRATION_REPORT.md`](./INTEGRATION_REPORT.md) — Звіт про інтеграцію
+- [`DEPLOY_SUPABASE_FUNCTION.md`](./DEPLOY_SUPABASE_FUNCTION.md) — Деплой Edge Functions
+- [`SUPABASE_FUNCTION_OPTIMIZATION.md`](./SUPABASE_FUNCTION_OPTIMIZATION.md) — Оптимізація функцій
 
-### Backend
-- **Supabase** - база даних та автентифікація
-- **Edge Functions** - серверна логіка
-- **PostgreSQL** - зберігання даних
-- **Row Level Security** - безпека даних
+### 🔒 Безпека та Аудит
+**Файли:**
+- [`SECURITY_AUDIT_REPORT.md`](./SECURITY_AUDIT_REPORT.md) — Звіт про безпеку
 
-### AI & API
-- **OpenAI GPT-4** - штучний інтелект
-- **Custom prompts** - спеціалізація на українському праві
+### 📋 Загальна документація
+**Файли:**
+- [`overview.md`](./overview.md) — Загальний огляд проєкту
+- [`repo-map.md`](./repo-map.md) — Карта репозиторію
+- [`root-files-audit.md`](./root-files-audit.md) — Аудит файлів в корені
+- [`cleanup-report.md`](./cleanup-report.md) — Звіт про очищення
+- [`GPT_35_REMINDER.md`](./GPT_35_REMINDER.md) — Нагадування про GPT-3.5
+
+### 📦 Архів
+**Папка:** [`archive/`](./archive/)
+
+Архівні документи та старі версії документації.
 
 ## 🚀 Швидкий старт
 
-### Передумови
-- Node.js 18+
-- pnpm або npm
-- Supabase акаунт
+### Для розробників
+1. Почніть з [`overview.md`](./overview.md) для загального розуміння
+2. Ознайомтесь з [`legislation-rag/README.md`](./legislation-rag/README.md) для Legislation RAG
+3. Перегляньте [`README_INTEGRATION.md`](./README_INTEGRATION.md) для інтеграції
 
-### Встановлення
+### Для архітекторів
+1. [`legislation-rag/01_overview.md`](./legislation-rag/01_overview.md) — Архітектура Legislation RAG
+2. [`supreme_court_rag.md`](./supreme_court_rag.md) — Архітектура Supreme Court RAG
+3. [`legislation-rag/state_snapshot.md`](./legislation-rag/state_snapshot.md) — Поточний стан системи
 
-1. **Клонування репозиторію**
-```bash
-git clone https://github.com/seredyuk2077/Ukrainan-Lawyer-LLM-BETA.git
-cd Ukrainan-Lawyer-LLM-BETA
-```
+### Для тестувальників
+1. [`legislation-rag/reports/REPORT.md`](./legislation-rag/reports/REPORT.md) — Звіт про тестування
+2. [`supreme_court_benchmark.md`](./supreme_court_benchmark.md) — Бенчмарки
 
-2. **Встановлення залежностей**
-```bash
-pnpm install
-# або
-npm install
-```
+## 📝 Конвенції документації
 
-3. **Налаштування Supabase**
-- Створіть проект на [supabase.com](https://supabase.com)
-- Скопіюйте URL та API ключі
-- Оновіть конфігурацію в `src/lib/supabase.ts`
+- Всі документи в Markdown форматі
+- Дата створення та останнього оновлення внизу документа
+- Посилання на пов'язані документи
+- Чіткі секції та структура
 
-4. **Запуск проекту**
-```bash
-pnpm run dev
-# або
-npm run dev
-```
+## 🔄 Оновлення документації
 
-Відкрийте [http://localhost:5173](http://localhost:5173) у браузері.
-
-## 📁 Структура проекту
-
-```
-ukrainian-lawyer/
-├── src/
-│   ├── components/          # React компоненти
-│   │   ├── ChatInterface.tsx
-│   │   ├── ChatHistory.tsx
-│   │   └── ContractGenerator.tsx
-│   ├── lib/                 # Утиліти та сервіси
-│   │   ├── supabase.ts      # Supabase клієнт
-│   │   ├── openai.ts        # OpenAI інтеграція
-│   │   └── ukrainianLaw.ts  # Правова база
-│   ├── store/               # Управління станом
-│   │   └── chatStore.ts
-│   └── pages/               # Сторінки
-│       └── Index.tsx
-├── backend/                 # Node.js backend (опціонально)
-├── supabase/               # Supabase конфігурація
-└── public/                 # Статичні файли
-```
-
-## 🗄️ База даних
-
-### Таблиці Supabase
-
-**chat_sessions** - сесії чатів
-```sql
-- id: UUID (Primary Key)
-- user_id: UUID (Foreign Key)
-- title: TEXT
-- created_at: TIMESTAMP
-- updated_at: TIMESTAMP
-- is_active: BOOLEAN
-```
-
-**chat_messages** - повідомлення
-```sql
-- id: UUID (Primary Key)
-- session_id: UUID (Foreign Key)
-- role: TEXT (user/assistant/system)
-- content: TEXT
-- tokens_used: INTEGER
-- created_at: TIMESTAMP
-```
-
-## 🔧 Конфігурація
-
-### Environment Variables
-```env
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-### Supabase Edge Function
-Функція `app_78e3d871a2_chat` обробляє запити до OpenAI API:
-- Отримує повідомлення користувача
-- Генерує відповідь через GPT-4
-- Зберігає історію в базі даних
-
-## 📖 Використання
-
-### Створення нового чату
-1. Натисніть "Новий чат" в бічній панелі
-2. Введіть ваше правове питання
-3. Отримайте професійну консультацію від Mike Ross
-
-### Генерація договорів
-1. Натисніть "Створити договір"
-2. Оберіть тип договору
-3. Заповніть необхідні поля
-4. Завантажте готовий документ
-
-## 🛡️ Безпека
-
-- **Row Level Security (RLS)** - захист даних користувачів
-- **JWT токени** - безпечна автентифікація
-- **CORS налаштування** - захист від XSS атак
-- **Rate limiting** - захист від зловживань
-
-## 🧪 Тестування
-
-```bash
-# Запуск тестів
-pnpm run test
-
-# Лінтинг коду
-pnpm run lint
-
-# Перевірка типів
-pnpm run type-check
-```
-
-## 📦 Збірка для продакшену
-
-```bash
-pnpm run build
-```
-
-## 🚀 Деплой
-
-### Vercel (рекомендовано)
-```bash
-npm i -g vercel
-vercel --prod
-```
-
-### Netlify
-```bash
-npm run build
-# Завантажте папку dist на Netlify
-```
-
-## 🤝 Внесок у проект
-
-1. Fork репозиторію
-2. Створіть feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit зміни (`git commit -m 'Add AmazingFeature'`)
-4. Push до branch (`git push origin feature/AmazingFeature`)
-5. Відкрийте Pull Request
-
-## 📄 Ліцензія
-
-Цей проект ліцензовано під MIT License - дивіться [LICENSE](LICENSE) файл для деталей.
-
-## 👨‍💻 Автор
-
-**Andrii Serediuk**
-- GitHub: [@seredyuk2077](https://github.com/seredyuk2077)
-- Email: your.email@example.com
-
-## 🙏 Подяки
-
-- OpenAI за GPT-4 API
-- Supabase за backend інфраструктуру
-- Shadcn/ui за компоненти інтерфейсу
-- Українська правова спільнота за експертизу
-
-## ⚠️ Відмова від відповідальності
-
-Цей AI-асистент надає загальну інформацію з українського права та не замінює проф. юридичну консультацію. Для вирішення конкретних правових питань зверніться до кваліфікованого юриста.
+При додаванні нових документів:
+1. Додайте посилання в цей README
+2. Оновіть відповідний індекс (наприклад, `legislation-rag/README.md`)
+3. Додайте дату створення/оновлення
 
 ---
 
-**🇺🇦 Створено з любов'ю до України**
+**Останнє оновлення:** 2025-01-10

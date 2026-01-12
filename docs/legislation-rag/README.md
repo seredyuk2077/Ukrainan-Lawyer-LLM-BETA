@@ -144,11 +144,19 @@
 - ✅ [09_r2_format.md](./09_r2_format.md) — Завершено
 - ✅ [10_db_readiness.md](./10_db_readiness.md) — Завершено
 
+### Phase 2: Стабілізація (Implementation Phase)
+- ✅ [PHASE2.md](./PHASE2.md) — Стабілізація та завершення Phase 2 (2025-12-28)
+
 ### Phase 3: Реалізація та тестування
 - ✅ [11_gap_analysis_and_required_changes.md](./11_gap_analysis_and_required_changes.md) — Завершено
 - ✅ [12_pilot_import_constitution_report.md](./12_pilot_import_constitution_report.md) — Завершено
 - ✅ [13_r2_upload_implementation_report.md](./13_r2_upload_implementation_report.md) — Завершено
 - ✅ [state_snapshot.md](./state_snapshot.md) — Поточний стан (2025-01-10)
+
+### Звіти та тестування
+- 📊 [reports/MIGRATION_LEGISLATION_REPORT.md](./reports/MIGRATION_LEGISLATION_REPORT.md) — Звіт про міграцію законодавчих даних
+- 📊 [reports/MIGRATION_DEBUG_REPORT.md](./reports/MIGRATION_DEBUG_REPORT.md) — Звіт про дебаг міграції
+- 📊 [reports/REPORT.md](./reports/REPORT.md) — Звіт про тестування векторного пошуку
 
 ## 🔗 Пов'язані документи
 
