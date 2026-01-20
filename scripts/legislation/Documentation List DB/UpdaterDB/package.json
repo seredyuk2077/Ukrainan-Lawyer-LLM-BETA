@@ -1,0 +1,25 @@
+{
+  "name": "doclistdb-updaterdb",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Daily incremental updater for DocListDB (Rada cards -> embeddings -> Qdrant) with R2 state/lock/logs.",
+  "type": "module",
+  "scripts": {
+    "sync": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@qdrant/js-client-rest": "^1.16.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "p-limit": "^6.2.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
