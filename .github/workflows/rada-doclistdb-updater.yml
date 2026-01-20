@@ -1,0 +1,59 @@
+name: Rada DocListDB Daily Updater
+
+on:
+  schedule:
+    # Once per day
+    - cron: "17 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: rada-doclistdb-updater
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: scripts/legislation/Documentation List DB/UpdaterDB/package-lock.json
+
+      - name: Install
+        working-directory: scripts/legislation/Documentation List DB/UpdaterDB
+        run: npm ci
+
+      - name: Run updater
+        working-directory: scripts/legislation/Documentation List DB/UpdaterDB
+        run: npm run sync
+        env:
+          # Qdrant
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_COLLECTION: legislation-catalog-index
+          QDRANT_TIMEOUT_MS: "60000"
+
+          # Embeddings (OpenRouter-compatible)
+          OPEN_ROUTER_API_RAG: ${{ secrets.OPEN_ROUTER_API_RAG }}
+          EMBEDDING_MODEL: text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "768"
+          EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1/embeddings
+          EMBEDDING_TIMEOUT_MS: "60000"
+
+          # Cloudflare R2 (S3-compatible)
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # Fixed to the correct bucket/prefix (avoid accidental writes elsewhere)
+          R2_BUCKET: legislation
+          R2_PREFIX: legislation/DocListDB rada gov updater log/
+          R2_REGION: auto
+
+          # Optional
+          LOG_LEVEL: info
+
