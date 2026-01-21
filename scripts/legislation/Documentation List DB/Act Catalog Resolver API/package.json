@@ -1,0 +1,20 @@
+{
+  "name": "act-catalog-resolver-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker API for resolving Ukrainian legislation acts (DocListDB catalog) via Qdrant vector search.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "demo": "node scripts/demo-chat.mjs",
+    "deploy": "wrangler deploy",
+    "test:integration": "node scripts/tests/run.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260109.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.34.0"
+  }
+}
+

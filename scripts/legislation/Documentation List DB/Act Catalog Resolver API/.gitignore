@@ -1,0 +1,26 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+.npm-cache/
+
+dist/
+build/
+coverage/
+
+*.log
+*.tmp
+
+# local scratch files (keep out of git)
+*.http
+*.rest
+*.local
+
+# OS / tooling
+.DS_Store
+*.tsbuildinfo
+
+# optional test artifacts (if ever added)
+scripts/tests/output/
+scripts/tests/.output/

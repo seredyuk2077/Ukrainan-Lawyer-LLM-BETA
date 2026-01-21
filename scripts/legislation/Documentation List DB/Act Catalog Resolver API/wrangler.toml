@@ -1,0 +1,29 @@
+name = "act-catalog-resolver"
+main = "src/index.ts"
+compatibility_date = "2026-01-20"
+
+# This worker is designed to be portable: it uses only env vars + fetch().
+# Secrets should be set via:
+#   npx wrangler secret put <NAME>
+
+[vars]
+# Qdrant
+QDRANT_COLLECTION = "legislation-catalog-index"
+
+# Embeddings (OpenRouter-compatible)
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_DIMENSIONS = "768"
+EMBEDDING_ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
+
+# Rerank (OpenRouter chat completions)
+RERANK_ENABLED = "true"
+RERANK_MODEL = "openai/gpt-4o-mini"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Cache (optional; enabled in this deployment)
+CACHE_ENABLED = "true"
+R2_ENDPOINT = "https://1002950b0e8196478f128e20b0e2ed95.r2.cloudflarestorage.com"
+R2_REGION = "auto"
+R2_BUCKET = "legislation"
+R2_PREFIX = "legislation/ActCatalogResolver/cache/"
+
