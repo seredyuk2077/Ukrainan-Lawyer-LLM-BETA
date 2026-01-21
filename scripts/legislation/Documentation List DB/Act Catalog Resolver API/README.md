@@ -271,12 +271,13 @@ node scripts/tests/run.mjs --startDev=false --baseUrl=https://act-catalog-resolv
 
 - `QDRANT_URL`
 - `QDRANT_API_KEY` (якщо потрібен)
-- `EMBEDDING_API_KEY` (OpenRouter embeddings key)
+- `EMBEDDING_API_KEY` (**preferred**) **або** `OPEN_ROUTER_API_RAG` (сумісність; у проді часто це той самий ключ OpenRouter)
 
 ### Для rerank
 
 - `RERANK_ENABLED=true`
-- `OPENROUTER_API_KEY` (OpenRouter chat completions key)
+- `OPENROUTER_API_KEY` (preferred; OpenRouter chat completions key)
+- (опц.) fallback: `OPEN_ROUTER_API_RAG`
 
 ### Для R2 cache
 

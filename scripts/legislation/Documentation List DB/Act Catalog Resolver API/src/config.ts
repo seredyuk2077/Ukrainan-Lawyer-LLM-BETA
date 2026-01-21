@@ -129,7 +129,11 @@ export function getConfig(env: Env): AppConfig {
 
   const embeddingApiKey =
     (env.EMBEDDING_API_KEY || env.OPEN_ROUTER_API_RAG || env.OPEN_ROUTER_API_KEY || '').trim();
-  if (!embeddingApiKey) throw new Error('Embedding API key missing. Set EMBEDDING_API_KEY or OPEN_ROUTER_API_RAG.');
+  if (!embeddingApiKey) {
+    throw new Error(
+      'Embedding API key missing. Set EMBEDDING_API_KEY (preferred) or OPEN_ROUTER_API_RAG / OPEN_ROUTER_API_KEY (compat).'
+    );
+  }
 
   const embeddingModel = String(env.EMBEDDING_MODEL || env.OPENROUTER_EMBEDDING_MODEL || 'text-embedding-3-small').trim();
   const embeddingEndpoint = String(env.EMBEDDING_ENDPOINT || env.OPENROUTER_EMBEDDING_ENDPOINT || 'https://openrouter.ai/api/v1/embeddings').trim();
@@ -181,7 +185,7 @@ export function getConfig(env: Env): AppConfig {
   }
 
   if (cfg.rerank.enabled && !cfg.rerank.apiKey) {
-    throw new Error('RERANK_ENABLED=true but OPENROUTER_API_KEY is missing.');
+    throw new Error('RERANK_ENABLED=true but rerank API key is missing (OPENROUTER_API_KEY or OPEN_ROUTER_API_RAG).');
   }
 
   if (cfg.cache.enabled) {

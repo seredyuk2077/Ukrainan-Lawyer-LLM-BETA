@@ -144,8 +144,12 @@ npx wrangler dev --env-file "/absolute/path/to/your/.env"
 - **URL**: `https://act-catalog-resolver.andriykosrdkgames.workers.dev`
 - **Required vars/secrets (імена, без значень):**
   - Qdrant: `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
-  - Embeddings: `OPEN_ROUTER_API_RAG`, `EMBEDDING_ENDPOINT`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`
-  - Rerank: `RERANK_ENABLED`, `RERANK_MODEL`, `OPENROUTER_BASE_URL`
+  - Embeddings:
+    - `EMBEDDING_API_KEY` (preferred) **or** `OPEN_ROUTER_API_RAG` (compat)
+    - `EMBEDDING_ENDPOINT`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`
+  - Rerank:
+    - `RERANK_ENABLED`, `RERANK_MODEL`, `OPENROUTER_BASE_URL`
+    - `OPENROUTER_API_KEY` (preferred; fallback: `OPEN_ROUTER_API_RAG`)
   - R2 cache: `CACHE_ENABLED`, `R2_ENDPOINT`, `R2_BUCKET`, `R2_PREFIX`, `R2_REGION`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
 
 ### 5.3) Cloudflare R2 (prod)

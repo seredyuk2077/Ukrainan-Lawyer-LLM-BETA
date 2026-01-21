@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Vectorize -> Qdrant (DocListDB catalog) — create collection + payload indexes + smoke-test
+ * Qdrant setup (DocListDB catalog) — create collection + payload indexes + smoke-test
  *
  * Safety:
- * - Never touches existing Cloudflare Vectorize indexes (read-only passport fetch)
+ * - Optional legacy path: can read Vectorize “passport” (read-only) if VECTOR_DB_API is provided
  * - Qdrant: only creates collection/indexes; smoke-test upserts 10 points and deletes ONLY those ids
  *
  * Run (from repo root):

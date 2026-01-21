@@ -5,8 +5,8 @@
  *
  * Historical script: Create Vectorize Index — створення Cloudflare Vectorize індексу для каталогу документів.
  *
- * Original usage (kept for reference):
- *   pnpm tsx scripts/legislation/vectorize/createIndex.ts
+ * Original usage (kept for reference; file was moved):
+ *   pnpm tsx "scripts/legislation/Documentation List DB/deprecated/vectorize/createIndex.ts"
  *
  * Required env vars (historical):
  *   - VECTOR_DB_API: Cloudflare API token з правами на Vectorize
