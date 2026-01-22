@@ -291,13 +291,22 @@ export function detectAbsurdities(params: {
   const normalizedSnippet = normalizePrefix(snippet || title);
   const normalizedTitle = normalizePrefix(title);
   
-  // Правило 1: Prefix-based (найнадійніше)
-  if ((normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
-       normalizedSnippet.includes('ГОЛОВИ') && 
-       (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) ||
-      (normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') && 
-       normalizedTitle.includes('ГОЛОВИ') && 
-       (normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') || normalizedTitle.includes('ВРУ')))) {
+  // Правило 1: Prefix-based (найнадійніше) - працює навіть без snippet (title+summary)
+  const normalizedSummary = normalizePrefix(summary || '');
+  const hasRozporyadzhennia = normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') || 
+                               normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') ||
+                               normalizedSummary.includes('РОЗПОРЯДЖЕННЯ');
+  const hasGolovy = normalizedSnippet.includes('ГОЛОВИ') || 
+                    normalizedTitle.includes('ГОЛОВИ') ||
+                    normalizedSummary.includes('ГОЛОВИ');
+  const hasVRU = normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || 
+                 normalizedSnippet.includes('ВРУ') ||
+                 normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') ||
+                 normalizedTitle.includes('ВРУ') ||
+                 normalizedSummary.includes('ВЕРХОВНОЇ РАДИ') ||
+                 normalizedSummary.includes('ВРУ');
+  
+  if (hasRozporyadzhennia && hasGolovy && hasVRU) {
     if (current_slug !== 'vr_speaker_order') {
       findings.push({
         nreg: '',
@@ -329,13 +338,36 @@ export function detectAbsurdities(params: {
     }
   }
   
-  // Правило 3: document_number має суфікс -РГ (case-insensitive)
+  // Helper: нормалізація document_number для правил
+  const normalizeDocNumberForRules = (docNum: string | null | undefined): string => {
+    if (!docNum) return '';
+    return docNum
+      .replace(/[‐‑‒–—―−]/g, '-')  // різні типи дефісів → стандартний
+      .toUpperCase()
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '');  // прибрати невидимі символи
+  };
+  
+  // Правило 3: document_number має суфікс -РГ (case-insensitive, з нормалізацією)
   if (params.document_number) {
-    const normalizedNreg = params.document_number.toUpperCase().trim();
-    if (normalizedNreg.endsWith('-РГ') || normalizedNreg.endsWith('-РГ')) {
+    const normalizedDocNum = normalizeDocNumberForRules(params.document_number);
+    // Перевірка суфіксу -РГ (з word boundary для безпеки)
+    if (normalizedDocNum.match(/-РГ\b$/i) || normalizedDocNum.endsWith('-РГ')) {
       if (current_slug !== 'vr_speaker_order') {
-        // Додаткова перевірка: чи title/snippet підтверджує
-        if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') || normalizedTitle.includes('РОЗПОРЯДЖЕННЯ')) {
+        // Додаткова перевірка: чи title/snippet/summary підтверджує
+        const hasRozporyadzhennia = normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') || 
+                                     normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') ||
+                                     (summary && normalizePrefix(summary).includes('РОЗПОРЯДЖЕННЯ'));
+        const hasVRU = normalizedSnippet.includes('ВЕРХОВНОЇ') || 
+                       normalizedSnippet.includes('ВРУ') ||
+                       normalizedTitle.includes('ВЕРХОВНОЇ') ||
+                       normalizedTitle.includes('ВРУ');
+        const hasSpeaker = normalizedSnippet.includes('ГОЛОВИ') || 
+                           normalizedTitle.includes('ГОЛОВИ');
+        
+        // Якщо є хоча б один сигнал → CRITICAL
+        if (hasRozporyadzhennia || hasVRU || hasSpeaker) {
           findings.push({
             nreg: '',
             severity: 'CRITICAL',
