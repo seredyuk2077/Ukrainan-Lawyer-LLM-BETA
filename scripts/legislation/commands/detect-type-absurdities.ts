@@ -195,7 +195,19 @@ export function detectAbsurdities(params: {
   // G) Судові думки
   if (combined.includes('окрема думка') || 
       (combined.includes('судді') && combined.includes('конституційного суду'))) {
-    if (current_slug === 'code' || current_slug === 'law') {
+    // ВИНЯТОК: якщо slug=ccu_opinion і є сигнали "окрема думка" + "Конституційного Суду" → це правильна класифікація, НЕ CRITICAL
+    if (current_slug === 'ccu_opinion' && 
+        (combined.includes('окрема думка') || combined.includes('окрема думка судді')) &&
+        (combined.includes('конституційного суду') || combined.includes('ксу') || combined.includes('конституційний суд'))) {
+      // Це правильна класифікація "окрема думка" → ccu_opinion, НЕ CRITICAL
+      // Можливо WARN якщо є "рішення" в title, але це не CRITICAL
+      if (combined.includes('рішення') && !combined.includes('щодо рішення')) {
+        // Якщо title містить "рішення" але це "окрема думка щодо рішення" → це все одно opinion
+        // Тільки якщо це явно "Рішення КСУ" без "окрема думка" → тоді має бути ccu_decision
+        // Але якщо slug=ccu_opinion і є "окрема думка" → це правильна класифікація
+        // НЕ додаємо finding
+      }
+    } else if (current_slug === 'code' || current_slug === 'law') {
       findings.push({
         nreg: '',
         severity: 'CRITICAL',
@@ -205,6 +217,21 @@ export function detectAbsurdities(params: {
         suggested_slug: combined.includes('конституційного суду') ? 'ccu_opinion' : 'court_opinion',
         evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
       });
+    } else if (current_slug === 'ccu_opinion' && combined.includes('рішення') && !combined.includes('окрема думка')) {
+      // Якщо slug=ccu_opinion але немає "окрема думка" і є "рішення" → можливо має бути ccu_decision
+      // Але це не CRITICAL, бо може бути "окрема думка щодо рішення"
+      // Тільки якщо явно "Рішення КСУ" без "окрема думка"
+      if (combined.includes('рішення') && combined.includes('ксу') && !combined.includes('окрема думка')) {
+        findings.push({
+          nreg: '',
+          severity: 'WARN',
+          reason_code: 'CCU_DECISION_NOT_CCU',
+          current_slug,
+          current_ua_label,
+          suggested_slug: 'ccu_decision',
+          evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+        });
+      }
     }
   }
   
@@ -259,16 +286,38 @@ export function detectAbsurdities(params: {
         suggested_slug: 'rnbo_decision',
         evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
       });
-    } else if (combined.includes('конституційного суду') && current_slug !== 'ccu_decision') {
-      findings.push({
-        nreg: '',
-        severity: 'CRITICAL',
-        reason_code: 'CCU_DECISION_NOT_CCU',
-        current_slug,
-        current_ua_label,
-        suggested_slug: 'ccu_decision',
-        evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
-      });
+    } else if (combined.includes('конституційного суду') || combined.includes('ксу')) {
+      // ВИНЯТОК: якщо це "окрема думка щодо рішення" → ccu_opinion правильний
+      if (combined.includes('окрема думка') && current_slug === 'ccu_opinion') {
+        // Це правильна класифікація "окрема думка" → ccu_opinion, НЕ CRITICAL
+        // НЕ додаємо finding
+      } else if (combined.includes('рішення') && !combined.includes('окрема думка') && current_slug !== 'ccu_decision') {
+        // Якщо це "Рішення КСУ" (не "окрема думка") → має бути ccu_decision
+        findings.push({
+          nreg: '',
+          severity: 'CRITICAL',
+          reason_code: 'CCU_DECISION_NOT_CCU',
+          current_slug,
+          current_ua_label,
+          suggested_slug: 'ccu_decision',
+          evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+        });
+      } else if (current_slug === 'ccu_opinion' && combined.includes('рішення') && !combined.includes('окрема думка')) {
+        // Якщо slug=ccu_opinion але немає "окрема думка" і є "рішення" → можливо має бути ccu_decision
+        // Але це не CRITICAL, бо може бути "окрема думка щодо рішення" (перевірка вже вище)
+        // Тільки якщо явно "Рішення КСУ" без "окрема думка"
+        if (combined.includes('рішення') && combined.includes('ксу') && !combined.includes('окрема думка') && !combined.includes('щодо')) {
+          findings.push({
+            nreg: '',
+            severity: 'WARN',
+            reason_code: 'CCU_DECISION_NOT_CCU',
+            current_slug,
+            current_ua_label,
+            suggested_slug: 'ccu_decision',
+            evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+          });
+        }
+      }
     } else if (combined.includes('нбу') && combined.includes('рішення') && current_slug !== 'nbu_resolution') {
       findings.push({
         nreg: '',
