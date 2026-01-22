@@ -88,6 +88,26 @@ export function guessDocumentTypeV2(params: {
     }
   }
   
+  // 0.5. PREFIX-SNIFF для РНБО/ЦВК (ПЕРЕД typ-based, бо typ=1 може бути помилковим)
+  // PHASE 3.4: перевіряємо summary ПЕРЕД typ=1, щоб не пропустити РНБО/ЦВК
+  const lowerSummary = (summary || '').toLowerCase();
+  const combinedText = `${lowerTitle} ${lowerSummary}`;
+  
+  // РНБО: має найвищий пріоритет (навіть перед typ=1)
+  if (combinedText.includes('рішення') &&
+      (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
+       combinedText.includes('ради національної безпеки'))) {
+    // Виняток: "Указ про введення в дію рішення РНБО" → presidential_decree
+    if (!combinedText.includes('указ про введення в дію') && !combinedText.includes('указом президента')) {
+      return {
+        slug: 'rnbo_decision',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: 'title/summary indicates RNBO Decision (prefix-sniff before typ)',
+      };
+    }
+  }
+  
   // 1. Typ-based heuristics (найнадійніші)
   if (typ !== null && typ !== undefined) {
     // Typ mapping з Rada API
@@ -110,7 +130,22 @@ export function guessDocumentTypeV2(params: {
       };
     }
     
+    // Typ=1: Закон - АЛЕ перевіряємо РНБО/ЦВК перед цим
     if (typ === 1) {
+      // Додаткова перевірка: чи це не РНБО/ЦВК (які інколи мають typ=1 помилково)
+      if (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
+          combinedText.includes('ради національної безпеки')) {
+        // Виняток: "Указ про введення в дію рішення РНБО" → presidential_decree
+        if (!combinedText.includes('указ про введення в дію') && !combinedText.includes('указом президента')) {
+          return {
+            slug: 'rnbo_decision',
+            confidence: 'high',
+            source: 'heuristics',
+            rationale: `typ=1, але title/summary indicates RNBO (override typ)`,
+          };
+        }
+      }
+      
       return {
         slug: 'law',
         confidence: 'high',
