@@ -335,7 +335,8 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
       const payload = chunks.points[0].payload as any;
       
       // Required payload fields
-      const requiredFields = ['rada_nreg', 'r2_key', 'json_path', 'chunk_index', 'content_hash'];
+      // PHASE 3.6.7: chunk_index може бути 0, тому перевіряємо через 'in' operator, а не truthy check
+      const requiredFields = ['rada_nreg', 'r2_key', 'json_path', 'content_hash'];
       for (const field of requiredFields) {
         if (!payload[field]) {
           checks.push({ 
@@ -348,6 +349,19 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
         } else {
           checks.push({ component: 'Qdrant', check: `payload has ${field}`, status: 'PASS' });
         }
+      }
+      
+      // chunk_index: окрема перевірка (може бути 0)
+      if (!('chunk_index' in payload)) {
+        checks.push({ 
+          component: 'Qdrant', 
+          check: 'payload has chunk_index', 
+          status: 'FAIL', 
+          reason: 'Missing chunk_index',
+          reasonCode: 'ERROR_QDRANT_PAYLOAD_FIELD_MISSING'
+        });
+      } else {
+        checks.push({ component: 'Qdrant', check: 'payload has chunk_index', status: 'PASS' });
       }
       
       // document_type_slug in payload
