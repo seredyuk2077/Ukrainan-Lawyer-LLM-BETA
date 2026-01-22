@@ -229,12 +229,17 @@ function validateDocumentTypeConsistency(
     }
   }
   
-  // Правило 2: Постанова ЦВК в summary/snippet але slug != cec_resolution
-  if ((lowerSummary.includes('постанова') && (lowerSummary.includes('цвк') || lowerSummary.includes('центральна виборча'))) ||
-      (lowerSnippet.includes('постанова') && (lowerSnippet.includes('цвк') || lowerSnippet.includes('центральна виборча')))) {
+  // Правило 2: Постанова ЦВК в summary/snippet/title але slug != cec_resolution (КРИТИЧНЕ)
+  if ((lowerSummary.includes('постанова') && (lowerSummary.includes('цвк') || lowerSummary.includes('центральна виборча') || lowerSummary.includes('центральної виборчої'))) ||
+      (lowerSnippet.includes('постанова') && (lowerSnippet.includes('цвк') || lowerSnippet.includes('центральна виборча') || lowerSnippet.includes('центральної виборчої'))) ||
+      (lowerTitle.includes('цвк') || lowerTitle.includes('центральна виборча') || lowerTitle.includes('центральної виборчої'))) {
     if (slug !== 'cec_resolution') {
-      issues.push('summary/snippet: Постанова ЦВК, але slug != cec_resolution');
+      issues.push('summary/snippet/title: Постанова ЦВК, але slug != cec_resolution');
       suggestedSlug = 'cec_resolution';
+      // КРИТИЧНЕ: ЦВК не має бути cmu_resolution або vr_resolution
+      if (slug === 'cmu_resolution' || slug === 'vr_resolution') {
+        issues.push(`CRITICAL: ЦВК документ має slug=${slug} (має бути cec_resolution)`);
+      }
     }
   }
   

@@ -58,8 +58,19 @@ export function guessDocumentTypeV2(params: {
       };
     }
     
-    // Typ=2: Постанова — потрібно розрізнити КМУ vs ВР через organs
+    // Typ=2: Постанова — потрібно розрізнити КМУ vs ВР vs ЦВК через organs/title
     if (typ === 2) {
+      // ВАЖЛИВО: ЦВК має найвищий пріоритет (перевіряємо ПЕРШИМ)
+      if (lowerTitle.includes('цвк') || lowerTitle.includes('центральна виборча') ||
+          (organs && JSON.stringify(organs).toLowerCase().includes('цвк'))) {
+        return {
+          slug: 'cec_resolution',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: `typ=2, title/organs indicate CEC`,
+        };
+      }
+      
       // Organs формат: "2:19950127:57" де перше число - орган (2 = КМУ, 1 = ВР)
       if (organs && typeof organs === 'string') {
         const organMatch = organs.match(/^(\d+):/);
@@ -206,6 +217,19 @@ export function guessDocumentTypeV2(params: {
         rationale: 'title pattern matches law',
       };
     }
+  }
+  
+  // Постанова ЦВК (ВАЖЛИВО: перевіряємо ПЕРЕД КМУ/ВР)
+  if (lowerTitle.includes('постанова') &&
+      (lowerTitle.includes('цвк') || lowerTitle.includes('центральна виборча') ||
+       lowerTitle.includes('центральної виборчої') ||
+       (organs && JSON.stringify(organs).toLowerCase().includes('цвк')))) {
+    return {
+      slug: 'cec_resolution',
+      confidence: 'high',
+      source: 'heuristics',
+      rationale: 'title/organs indicate CEC',
+    };
   }
   
   // Постанова КМУ
