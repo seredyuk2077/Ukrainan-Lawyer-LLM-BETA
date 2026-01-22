@@ -251,6 +251,28 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       });
     }
 
+    // PHASE 5: Валідація document_type перед фінальним upsert
+    const { validateDocumentTypeConsistency } = await import('./documentTypeEnrichment.js');
+    const validation = validateDocumentTypeConsistency(
+      canonical.metadata.document_type_slug,
+      canonical.metadata.title,
+      null, // summary ще не згенеровано
+      canonical.content.chunks?.[0]?.text?.substring(0, 200) || canonical.raw?.rada_api_txt?.substring(0, 200)
+    );
+    
+    // Якщо CRITICAL validation fail → ставимо sync_health=red + sync_issue, але НЕ падаємо фатально
+    if (validation.status === 'fail' && validation.issues.some(i => i.includes('CRITICAL') || i.includes('slug=law') || i.includes('slug=code'))) {
+      await logLine(run, `validation:CRITICAL issues=${validation.issues.length} suggested_slug=${validation.suggested_slug || 'N/A'}`);
+      console.warn(`⚠️  CRITICAL validation fail for ${opts.radaNreg}: ${validation.issues.join('; ')}`);
+      // Якщо є suggested_slug → оновлюємо canonical.metadata
+      if (validation.suggested_slug) {
+        const { getDocumentTypeInfo } = await import('../documentTypes/documentTypes.js');
+        canonical.metadata.document_type_slug = validation.suggested_slug;
+        canonical.metadata.document_type = getDocumentTypeInfo(validation.suggested_slug).label_uk;
+        await logLine(run, `validation:auto_fixed slug=${validation.suggested_slug}`);
+      }
+    }
+    
     // AI enrichment (з кешуванням якщо content_hash не змінився)
     let enrichment: Awaited<ReturnType<typeof generateEnrichment>>;
     const contentHash = canonical.metadata.content_hash;
@@ -408,11 +430,38 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       return null;
     })();
     
+    // PHASE 5: Фінальна валідація після AI summary generation
+    const finalValidation = validateDocumentTypeConsistency(
+      canonical.metadata.document_type_slug,
+      canonical.metadata.title,
+      enrichment.summary, // Тепер summary є
+      canonical.content.chunks?.[0]?.text?.substring(0, 200) || canonical.raw?.rada_api_txt?.substring(0, 200)
+    );
+    
+    // Якщо CRITICAL validation fail після summary → override slug
+    if (finalValidation.status === 'fail' && finalValidation.suggested_slug) {
+      const { getDocumentTypeInfo } = await import('../documentTypes/documentTypes.js');
+      canonical.metadata.document_type_slug = finalValidation.suggested_slug;
+      canonical.metadata.document_type = getDocumentTypeInfo(finalValidation.suggested_slug).label_uk;
+      await logLine(run, `validation:final_override slug=${finalValidation.suggested_slug} reason=${finalValidation.issues.join('; ')}`);
+    }
+    
+    // Визначаємо sync_health на основі validation
+    let syncHealth: 'green' | 'yellow' | 'red' | 'unknown' | null = null;
+    let syncIssue: string | null = null;
+    if (finalValidation.status === 'fail' && finalValidation.issues.some(i => i.includes('CRITICAL'))) {
+      syncHealth = 'red';
+      syncIssue = `CRITICAL: ${finalValidation.issues.filter(i => i.includes('CRITICAL')).join('; ')}`;
+    } else if (finalValidation.status === 'fail') {
+      syncHealth = 'yellow';
+      syncIssue = finalValidation.issues.join('; ');
+    }
+    
     const docUpsert = {
       rada_nreg: canonical.metadata.rada_nreg,
       rada_dokid: canonical.metadata.rada_dokid,
       title: canonical.metadata.title,
-      document_type: canonical.metadata.document_type,
+      document_type: canonical.metadata.document_type, // ТІЛЬКИ з taxonomy через getDocumentTypeInfo(slug)
       document_type_slug: canonical.metadata.document_type_slug || null, // PHASE 14
       category: finalCategory, // category тепер є taxonomy slug (не label)
       law_number: canonical.metadata.law_number,
@@ -447,10 +496,10 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       act_group_title: actGroup.act_group_title,
       // Storage category (R2 folder, стабільний)
       storage_category: storageCategory,
-      // PHASE 16: Status indicators (буде оновлено в verify)
+      // PHASE 16: Status indicators (буде оновлено в verify, але встановлюємо через validation)
       legal_status: null, // буде визначено з Rada metadata
-      sync_health: null, // буде визначено в verify
-      sync_issue: null,
+      sync_health: syncHealth, // встановлюємо через validation (PHASE 5)
+      sync_issue: syncIssue, // встановлюємо через validation (PHASE 5)
     };
 
     const { error: upsertErr } = await supabase.from('legislation_documents').upsert(docUpsert, { onConflict: 'rada_nreg' });

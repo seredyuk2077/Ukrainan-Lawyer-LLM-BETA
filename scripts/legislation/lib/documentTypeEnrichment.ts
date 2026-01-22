@@ -215,7 +215,7 @@ ${whitelist}
  * Валідація консистентності типу документа з summary/snippet
  * Повертає також suggested_slug якщо валідація виявила конфлікт
  */
-function validateDocumentTypeConsistency(
+export function validateDocumentTypeConsistency(
   slug: DocumentTypeSlug,
   title: string,
   summary?: string | null,
