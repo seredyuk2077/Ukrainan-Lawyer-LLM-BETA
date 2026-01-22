@@ -20,6 +20,10 @@ export interface DocumentTypeEnrichmentResult {
   confidence: 'high' | 'medium' | 'low';
   source: 'heuristics' | 'ai' | 'normalized' | 'cache';
   rationale?: string;
+  validation?: {
+    status: 'ok' | 'warn' | 'fail';
+    issues: string[];
+  };
 }
 
 /**
@@ -200,7 +204,126 @@ ${whitelist}
 }
 
 /**
- * Головна функція: Heuristics → AI → Normalized fallback
+ * Валідація консистентності типу документа з summary/snippet
+ * Повертає також suggested_slug якщо валідація виявила конфлікт
+ */
+function validateDocumentTypeConsistency(
+  slug: DocumentTypeSlug,
+  title: string,
+  summary?: string | null,
+  snippet?: string | null
+): { status: 'ok' | 'warn' | 'fail'; issues: string[]; suggested_slug?: DocumentTypeSlug } {
+  const issues: string[] = [];
+  let suggestedSlug: DocumentTypeSlug | undefined;
+  const lowerTitle = title.toLowerCase();
+  const lowerSummary = summary?.toLowerCase() || '';
+  const lowerSnippet = snippet?.toLowerCase() || '';
+  const combined = `${lowerTitle} ${lowerSummary} ${lowerSnippet}`;
+  
+  // Правило 1: Розпорядження КМУ в summary/snippet але slug != cmu_order
+  if ((lowerSummary.includes('розпорядження') && (lowerSummary.includes('кму') || lowerSummary.includes('кабінет'))) ||
+      (lowerSnippet.includes('розпорядження') && (lowerSnippet.includes('кму') || lowerSnippet.includes('кабінет')))) {
+    if (slug !== 'cmu_order') {
+      issues.push('summary/snippet: Розпорядження КМУ, але slug != cmu_order');
+      suggestedSlug = 'cmu_order';
+    }
+  }
+  
+  // Правило 2: Постанова ЦВК в summary/snippet але slug != cec_resolution
+  if ((lowerSummary.includes('постанова') && (lowerSummary.includes('цвк') || lowerSummary.includes('центральна виборча'))) ||
+      (lowerSnippet.includes('постанова') && (lowerSnippet.includes('цвк') || lowerSnippet.includes('центральна виборча')))) {
+    if (slug !== 'cec_resolution') {
+      issues.push('summary/snippet: Постанова ЦВК, але slug != cec_resolution');
+      suggestedSlug = 'cec_resolution';
+    }
+  }
+  
+  // Правило 3: НБУ в summary/snippet але slug не nbu_*
+  if ((lowerSummary.includes('нбу') || lowerSummary.includes('національний банк')) ||
+      (lowerSnippet.includes('нбу') || lowerSnippet.includes('національний банк'))) {
+    if (!slug.startsWith('nbu_')) {
+      issues.push('summary/snippet: НБУ, але slug не nbu_*');
+      
+      // Визначаємо suggested_slug на основі summary/snippet
+      if (lowerSummary.includes('повідомлення') || lowerSummary.includes('лист') || 
+          lowerSummary.includes('роз\'яснення') || lowerSummary.includes('розяснення') ||
+          lowerSnippet.includes('повідомлення') || lowerSnippet.includes('лист')) {
+        suggestedSlug = 'nbu_letter';
+      } else if (lowerSummary.includes('постанова') || lowerSummary.includes('рішення') ||
+                 lowerSummary.includes('правління') ||
+                 lowerSnippet.includes('постанова') || lowerSnippet.includes('рішення')) {
+        suggestedSlug = 'nbu_resolution';
+      } else {
+        // За замовчуванням для НБУ → nbu_letter (частіше)
+        suggestedSlug = 'nbu_letter';
+      }
+    } else {
+      // Додаткова перевірка: якщо "повідомлення/лист" але slug = nbu_resolution
+      if ((lowerSummary.includes('повідомлення') || lowerSummary.includes('лист') || 
+           lowerSummary.includes('роз\'яснення') || lowerSummary.includes('розяснення')) &&
+          slug === 'nbu_resolution') {
+        issues.push('summary: Повідомлення/Лист НБУ, але slug = nbu_resolution (має бути nbu_letter)');
+        suggestedSlug = 'nbu_letter';
+      }
+    }
+  }
+  
+  // Правило 4: Указ Президента в summary/snippet але slug != presidential_decree
+  if ((lowerSummary.includes('указ') && lowerSummary.includes('президент')) ||
+      (lowerSnippet.includes('указ') && lowerSnippet.includes('президент'))) {
+    if (slug !== 'presidential_decree') {
+      issues.push('summary/snippet: Указ Президента, але slug != presidential_decree');
+      // "Указ про введення в дію рішення РНБО" → все одно presidential_decree (не regulation)
+      suggestedSlug = 'presidential_decree';
+    }
+  }
+  
+  // Правило 5: РНБО в summary/snippet але slug != rnbo_decision
+  if ((lowerSummary.includes('рнбо') || lowerSummary.includes('рада національної безпеки')) ||
+      (lowerSnippet.includes('рнбо') || lowerSnippet.includes('рада національної безпеки'))) {
+    // Виняток: якщо це "Указ про введення в дію рішення РНБО" → presidential_decree OK
+    if (!combined.includes('указ про введення в дію') && slug !== 'rnbo_decision') {
+      issues.push('summary/snippet: РНБО, але slug != rnbo_decision');
+    }
+  }
+  
+  // Правило 6: slug = law але є сигнали НБУ/ЦВК/Указ/Розпорядження/РНБО
+  if (slug === 'law') {
+    if (combined.includes('нбу') || combined.includes('національний банк')) {
+      issues.push('slug=law, але є сигнали НБУ (має бути nbu_*)');
+    }
+    if (combined.includes('цвк') || combined.includes('центральна виборча')) {
+      issues.push('slug=law, але є сигнали ЦВК (має бути cec_resolution)');
+    }
+    if (combined.includes('указ') && combined.includes('президент')) {
+      issues.push('slug=law, але є сигнали Указ Президента (має бути presidential_decree)');
+    }
+    if (combined.includes('розпорядження') && (combined.includes('кму') || combined.includes('кабінет'))) {
+      issues.push('slug=law, але є сигнали Розпорядження КМУ (має бути cmu_order)');
+    }
+  }
+  
+  // Визначаємо статус
+  let status: 'ok' | 'warn' | 'fail' = 'ok';
+  if (issues.length > 0) {
+    // Критичні конфлікти → fail
+    if (issues.some(i => i.includes('slug=law') || i.includes('slug !='))) {
+      status = 'fail';
+    } else {
+      status = 'warn';
+    }
+  }
+  
+  // Якщо є suggested_slug → це fail (потрібно виправити)
+  if (suggestedSlug) {
+    status = 'fail';
+  }
+  
+  return { status, issues, suggested_slug: suggestedSlug };
+}
+
+/**
+ * Головна функція: Heuristics → AI → Normalized fallback + Validation
  */
 export async function enrichDocumentType(params: {
   title: string;
@@ -208,13 +331,48 @@ export async function enrichDocumentType(params: {
   typn?: string | null;
   organs?: any;
   stru?: any[];
+  summary?: string | null;
+  snippet?: string | null;
 }): Promise<DocumentTypeEnrichmentResult> {
   const fingerprint = generateFingerprint(params);
 
-  // 1. Перевіряємо кеш
+  // 1. Перевіряємо кеш (але валідацію завжди виконуємо заново)
   const cached = await getCachedDocumentType(fingerprint);
   if (cached) {
-    return { ...cached, source: 'cache' };
+    // Валідація консистентності для кешованого результату
+    const validation = validateDocumentTypeConsistency(
+      cached.slug,
+      params.title,
+      params.summary,
+      params.snippet
+    );
+    
+    // Якщо валідація fail → перевизначаємо slug на основі suggested_slug
+    let finalSlug = cached.slug;
+    let finalConfidence = cached.confidence;
+    
+    if (validation.status === 'fail') {
+      // Якщо є suggested_slug з валідації → використовуємо його
+      if (validation.suggested_slug) {
+        finalSlug = validation.suggested_slug;
+        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet
+      } else if (validation.issues.some(i => i.includes('slug=law'))) {
+        // Критичний конфлікт без suggested_slug → ставимо unknown
+        finalSlug = 'unknown';
+        finalConfidence = 'low';
+      } else if (finalConfidence === 'high') {
+        finalConfidence = 'medium';
+      }
+    }
+    
+    return {
+      slug: finalSlug,
+      label_uk: getDocumentTypeInfo(finalSlug).label_uk,
+      confidence: finalConfidence,
+      source: 'cache',
+      rationale: cached.rationale,
+      validation: validation.issues.length > 0 ? validation : undefined,
+    };
   }
 
   // 2. Heuristics-first
@@ -222,12 +380,40 @@ export async function enrichDocumentType(params: {
   
   if (heuristicsResult.confidence === 'high' || heuristicsResult.confidence === 'medium') {
     const info = getDocumentTypeInfo(heuristicsResult.slug);
+    
+    // Валідація консистентності
+    const validation = validateDocumentTypeConsistency(
+      heuristicsResult.slug,
+      params.title,
+      params.summary,
+      params.snippet
+    );
+    
+    // Якщо валідація fail → перевизначаємо slug на основі suggested_slug
+    let finalSlug = heuristicsResult.slug;
+    let finalConfidence = heuristicsResult.confidence;
+    
+    if (validation.status === 'fail') {
+      // Якщо є suggested_slug з валідації → використовуємо його
+      if (validation.suggested_slug) {
+        finalSlug = validation.suggested_slug;
+        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet
+      } else if (validation.issues.some(i => i.includes('slug=law'))) {
+        // Критичний конфлікт без suggested_slug → ставимо unknown
+        finalSlug = 'unknown';
+        finalConfidence = 'low';
+      } else if (finalConfidence === 'high') {
+        finalConfidence = 'medium';
+      }
+    }
+    
     const result: DocumentTypeEnrichmentResult = {
-      slug: heuristicsResult.slug,
-      label_uk: info.label_uk,
-      confidence: heuristicsResult.confidence,
+      slug: finalSlug,
+      label_uk: getDocumentTypeInfo(finalSlug).label_uk,
+      confidence: finalConfidence,
       source: 'heuristics',
       rationale: heuristicsResult.rationale,
+      validation: validation.issues.length > 0 ? validation : undefined,
     };
     
     // Кешуємо результат
@@ -238,22 +424,72 @@ export async function enrichDocumentType(params: {
   // 3. AI fallback (якщо heuristics не впевнені)
   const aiResult = await guessDocumentTypeWithAI(params);
   if (aiResult) {
+    // Валідація консистентності для AI результату
+    const validation = validateDocumentTypeConsistency(
+      aiResult.slug,
+      params.title,
+      params.summary,
+      params.snippet
+    );
+    
+    // Якщо валідація fail → перевизначаємо slug на основі suggested_slug
+    let finalSlug = aiResult.slug;
+    let finalConfidence = aiResult.confidence;
+    
+    if (validation.status === 'fail') {
+      // Якщо є suggested_slug з валідації → використовуємо його
+      if (validation.suggested_slug) {
+        finalSlug = validation.suggested_slug;
+        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet
+      } else if (validation.issues.some(i => i.includes('slug=law'))) {
+        // Критичний конфлікт без suggested_slug → ставимо unknown
+        finalSlug = 'unknown';
+        finalConfidence = 'low';
+      } else if (finalConfidence === 'high') {
+        finalConfidence = 'medium';
+      }
+    }
+    
+    const result: DocumentTypeEnrichmentResult = {
+      slug: finalSlug,
+      label_uk: getDocumentTypeInfo(finalSlug).label_uk,
+      confidence: finalConfidence,
+      source: 'ai',
+      rationale: aiResult.rationale,
+      validation: validation.issues.length > 0 ? validation : undefined,
+    };
+    
     // Кешуємо результат
-    await setCachedDocumentType(fingerprint, aiResult);
-    return aiResult;
+    await setCachedDocumentType(fingerprint, result);
+    return result;
   }
-
+  
   // 4. Normalized fallback (якщо AI не спрацював)
   // Спробуємо нормалізувати з title якщо можливо
   const normalizedSlug = normalizeDocumentType(params.title);
   const info = getDocumentTypeInfo(normalizedSlug);
   
+  // Валідація для normalized
+  const validation = validateDocumentTypeConsistency(
+    normalizedSlug,
+    params.title,
+    params.summary,
+    params.snippet
+  );
+  
+  // Якщо валідація fail → ставимо unknown замість normalized
+  let finalSlug = normalizedSlug;
+  if (validation.status === 'fail') {
+    finalSlug = 'unknown';
+  }
+  
   const result: DocumentTypeEnrichmentResult = {
-    slug: normalizedSlug,
-    label_uk: info.label_uk,
+    slug: finalSlug,
+    label_uk: getDocumentTypeInfo(finalSlug).label_uk,
     confidence: 'low',
     source: 'normalized',
     rationale: 'Normalized from title',
+    validation: validation.issues.length > 0 ? validation : undefined,
   };
   
   // Кешуємо навіть fallback результат

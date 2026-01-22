@@ -294,6 +294,60 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
   // canonical chunks count == expected_chunks (вже перевірено в R2 секції)
   // Qdrant points count == indexed_chunks (вже перевірено вище)
   
+  // E) Semantic type consistency (PHASE 22)
+  // Перевірка консистентності типу документа з summary/snippet
+  if (doc.summary) {
+    const summary = (doc.summary as string).toLowerCase();
+    const title = doc.title.toLowerCase();
+    
+    // НБУ але slug = law
+    if ((summary.includes('нбу') || summary.includes('національний банк') ||
+         title.includes('нбу') || title.includes('національний банк')) &&
+        doc.document_type_slug === 'law') {
+      checks.push({
+        component: 'Supabase',
+        check: 'semantic type consistency: НБУ не має бути law',
+        status: 'FAIL',
+        reason: 'НБУ документ має slug=law (має бути nbu_letter або nbu_resolution)',
+      });
+    }
+    
+    // ЦВК але slug = cmu_resolution
+    if ((summary.includes('цвк') || summary.includes('центральна виборча') ||
+         title.includes('цвк') || title.includes('центральна виборча')) &&
+        doc.document_type_slug === 'cmu_resolution') {
+      checks.push({
+        component: 'Supabase',
+        check: 'semantic type consistency: ЦВК не має бути cmu_resolution',
+        status: 'FAIL',
+        reason: 'ЦВК документ має slug=cmu_resolution (має бути cec_resolution)',
+      });
+    }
+    
+    // Указ Президента але slug = regulation
+    if ((summary.includes('указ') && summary.includes('президент') ||
+         title.includes('указ') && title.includes('президент')) &&
+        doc.document_type_slug === 'regulation') {
+      checks.push({
+        component: 'Supabase',
+        check: 'semantic type consistency: Указ не має бути regulation',
+        status: 'FAIL',
+        reason: 'Указ Президента має slug=regulation (має бути presidential_decree)',
+      });
+    }
+    
+    // Розпорядження КМУ але slug = regulation
+    if ((summary.includes('розпорядження') && (summary.includes('кму') || summary.includes('кабінет'))) &&
+        doc.document_type_slug === 'regulation') {
+      checks.push({
+        component: 'Supabase',
+        check: 'semantic type consistency: Розпорядження КМУ не має бути regulation',
+        status: 'FAIL',
+        reason: 'Розпорядження КМУ має slug=regulation (має бути cmu_order)',
+      });
+    }
+  }
+  
   // Calculate sync_health if writeHealth enabled (PHASE 19)
   let syncHealth: 'green' | 'yellow' | 'red' | 'unknown' | null = null;
   let syncIssue: string | null = null;

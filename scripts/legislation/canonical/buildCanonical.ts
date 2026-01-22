@@ -161,14 +161,19 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
     }
   }
 
-  // PHASE 21: Document Type System V2 — Heuristics + AI Fallback + Caching
+  // PHASE 22: Document Type System V2 — Heuristics + AI Fallback + Caching + Validation
   const { enrichDocumentType } = await import('../lib/documentTypeEnrichment.js');
+  
+  // Отримуємо snippet для валідації (перші 200 символів txtContent)
+  const snippet = txtContent ? txtContent.substring(0, 200) : undefined;
+  
   const docTypeEnrichment = await enrichDocumentType({
     title: nazva,
     typ: jsonData?.typ,
     typn: jsonData?.typn,
     organs: jsonData?.organs,
     stru: jsonData?.stru,
+    snippet: snippet,
   });
   const documentTypeSlug = docTypeEnrichment.slug;
   const documentType = docTypeEnrichment.label_uk; // UA label з taxonomy

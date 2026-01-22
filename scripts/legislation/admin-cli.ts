@@ -368,6 +368,35 @@ program
   });
 
 program
+  .command('collect-mismatch-evidence')
+  .description('Збір "golden mismatch list" для валідації типів (PHASE 22)')
+  .option('--limit <n>', 'Кількість документів для перевірки', '20')
+  .action(async (options) => {
+    const { collectMismatchEvidence } = await import('./commands/collect-mismatch-evidence.js');
+    const mismatches = await collectMismatchEvidence(Number(options.limit) || 20);
+    
+    // Виводимо таблицю
+    console.log(`\n═══════════════════════════════════════════════════════════`);
+    console.log(`Golden Mismatch List (BEFORE)`);
+    console.log(`═══════════════════════════════════════════════════════════`);
+    console.log(`NREG | Title | Slug | UA | Typ | Summary Prefix`);
+    console.log(`-----|-------|------|----|-----|----------------`);
+    mismatches.forEach(m => {
+      const title = m.title.substring(0, 40);
+      const summary = m.summary_prefix?.substring(0, 40) || 'N/A';
+      console.log(`${m.nreg} | ${title}... | ${m.document_type_slug} | ${m.document_type} | ${m.typ || 'NULL'} | ${summary}...`);
+    });
+  });
+
+program
+  .command('test-validation-mismatches')
+  .description('Тестування валідації на знайдених місматчах (PHASE 22)')
+  .action(async () => {
+    const { testValidationOnMismatches } = await import('./commands/test-validation-on-mismatches.js');
+    await testValidationOnMismatches();
+  });
+
+program
   .command('test-doc-types-regression')
   .description('Регресійний тест document_type_slug для різних типів (PHASE 21)')
   .action(async () => {

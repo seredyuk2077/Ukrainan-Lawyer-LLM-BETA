@@ -134,10 +134,28 @@ export function guessDocumentTypeV2(params: {
       };
     }
     
+    // Typ=6: Розпорядження — потрібно перевірити чи це КМУ
+    if (typ === 6) {
+      if (lowerTitle.includes('кабінет') || lowerTitle.includes('кму') ||
+          (organs && JSON.stringify(organs).toLowerCase().includes('кму'))) {
+        return {
+          slug: 'cmu_order',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: `typ=6, indicates CMU Order`,
+        };
+      }
+      return {
+        slug: 'regulation',
+        confidence: 'medium',
+        source: 'heuristics',
+        rationale: `typ=6 (Розпорядження/Положення)`,
+      };
+    }
+    
     // Інші typ значення
     const typMap: Record<number, DocumentTypeSlug> = {
       5: 'minister_order',
-      6: 'regulation',
       7: 'rules',
       8: 'instruction',
       9: 'vr_resolution',
@@ -312,18 +330,6 @@ export function guessDocumentTypeV2(params: {
     };
   }
   
-  // Рішення РНБО (мапимо на presidential_decree або regulation залежно від контексту)
-  if (lowerTitle.includes('рішення') && 
-      (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки'))) {
-    // РНБО рішення часто оформлюються як укази або постанови
-    // Мапимо на regulation як найближчий тип
-    return {
-      slug: 'regulation',
-      confidence: 'high',
-      source: 'heuristics',
-      rationale: 'title indicates RNBO decision, mapped to regulation',
-    };
-  }
   
   // Положення
   if (lowerTitle.includes('положення')) {

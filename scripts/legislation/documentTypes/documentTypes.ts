@@ -13,9 +13,14 @@ export type DocumentTypeSlug =
   
   // Постанови та рішення
   | 'cmu_resolution'      // Постанова КМУ
+  | 'cmu_order'           // Розпорядження КМУ
   | 'vr_resolution'       // Постанова ВРУ
   | 'presidential_decree' // Указ Президента
   | 'presidential_order'  // Розпоряження Президента
+  | 'cec_resolution'      // Постанова ЦВК
+  | 'rnbo_decision'       // Рішення РНБО
+  | 'nbu_resolution'      // Постанова НБУ / Правління НБУ
+  | 'nbu_letter'          // Лист/Повідомлення/Роз'яснення НБУ
   
   // Адміністративні акти
   | 'minister_order'      // Наказ міністра
@@ -39,6 +44,7 @@ export type DocumentTypeSlug =
   // Інші
   | 'memorandum'          // Меморандум
   | 'declaration'         // Декларація
+  | 'unknown'             // Невизначений тип (краще ніж "Закон" від балди)
   | 'other';              // Інше (fallback)
 
 export interface DocumentTypeInfo {
@@ -73,6 +79,12 @@ export const DOCUMENT_TYPES: Record<DocumentTypeSlug, DocumentTypeInfo> = {
     label_en: 'CMU Resolution',
     description: 'Постанова Кабінету Міністрів України',
   },
+  cmu_order: {
+    slug: 'cmu_order',
+    label_uk: 'Розпорядження КМУ',
+    label_en: 'CMU Order',
+    description: 'Розпорядження Кабінету Міністрів України',
+  },
   vr_resolution: {
     slug: 'vr_resolution',
     label_uk: 'Постанова ВРУ',
@@ -90,6 +102,30 @@ export const DOCUMENT_TYPES: Record<DocumentTypeSlug, DocumentTypeInfo> = {
     label_uk: 'Розпоряження Президента',
     label_en: 'Presidential Order',
     description: 'Розпоряження Президента України',
+  },
+  cec_resolution: {
+    slug: 'cec_resolution',
+    label_uk: 'Постанова ЦВК',
+    label_en: 'CEC Resolution',
+    description: 'Постанова Центральної виборчої комісії',
+  },
+  rnbo_decision: {
+    slug: 'rnbo_decision',
+    label_uk: 'Рішення РНБО',
+    label_en: 'RNBO Decision',
+    description: 'Рішення Ради національної безпеки і оборони України',
+  },
+  nbu_resolution: {
+    slug: 'nbu_resolution',
+    label_uk: 'Постанова НБУ',
+    label_en: 'NBU Resolution',
+    description: 'Постанова Правління Національного банку України',
+  },
+  nbu_letter: {
+    slug: 'nbu_letter',
+    label_uk: 'Повідомлення НБУ',
+    label_en: 'NBU Letter',
+    description: 'Лист/Повідомлення/Роз\'яснення Національного банку України',
   },
   minister_order: {
     slug: 'minister_order',
@@ -180,6 +216,12 @@ export const DOCUMENT_TYPES: Record<DocumentTypeSlug, DocumentTypeInfo> = {
     label_uk: 'Декларація',
     label_en: 'Declaration',
     description: 'Декларація',
+  },
+  unknown: {
+    slug: 'unknown',
+    label_uk: 'Невизначений тип',
+    label_en: 'Unknown',
+    description: 'Тип документа не визначено (краще ніж "Закон" від балди)',
   },
   other: {
     slug: 'other',

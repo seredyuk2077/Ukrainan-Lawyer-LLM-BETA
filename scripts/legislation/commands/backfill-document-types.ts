@@ -63,24 +63,39 @@ export async function backfillDocumentTypes(options?: {
   
   for (const doc of docs) {
     try {
-      // Отримуємо raw дані з R2 для typ/organs
+      // Отримуємо raw дані з R2 для typ/organs + summary/snippet
       let jsonData: any = null;
+      let summary: string | null = null;
+      let snippet: string | null = null;
+      
       try {
         if (doc.r2_key) {
           const canonical = await getJsonFromR2(doc.r2_key);
           jsonData = canonical.raw?.rada_api_json || null;
+          
+          // Отримуємо summary з canonical або Supabase
+          summary = canonical.ai_enrichment?.summary || (doc.summary as string | null) || null;
+          
+          // Отримуємо snippet з першого chunk або txt
+          if (canonical.content?.chunks?.[0]?.text) {
+            snippet = canonical.content.chunks[0].text.substring(0, 200);
+          } else if (canonical.raw?.rada_api_txt) {
+            snippet = canonical.raw.rada_api_txt.substring(0, 200);
+          }
         }
       } catch (e) {
         console.warn(`⚠️  Failed to read R2 for ${doc.rada_nreg}: ${e instanceof Error ? e.message : String(e)}`);
       }
       
-      // Використовуємо enrichDocumentType
+      // Використовуємо enrichDocumentType з валідацією
       const enrichment = await enrichDocumentType({
         title: doc.title,
         typ: jsonData?.typ || null,
         typn: jsonData?.typn || null,
         organs: jsonData?.organs || null,
         stru: jsonData?.stru || null,
+        summary: summary,
+        snippet: snippet,
       });
       
       const newSlug = enrichment.slug;
@@ -116,17 +131,26 @@ export async function backfillDocumentTypes(options?: {
         }
       }
       
-      result.updated++;
-      result.details.push({
-        nreg: doc.rada_nreg,
-        status: 'updated',
-        old_slug: oldSlug || undefined,
-        new_slug: newSlug,
-        old_type: oldType || undefined,
-        new_type: newType,
-      });
-      
-      console.log(`${dryRun ? '[DRY RUN] ' : ''}✓ ${doc.rada_nreg}: ${oldSlug || 'NULL'} → ${newSlug} (${oldType || 'NULL'} → ${newType})`);
+              result.updated++;
+              result.details.push({
+                nreg: doc.rada_nreg,
+                status: 'updated',
+                old_slug: oldSlug || undefined,
+                new_slug: newSlug,
+                old_type: oldType || undefined,
+                new_type: newType,
+              });
+              
+              const validationInfo = enrichment.validation 
+                ? ` [validation: ${enrichment.validation.status}, issues: ${enrichment.validation.issues.length}]`
+                : '';
+              console.log(`${dryRun ? '[DRY RUN] ' : ''}✓ ${doc.rada_nreg}: ${oldSlug || 'NULL'} → ${newSlug} (${oldType || 'NULL'} → ${newType})${validationInfo}`);
+              
+              if (enrichment.validation && enrichment.validation.issues.length > 0) {
+                enrichment.validation.issues.forEach(issue => {
+                  console.log(`  ⚠️  ${issue}`);
+                });
+              }
     } catch (e: any) {
       result.errors++;
       const errorMessage = e instanceof Error ? e.message : String(e);
