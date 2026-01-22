@@ -167,6 +167,8 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
   // Отримуємо snippet для валідації (перші 200 символів txtContent)
   const snippet = txtContent ? txtContent.substring(0, 200) : undefined;
   
+  const documentNumber = jsonData?.organs?.orgnum || nreg; // PHASE 15: orgnum або nreg
+  
   const docTypeEnrichment = await enrichDocumentType({
     title: nazva,
     typ: jsonData?.typ,
@@ -174,6 +176,7 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
     organs: jsonData?.organs,
     stru: jsonData?.stru,
     snippet: snippet,
+    document_number: documentNumber,
   });
   const documentTypeSlug = docTypeEnrichment.slug;
   const documentType = docTypeEnrichment.label_uk; // UA label з taxonomy
