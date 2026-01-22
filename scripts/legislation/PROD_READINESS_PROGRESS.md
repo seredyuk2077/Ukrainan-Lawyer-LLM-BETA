@@ -9,17 +9,47 @@
 
 ### Загальна статистика:
 - **total_docs:** 62
-- **health_green:** (перевіряється)
-- **health_yellow:** (перевіряється)
-- **health_red:** (перевіряється)
+- **health_green:** 24
+- **health_yellow:** 23
+- **health_red:** 0 ✅
+- **health_unknown:** 15
 - **verify FAIL:** 0 ✅
 - **detect-type-absurdities CRITICAL:** 0 ✅
+- **chunks_mismatch:** 0 ✅
+- **not_indexed:** 0 ✅
 
-### Document Type Distribution:
-(заповнюється після SQL)
+### Document Type Distribution (TOP-15):
+1. cmu_resolution: 20
+2. nbu_letter: 12
+3. cmu_order: 9
+4. vr_resolution: 5
+5. code: 4
+6. rnbo_decision: 2
+7. regulation: 2
+8. presidential_decree: 2
+9. vr_speaker_order: 1
+10. cec_resolution: 1
+11. constitution: 1
+12. convention: 1
+13. law: 1
+14. ccu_opinion: 1
 
-### Category Distribution:
-(заповнюється після SQL)
+### Category Distribution (TOP-15):
+1. finance_banking: 14
+2. other: 7
+3. education_science: 5
+4. defense_mobilization: 5
+5. international_eu: 3
+6. labor_social: 3
+7. procurement: 3
+8. administrative: 3
+9. environment: 3
+10. border_migration: 2
+11. constitutional: 2
+12. construction_urban: 2
+13. national_security: 2
+14. administrative_offenses: 2
+15. transport_infrastructure: 1
 
 ---
 

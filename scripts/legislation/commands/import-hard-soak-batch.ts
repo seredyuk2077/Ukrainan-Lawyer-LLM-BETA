@@ -109,9 +109,7 @@ export async function importHardSoakBatch(options?: {
     for (const nreg of batchNregs) {
       if (batchResults.find(r => r.nreg === nreg && r.success)) {
         try {
-          await verifyDocument({
-            nreg,
-            evidence: true,
+          await verifyDocument(nreg, {
             writeHealth: true,
           });
         } catch (e) {
@@ -125,9 +123,7 @@ export async function importHardSoakBatch(options?: {
     for (const nreg of batchNregs) {
       if (batchResults.find(r => r.nreg === nreg && r.success)) {
         try {
-          await repairConsistency({
-            nreg,
-          });
+          await repairConsistency(nreg, {});
         } catch (e) {
           // Пропускаємо помилки repair
         }
