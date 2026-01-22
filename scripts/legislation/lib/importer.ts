@@ -447,14 +447,14 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
     }
     
     // Визначаємо sync_health на основі validation
-    let syncHealth: 'green' | 'yellow' | 'red' | 'unknown' | null = null;
-    let syncIssue: string | null = null;
+    let validationSyncHealth: 'green' | 'yellow' | 'red' | 'unknown' | null = null;
+    let validationSyncIssue: string | null = null;
     if (finalValidation.status === 'fail' && finalValidation.issues.some(i => i.includes('CRITICAL'))) {
-      syncHealth = 'red';
-      syncIssue = `CRITICAL: ${finalValidation.issues.filter(i => i.includes('CRITICAL')).join('; ')}`;
+      validationSyncHealth = 'red';
+      validationSyncIssue = `CRITICAL: ${finalValidation.issues.filter(i => i.includes('CRITICAL')).join('; ')}`;
     } else if (finalValidation.status === 'fail') {
-      syncHealth = 'yellow';
-      syncIssue = finalValidation.issues.join('; ');
+      validationSyncHealth = 'yellow';
+      validationSyncIssue = finalValidation.issues.join('; ');
     }
     
     const docUpsert = {
@@ -498,8 +498,8 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       storage_category: storageCategory,
       // PHASE 16: Status indicators (буде оновлено в verify, але встановлюємо через validation)
       legal_status: null, // буде визначено з Rada metadata
-      sync_health: syncHealth, // встановлюємо через validation (PHASE 5)
-      sync_issue: syncIssue, // встановлюємо через validation (PHASE 5)
+      sync_health: validationSyncHealth, // встановлюємо через validation (PHASE 5)
+      sync_issue: validationSyncIssue, // встановлюємо через validation (PHASE 5)
     };
 
     const { error: upsertErr } = await supabase.from('legislation_documents').upsert(docUpsert, { onConflict: 'rada_nreg' });
