@@ -381,6 +381,19 @@ program
   });
 
 program
+  .command('collect-hard-soak')
+  .description('Збір 50 складних документів для stress-test (PHASE 3)')
+  .option('--limit <n>', 'Кількість документів', '50')
+  .option('--output <path>', 'Шлях до вихідного файлу')
+  .action(async (options) => {
+    const { collectHardSoak } = await import('./commands/collect-hard-soak.js');
+    await collectHardSoak({
+      limit: Number(options.limit) || 50,
+      outputPath: options.output,
+    });
+  });
+
+program
   .command('collect-mismatch-evidence')
   .description('Збір "golden mismatch list" для валідації типів (PHASE 22)')
   .option('--limit <n>', 'Кількість документів для перевірки', '20')

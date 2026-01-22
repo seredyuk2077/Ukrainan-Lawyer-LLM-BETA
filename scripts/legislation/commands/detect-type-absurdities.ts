@@ -51,7 +51,21 @@ export function detectAbsurdities(params: {
       combined.includes('рнбо') ||
       combined.includes('рішення рнбо') ||
       combined.includes('рішення ради національної')) {
-    if (current_slug === 'law' || current_slug === 'code') {
+    // Виняток: "Указ про введення в дію рішення РНБО" → presidential_decree OK
+    if (combined.includes('указ про введення в дію') || combined.includes('указом президента')) {
+      // Це указ про введення в дію рішення РНБО → presidential_decree правильний
+      if (current_slug !== 'presidential_decree') {
+        findings.push({
+          nreg: '',
+          severity: 'CRITICAL',
+          reason_code: 'RNBO_AS_LAW',
+          current_slug,
+          current_ua_label,
+          suggested_slug: 'presidential_decree',
+          evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+        });
+      }
+    } else if (current_slug === 'law' || current_slug === 'code') {
       findings.push({
         nreg: '', // буде заповнено пізніше
         severity: 'CRITICAL',
@@ -61,19 +75,16 @@ export function detectAbsurdities(params: {
         suggested_slug: 'rnbo_decision',
         evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
       });
-    } else if (current_slug !== 'rnbo_decision' && current_slug !== 'presidential_decree') {
-      // Виняток: "Указ про введення в дію рішення РНБО" → presidential_decree OK
-      if (!combined.includes('указ про введення в дію') && !combined.includes('указом президента')) {
-        findings.push({
-          nreg: '',
-          severity: 'CRITICAL',
-          reason_code: 'RNBO_NOT_RNBO_DECISION',
-          current_slug,
-          current_ua_label,
-          suggested_slug: 'rnbo_decision',
-          evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
-        });
-      }
+    } else if (current_slug !== 'rnbo_decision') {
+      findings.push({
+        nreg: '',
+        severity: 'CRITICAL',
+        reason_code: 'RNBO_NOT_RNBO_DECISION',
+        current_slug,
+        current_ua_label,
+        suggested_slug: 'rnbo_decision',
+        evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+      });
     }
   }
   
