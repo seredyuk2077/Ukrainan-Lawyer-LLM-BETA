@@ -26,6 +26,9 @@ export interface DocumentTypeEnrichmentResult {
   };
 }
 
+// Cache version bump для document_type (PHASE 3: VR_SPEAKER_ORDER fix)
+const DOCUMENT_TYPE_CACHE_VERSION = 'doc_type_v3';
+
 /**
  * Генерує fingerprint для кешування
  */
@@ -36,18 +39,22 @@ function generateFingerprint(params: {
   organs?: any;
   summary?: string | null;
   snippet?: string | null;
+  document_number?: string | null;
 }): string {
   // ВАЖЛИВО: fingerprint має включати summary/snippet hash, щоб не кешувати помилки
   const summaryHash = params.summary ? createHash('sha256').update(params.summary.substring(0, 200), 'utf-8').digest('hex').slice(0, 8) : '';
   const snippetHash = params.snippet ? createHash('sha256').update(params.snippet.substring(0, 200), 'utf-8').digest('hex').slice(0, 8) : '';
+  const docNumHash = params.document_number ? createHash('sha256').update(params.document_number.trim().toUpperCase(), 'utf-8').digest('hex').slice(0, 8) : '';
   
   const key = JSON.stringify({
+    version: DOCUMENT_TYPE_CACHE_VERSION,  // Cache version bump
     title: params.title.trim().toLowerCase(),
     typ: params.typ,
     typn: params.typn,
     organs: typeof params.organs === 'string' ? params.organs : JSON.stringify(params.organs),
     summary_hash: summaryHash,
     snippet_hash: snippetHash,
+    document_number_hash: docNumHash,  // Додано для prefix-sniff правил
   });
   return createHash('sha256').update(key, 'utf-8').digest('hex').slice(0, 16);
 }

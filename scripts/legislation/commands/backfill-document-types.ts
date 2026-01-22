@@ -38,7 +38,7 @@ export async function backfillDocumentTypes(options?: {
   // Отримуємо всі документи
   let query = supabase
     .from('legislation_documents')
-    .select('rada_nreg, title, document_type, document_type_slug, r2_key')
+    .select('rada_nreg, title, document_type, document_type_slug, r2_key, document_number, summary')
     .order('rada_nreg');
   
   if (limit) {
