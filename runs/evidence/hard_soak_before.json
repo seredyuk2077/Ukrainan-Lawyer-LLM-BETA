@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-01-22T21:23:51.106Z",
+  "phase": "PHASE_3.0_BEFORE",
+  "stats": {
+    "total_docs": 50,
+    "document_type_slug_dist": {
+      "cmu_resolution": 14,
+      "nbu_letter": 12,
+      "cmu_order": 3,
+      "code": 4,
+      "convention": 1,
+      "law": 1,
+      "vr_resolution": 5,
+      "cec_resolution": 1,
+      "ccu_opinion": 1,
+      "constitution": 1,
+      "presidential_decree": 2,
+      "regulation": 3,
+      "rnbo_decision": 2
+    },
+    "category_dist": {
+      "procurement": 3,
+      "finance_banking": 13,
+      "other": 5,
+      "administrative_offenses": 2,
+      "administrative": 4,
+      "international_eu": 3,
+      "criminal": 1,
+      "defense_mobilization": 4,
+      "civil": 1,
+      "border_migration": 2,
+      "environment": 2,
+      "constitutional": 2,
+      "education_science": 1,
+      "digital_data": 1,
+      "national_security": 2,
+      "energy_utilities": 1,
+      "labor_social": 2,
+      "construction_urban": 1
+    },
+    "sync_health_dist": {
+      "green": 24,
+      "yellow": 23,
+      "red": 3
+    }
+  },
+  "critical_findings": 0,
+  "verify_fail_count": 27
+}

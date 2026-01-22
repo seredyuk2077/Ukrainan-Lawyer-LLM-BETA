@@ -394,6 +394,19 @@ program
   });
 
 program
+  .command('import-hard-soak')
+  .description('Імпорт hard soak документів пачками по 10 з циклами контролю (PHASE 3.3)')
+  .option('--batch-size <n>', 'Розмір пачки', '10')
+  .option('--file <path>', 'Шлях до файлу з nreg', 'scripts/legislation/test/hard_soak_nregs.txt')
+  .action(async (options) => {
+    const { importHardSoakBatch } = await import('./commands/import-hard-soak-batch.js');
+    await importHardSoakBatch({
+      batchSize: Number(options.batchSize) || 10,
+      nregsFile: options.file,
+    });
+  });
+
+program
   .command('collect-mismatch-evidence')
   .description('Збір "golden mismatch list" для валідації типів (PHASE 22)')
   .option('--limit <n>', 'Кількість документів для перевірки', '20')

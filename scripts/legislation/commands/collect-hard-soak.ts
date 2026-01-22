@@ -143,70 +143,155 @@ function detectTypeFamily(doc: { title: string; typ?: number }): string | undefi
 export async function collectHardSoak(options?: {
   limit?: number;
   outputPath?: string;
+  excludeExisting?: boolean;
 }): Promise<string[]> {
-  const { limit = 50, outputPath } = options || {};
+  const { limit = 50, outputPath, excludeExisting = true } = options || {};
   
   console.log(`\n═══════════════════════════════════════════════════════════`);
   console.log(`Hard Soak Collector — збір ${limit} складних документів`);
   console.log(`═══════════════════════════════════════════════════════════\n`);
   
-  // TODO: Реалізувати збір з Rada API feed
-  // Зараз використовуємо статичний список з test/soak_nregs.txt як основу
-  // і додаємо нові складні документи
-  
   const rada = new RadaClient();
   const candidates: HardSoakCandidate[] = [];
   
-  // Збираємо кандидатів (приклад: останні документи з різними typ)
-  // В реальності тут має бути пошук через Rada API feed
+  // Отримуємо існуючі nreg з Supabase (якщо excludeExisting)
+  let existingNregs: Set<string> = new Set();
+  if (excludeExisting) {
+    const { createSupabaseAdminClient } = await import('../lib/supabaseAdmin.js');
+    const supabase = createSupabaseAdminClient();
+    const { data: existingDocs } = await supabase
+      .from('legislation_documents')
+      .select('rada_nreg');
+    if (existingDocs) {
+      existingNregs = new Set(existingDocs.map(d => d.rada_nreg));
+      console.log(`📋 Виключено ${existingNregs.size} існуючих документів\n`);
+    }
+  }
   
-  console.log(`⚠️  TODO: Реалізувати збір з Rada API feed`);
-  console.log(`Зараз використовуємо статичний список з test/soak_nregs.txt\n`);
-  
-  // Читаємо існуючий список як основу
+  // Читаємо статичний список як основу
   const existingSoakPath = resolve(process.cwd(), 'scripts/legislation/test/soak_nregs.txt');
-  let existingNregs: string[] = [];
+  let feedNregs: string[] = [];
   try {
     const { readFile } = await import('fs/promises');
     const content = await readFile(existingSoakPath, 'utf-8');
-    existingNregs = content.split('\n')
+    feedNregs = content.split('\n')
       .map(line => line.trim())
       .filter(line => line && !line.startsWith('#'));
   } catch (e) {
-    // Файл не існує — починаємо з нуля
+    // Файл не існує — починаємо з feed
   }
   
-  // Фільтруємо унікальні та збираємо hardness score
+  // PHASE 3.1: Feed-only збір (швидкий, без card-json)
+  console.log('📥 Завантажуємо feed з Rada (r.txt)...');
+  const feedCandidates: Array<{ nreg: string; title?: string; pre_score: number }> = [];
+  
+  try {
+    const feedUrl = 'https://data.rada.gov.ua/laws/main/r.txt';
+    const feedResponse = await fetch(feedUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000),
+    });
+    
+    if (feedResponse.ok) {
+      const feedText = await feedResponse.text();
+      const feedLines = feedText.split('\n')
+        .map(line => {
+          const parts = line.trim().split(/\s+/);
+          const nreg = parts[0];
+          const title = parts.slice(1).join(' ').trim();
+          return { nreg, title };
+        })
+        .filter(item => item.nreg && item.nreg.length > 2 && /\d/.test(item.nreg))
+        .filter(item => !existingNregs.has(item.nreg));
+      
+      console.log(`✅ Отримано ${feedLines.length} нових nreg з feed\n`);
+      
+      // PHASE 3.1: Hardness pre-score на feed-only (дешево)
+      for (const item of feedLines) {
+        const lowerTitle = (item.title || '').toLowerCase();
+        let preScore = 0;
+        
+        // Складні слова
+        const complexWords = [
+          'рішення', 'указ', 'розпорядження', 'постанова', 'лист', 'повідомлення',
+          'конвенція', 'пакт', 'статут', 'протокол', 'договір'
+        ];
+        const foundWords = complexWords.filter(w => lowerTitle.includes(w));
+        preScore += foundWords.length * 2;
+        
+        // Issuer-сигнали
+        const issuers = ['рнбо', 'цвк', 'нбу', 'ксу', 'президент', 'кму', 'вру'];
+        const foundIssuers = issuers.filter(i => lowerTitle.includes(i));
+        preScore += foundIssuers.length * 3;
+        
+        feedCandidates.push({
+          nreg: item.nreg,
+          title: item.title,
+          pre_score: preScore,
+        });
+      }
+      
+      // Сортуємо за pre_score
+      feedCandidates.sort((a, b) => b.pre_score - a.pre_score);
+      console.log(`📊 Pre-scored ${feedCandidates.length} кандидатів\n`);
+    }
+  } catch (e) {
+    console.warn(`⚠️  Помилка завантаження feed: ${e instanceof Error ? e.message : String(e)}\n`);
+  }
+  
+  // Беремо top 80-120 для точкового збагачення
+  const topCandidates = feedCandidates.slice(0, Math.min(120, feedCandidates.length));
+  console.log(`🎯 Вибрано ${topCandidates.length} топ-кандидатів для збагачення\n`);
+  
+  // PHASE 3.2: Точкове збагачення top 80-120 (card-json fetch)
+  console.log('📥 Збагачуємо топ-кандидатів (card-json fetch)...\n');
   const seenNregs = new Set<string>();
   const issuerFamilyCounts: Record<string, number> = {};
   const typeFamilyCounts: Record<string, number> = {};
   
-  for (const nreg of existingNregs) {
-    if (seenNregs.has(nreg)) continue;
-    seenNregs.add(nreg);
+  for (const item of topCandidates) {
+    if (seenNregs.has(item.nreg)) continue;
+    if (candidates.length >= limit * 2) break; // Зупиняємося коли маємо достатньо кандидатів
+    
+    seenNregs.add(item.nreg);
     
     try {
-      // Fetch metadata
-      const jsonData = await rada.fetchJson(nreg);
+      // Fetch metadata (card-json)
+      const jsonData = await rada.fetchJson(item.nreg);
+      
+      // Отримуємо snippet (перші 200 символів txt, якщо доступно) - ОПТИМІЗАЦІЯ: тільки для топ-кандидатів
+      let snippet = '';
+      // Пропускаємо TXT fetch для швидкості - використовуємо тільки title для hardness
+      // TXT буде завантажено під час імпорту
+      
       const hardness = calculateHardnessScore({
         typ: jsonData.typ,
         typn: jsonData.typn,
         organs: jsonData.organs,
-        title: jsonData.nazva || '',
+        title: jsonData.nazva || item.title || '',
       });
       
+      // Додаткові бали за title (якщо містить додатки/таблиці)
+      const lowerTitle = (jsonData.nazva || item.title || '').toLowerCase();
+      if (lowerTitle.includes('додаток') || lowerTitle.includes('таблиця') || 
+          lowerTitle.includes('форма') || lowerTitle.includes('перелік') ||
+          lowerTitle.includes('додатки')) {
+        hardness.score += 2;
+        hardness.reasons.push('title: додатки/таблиці');
+      }
+      
       const issuerFamily = detectIssuerFamily({
-        title: jsonData.nazva || '',
+        title: jsonData.nazva || item.title || '',
         organs: jsonData.organs,
       });
       const typeFamily = detectTypeFamily({
-        title: jsonData.nazva || '',
+        title: jsonData.nazva || item.title || '',
         typ: jsonData.typ,
       });
       
       candidates.push({
-        nreg,
-        title: jsonData.nazva || '',
+        nreg: item.nreg,
+        title: jsonData.nazva || item.title || '',
         typ: jsonData.typ,
         typn: jsonData.typn,
         organs: jsonData.organs,
@@ -218,17 +303,35 @@ export async function collectHardSoak(options?: {
       
       if (issuerFamily) issuerFamilyCounts[issuerFamily] = (issuerFamilyCounts[issuerFamily] || 0) + 1;
       if (typeFamily) typeFamilyCounts[typeFamily] = (typeFamilyCounts[typeFamily] || 0) + 1;
+      
+      // Показуємо прогрес кожні 10 документів
+      if (candidates.length % 10 === 0) {
+        console.log(`  Збагачено ${candidates.length} кандидатів...`);
+      }
     } catch (e) {
-      console.warn(`⚠️  Помилка при обробці ${nreg}: ${e instanceof Error ? e.message : String(e)}`);
+      // Пропускаємо биті/недоступні документи
+      if (candidates.length % 20 === 0) {
+        console.warn(`  ⚠️  Помилка при обробці ${item.nreg} (пропущено)`);
+      }
     }
   }
   
-  // Сортуємо за hardness score (найскладніші спочатку)
+  console.log(`\n✅ Збагачено ${candidates.length} кандидатів\n`);
+  
+  // PHASE 3.2: Сортуємо за hardness score (найскладніші спочатку)
   candidates.sort((a, b) => b.hardness_score - a.hardness_score);
   
-  // Гарантуємо диверсифікацію: не менше N документів на кожен issuer/type
-  const minPerIssuer = Math.floor(limit / 8); // ~6-7 на issuer
-  const minPerType = Math.floor(limit / 10); // ~5 на type
+  // PHASE 3.2: Диверсифікація (мінімуми)
+  const minPerIssuer: Record<string, number> = {
+    'RNBO': 5,
+    'PRESIDENT': 5,
+    'NBU': 8,
+    'CEC': 5,
+    'INTERNATIONAL': 5,
+    'CCU': 3,
+    'CMU': 8,
+    'VRU': 5,
+  };
   
   const selected: HardSoakCandidate[] = [];
   const selectedIssuerCounts: Record<string, number> = {};
@@ -240,8 +343,9 @@ export async function collectHardSoak(options?: {
     
     const issuer = candidate.issuer_family || 'OTHER';
     const type = candidate.type_family || 'OTHER';
+    const minRequired = minPerIssuer[issuer] || 0;
     
-    if (selectedIssuerCounts[issuer] < minPerIssuer || selectedTypeCounts[type] < minPerType) {
+    if (selectedIssuerCounts[issuer] < minRequired) {
       selected.push(candidate);
       selectedIssuerCounts[issuer] = (selectedIssuerCounts[issuer] || 0) + 1;
       selectedTypeCounts[type] = (selectedTypeCounts[type] || 0) + 1;
@@ -258,6 +362,57 @@ export async function collectHardSoak(options?: {
     const type = candidate.type_family || 'OTHER';
     selectedIssuerCounts[issuer] = (selectedIssuerCounts[issuer] || 0) + 1;
     selectedTypeCounts[type] = (selectedTypeCounts[type] || 0) + 1;
+  }
+  
+  // Якщо не вистачає якогось класу — додаємо відомі nreg
+  const knownHardNregs: Record<string, string[]> = {
+    'RNBO': ['n0002525-26'], // вже є, але якщо потрібно більше
+    'PRESIDENT': ['60/2026'],
+    'NBU': [], // додати відомі
+    'CEC': ['v0003359-26'], // вже є
+    'INTERNATIONAL': ['995_153'], // вже є
+    'CCU': ['nb07d710-25'], // вже є
+  };
+  
+  // Додаємо відомі якщо не вистачає (тільки якщо не в existingNregs)
+  for (const [issuer, nregs] of Object.entries(knownHardNregs)) {
+    const currentCount = selectedIssuerCounts[issuer] || 0;
+    const minRequired = minPerIssuer[issuer] || 0;
+    
+    if (currentCount < minRequired) {
+      for (const nreg of nregs) {
+        if (selected.length >= limit) break;
+        if (existingNregs.has(nreg)) continue;
+        if (selected.some(s => s.nreg === nreg)) continue;
+        
+        // Швидкий fetch для відомого
+        try {
+          const jsonData = await rada.fetchJson(nreg);
+          const hardness = calculateHardnessScore({
+            typ: jsonData.typ,
+            typn: jsonData.typn,
+            organs: jsonData.organs,
+            title: jsonData.nazva || '',
+          });
+          
+          selected.push({
+            nreg,
+            title: jsonData.nazva || '',
+            typ: jsonData.typ,
+            typn: jsonData.typn,
+            organs: jsonData.organs,
+            hardness_score: hardness.score,
+            hardness_reasons: hardness.reasons,
+            issuer_family: issuer as any,
+            type_family: detectTypeFamily({ title: jsonData.nazva || '', typ: jsonData.typ }),
+          });
+          
+          selectedIssuerCounts[issuer] = (selectedIssuerCounts[issuer] || 0) + 1;
+        } catch (e) {
+          // Пропускаємо
+        }
+      }
+    }
   }
   
   // Обмежуємо до limit
