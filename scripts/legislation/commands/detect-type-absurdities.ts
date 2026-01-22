@@ -36,6 +36,7 @@ export function detectAbsurdities(params: {
   organs?: any;
   current_slug: DocumentTypeSlug | null;
   current_ua_label: string | null;
+  document_number?: string | null;  // Для nreg suffix check
 }): AbsurdityFinding[] {
   const findings: AbsurdityFinding[] = [];
   const { title, summary, snippet, typ, organs, current_slug, current_ua_label } = params;
@@ -274,6 +275,81 @@ export function detectAbsurdities(params: {
     }
   }
   
+  // J) Розпорядження Голови ВРУ (КРИТИЧНЕ: має найвищий пріоритет)
+  // Нормалізуємо snippet для перевірки prefix
+  const normalizePrefix = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return text
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[\n\t\r]/g, ' ')
+      .replace(/["'«»]/g, '')
+      .substring(0, 200);
+  };
+  
+  const normalizedSnippet = normalizePrefix(snippet || title);
+  const normalizedTitle = normalizePrefix(title);
+  
+  // Правило 1: Prefix-based (найнадійніше)
+  if ((normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
+       normalizedSnippet.includes('ГОЛОВИ') && 
+       (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) ||
+      (normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') && 
+       normalizedTitle.includes('ГОЛОВИ') && 
+       (normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') || normalizedTitle.includes('ВРУ')))) {
+    if (current_slug !== 'vr_speaker_order') {
+      findings.push({
+        nreg: '',
+        severity: 'CRITICAL',
+        reason_code: 'VR_SPEAKER_ORDER_PREFIX',
+        current_slug,
+        current_ua_label,
+        suggested_slug: 'vr_speaker_order',
+        evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+      });
+    }
+  }
+  
+  // Правило 2: UA label = "Положення" але snippet починається з "РОЗПОРЯДЖЕННЯ"
+  if (normalizedSnippet.startsWith('РОЗПОРЯДЖЕННЯ') || normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ ГОЛОВИ')) {
+    if (current_ua_label === 'Положення' || current_slug === 'regulation') {
+      // Перевіряємо чи це не просто "Положення про розпорядження"
+      if (normalizedSnippet.includes('ГОЛОВИ') && (normalizedSnippet.includes('ВЕРХОВНОЇ') || normalizedSnippet.includes('ВРУ'))) {
+        findings.push({
+          nreg: '',
+          severity: 'CRITICAL',
+          reason_code: 'VR_SPEAKER_ORDER_AS_REGULATION',
+          current_slug,
+          current_ua_label,
+          suggested_slug: 'vr_speaker_order',
+          evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+        });
+      }
+    }
+  }
+  
+  // Правило 3: document_number має суфікс -РГ (case-insensitive)
+  if (params.document_number) {
+    const normalizedNreg = params.document_number.toUpperCase().trim();
+    if (normalizedNreg.endsWith('-РГ') || normalizedNreg.endsWith('-РГ')) {
+      if (current_slug !== 'vr_speaker_order') {
+        // Додаткова перевірка: чи title/snippet підтверджує
+        if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') || normalizedTitle.includes('РОЗПОРЯДЖЕННЯ')) {
+          findings.push({
+            nreg: '',
+            severity: 'CRITICAL',
+            reason_code: 'VR_SPEAKER_ORDER_NREG_SUFFIX',
+            current_slug,
+            current_ua_label,
+            suggested_slug: 'vr_speaker_order',
+            evidence: { title, summary_prefix: summary?.substring(0, 120), snippet200: snippet?.substring(0, 200), typ, organs },
+          });
+        }
+      }
+    }
+  }
+  
   // J) Рішення без органу (деталізація)
   if (combined.includes('рішення')) {
     if (combined.includes('рнбо') && current_slug !== 'rnbo_decision' && current_slug !== 'presidential_decree') {
@@ -348,7 +424,7 @@ export async function detectTypeAbsurdities(options?: {
   // Отримуємо документи
   let query = supabase
     .from('legislation_documents')
-    .select('rada_nreg, rada_dokid, title, document_type_slug, document_type, summary, r2_key')
+    .select('rada_nreg, rada_dokid, title, document_type_slug, document_type, summary, r2_key, document_number')
     .order('rada_nreg');
   
   if (limit) {
@@ -395,6 +471,7 @@ export async function detectTypeAbsurdities(options?: {
         organs: jsonData?.organs || null,
         current_slug: doc.document_type_slug as DocumentTypeSlug | null,
         current_ua_label: doc.document_type as string | null,
+        document_number: (doc as any).document_number || doc.rada_nreg || null,  // Для nreg suffix check
       });
       
       // Заповнюємо nreg/dokid

@@ -96,6 +96,7 @@ export async function backfillDocumentTypes(options?: {
         stru: jsonData?.stru || null,
         summary: summary,
         snippet: snippet,
+        document_number: doc.document_number || null,
       });
       
       const newSlug = enrichment.slug;

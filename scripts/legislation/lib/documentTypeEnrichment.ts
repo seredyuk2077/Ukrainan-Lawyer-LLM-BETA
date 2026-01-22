@@ -312,6 +312,37 @@ export function validateDocumentTypeConsistency(
     }
   }
   
+  // Правило 6: Розпорядження Голови ВРУ (prefix-based, КРИТИЧНЕ)
+  const normalizePrefix = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return text
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[\n\t\r]/g, ' ')
+      .replace(/["'«»]/g, '')
+      .substring(0, 200);
+  };
+  
+  const normalizedSnippet = normalizePrefix(snippet || title);
+  const normalizedTitle = normalizePrefix(title);
+  
+  if ((normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
+       normalizedSnippet.includes('ГОЛОВИ') && 
+       (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) ||
+      (normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') && 
+       normalizedTitle.includes('ГОЛОВИ') && 
+       (normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') || normalizedTitle.includes('ВРУ')))) {
+    if (slug !== 'vr_speaker_order') {
+      issues.push('CRITICAL: Розпорядження Голови ВРУ (prefix-based), але slug != vr_speaker_order');
+      suggestedSlug = 'vr_speaker_order';
+      // КРИТИЧНЕ: не може бути regulation/position
+      if (slug === 'regulation') {
+        issues.push(`CRITICAL: Розпорядження Голови ВРУ має slug=regulation (має бути vr_speaker_order)`);
+      }
+    }
+  }
+  
   // Правило 6: slug = law але є сигнали НБУ/ЦВК/Указ/Розпорядження/РНБО (КРИТИЧНЕ)
   if (slug === 'law') {
     if (combined.includes('нбу') || combined.includes('національний банк')) {
@@ -414,7 +445,14 @@ export async function enrichDocumentType(params: {
   }
 
   // 2. Heuristics-first
-  const heuristicsResult = guessDocumentTypeV2(params);
+  const heuristicsResult = guessDocumentTypeV2({
+    title: params.title,
+    typ: params.typ,
+    typn: params.typn,
+    organs: params.organs,
+    snippet: params.snippet,
+    document_number: params.document_number,
+  });
   
   if (heuristicsResult.confidence === 'high' || heuristicsResult.confidence === 'medium') {
     const info = getDocumentTypeInfo(heuristicsResult.slug);

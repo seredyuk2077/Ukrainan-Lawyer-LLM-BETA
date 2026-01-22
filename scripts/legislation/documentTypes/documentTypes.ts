@@ -15,6 +15,7 @@ export type DocumentTypeSlug =
   | 'cmu_resolution'      // Постанова КМУ
   | 'cmu_order'           // Розпорядження КМУ
   | 'vr_resolution'       // Постанова ВРУ
+  | 'vr_speaker_order'    // Розпорядження Голови ВРУ
   | 'presidential_decree' // Указ Президента
   | 'presidential_order'  // Розпоряження Президента
   | 'cec_resolution'      // Постанова ЦВК
@@ -90,6 +91,12 @@ export const DOCUMENT_TYPES: Record<DocumentTypeSlug, DocumentTypeInfo> = {
     label_uk: 'Постанова ВРУ',
     label_en: 'VRU Resolution',
     description: 'Постанова Верховної Ради України',
+  },
+  vr_speaker_order: {
+    slug: 'vr_speaker_order',
+    label_uk: 'Розпорядження Голови ВРУ',
+    label_en: 'VRU Speaker Order',
+    description: 'Розпорядження Голови Верховної Ради України',
   },
   presidential_decree: {
     slug: 'presidential_decree',
@@ -253,6 +260,8 @@ export function normalizeDocumentType(
     'постанова кабінету міністрів': 'cmu_resolution',
     'постанова вр': 'vr_resolution',
     'постанова верховної ради': 'vr_resolution',
+    'розпорядження голови вр': 'vr_speaker_order',
+    'розпорядження голови верховної ради': 'vr_speaker_order',
     'указ президента': 'presidential_decree',
     'розпоряження президента': 'presidential_order',
     'наказ': 'minister_order',
@@ -283,6 +292,7 @@ export function normalizeDocumentType(
   if (normalized.includes('закон') && !normalized.includes('про')) return 'law';
   if (normalized.includes('конституція')) return 'constitution';
   if (normalized.includes('постанова') && normalized.includes('кму')) return 'cmu_resolution';
+  if (normalized.includes('розпорядження') && normalized.includes('голови') && (normalized.includes('вр') || normalized.includes('верховної'))) return 'vr_speaker_order';
   if (normalized.includes('постанова') && (normalized.includes('вр') || normalized.includes('верховної'))) return 'vr_resolution';
   if (normalized.includes('указ') && normalized.includes('президента')) return 'presidential_decree';
   if (normalized.includes('розпоряження') && normalized.includes('президента')) return 'presidential_order';

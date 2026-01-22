@@ -22,10 +22,56 @@ export function guessDocumentTypeV2(params: {
   typn?: string | null;
   organs?: any;
   stru?: any[];
+  snippet?: string | null;  // Для prefix-sniff
+  document_number?: string | null;  // Для nreg suffix check
 }): DocumentTypeGuessResult {
-  const { title, typ, typn, organs, stru } = params;
+  const { title, typ, typn, organs, stru, snippet, document_number } = params;
   
   const lowerTitle = title.toLowerCase();
+  
+  // 0. PREFIX-SNIFF: Жорсткі правила на основі перших рядків тексту (ВИКОНУЮТЬСЯ ПЕРШИМИ)
+  // Нормалізуємо snippet для перевірки
+  const normalizePrefix = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return text
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ')  // collapse whitespace
+      .replace(/[\n\t\r]/g, ' ')
+      .replace(/["'«»]/g, '')
+      .substring(0, 200);  // перші 200 символів
+  };
+  
+  const normalizedSnippet = normalizePrefix(snippet || title);
+  
+  // Правило 1: Розпорядження Голови ВРУ (prefix-based)
+  if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
+      normalizedSnippet.includes('ГОЛОВИ') && 
+      (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) {
+    return {
+      slug: 'vr_speaker_order',
+      confidence: 'high',
+      source: 'heuristics',
+      rationale: 'prefix-sniff: Розпорядження Голови ВРУ',
+    };
+  }
+  
+  // Правило 2: nreg/document_number suffix check (-РГ)
+  if (document_number) {
+    const normalizedNreg = document_number.toUpperCase().trim();
+    if (normalizedNreg.endsWith('-РГ') || normalizedNreg.endsWith('-РГ')) {
+      // Додаткова перевірка: чи title/snippet підтверджує
+      if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
+          (normalizedSnippet.includes('ГОЛОВИ') || normalizedSnippet.includes('ВЕРХОВНОЇ'))) {
+        return {
+          slug: 'vr_speaker_order',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: 'nreg suffix -РГ + prefix confirmation',
+        };
+      }
+    }
+  }
   
   // 1. Typ-based heuristics (найнадійніші)
   if (typ !== null && typ !== undefined) {
