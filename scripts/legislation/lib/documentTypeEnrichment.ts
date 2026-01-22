@@ -34,12 +34,20 @@ function generateFingerprint(params: {
   typ?: number | null;
   typn?: string | null;
   organs?: any;
+  summary?: string | null;
+  snippet?: string | null;
 }): string {
+  // ВАЖЛИВО: fingerprint має включати summary/snippet hash, щоб не кешувати помилки
+  const summaryHash = params.summary ? createHash('sha256').update(params.summary.substring(0, 200), 'utf-8').digest('hex').slice(0, 8) : '';
+  const snippetHash = params.snippet ? createHash('sha256').update(params.snippet.substring(0, 200), 'utf-8').digest('hex').slice(0, 8) : '';
+  
   const key = JSON.stringify({
     title: params.title.trim().toLowerCase(),
     typ: params.typ,
     typn: params.typn,
     organs: typeof params.organs === 'string' ? params.organs : JSON.stringify(params.organs),
+    summary_hash: summaryHash,
+    snippet_hash: snippetHash,
   });
   return createHash('sha256').update(key, 'utf-8').digest('hex').slice(0, 16);
 }
@@ -283,28 +291,49 @@ function validateDocumentTypeConsistency(
     }
   }
   
-  // Правило 5: РНБО в summary/snippet але slug != rnbo_decision
-  if ((lowerSummary.includes('рнбо') || lowerSummary.includes('рада національної безпеки')) ||
-      (lowerSnippet.includes('рнбо') || lowerSnippet.includes('рада національної безпеки'))) {
+  // Правило 5: РНБО в summary/snippet/title але slug != rnbo_decision (КРИТИЧНЕ)
+  if ((lowerSummary.includes('рнбо') || lowerSummary.includes('рада національної безпеки') || lowerSummary.includes('ради національної безпеки')) ||
+      (lowerSnippet.includes('рнбо') || lowerSnippet.includes('рада національної безпеки') || lowerSnippet.includes('ради національної безпеки')) ||
+      (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки') || lowerTitle.includes('ради національної безпеки'))) {
     // Виняток: якщо це "Указ про введення в дію рішення РНБО" → presidential_decree OK
-    if (!combined.includes('указ про введення в дію') && slug !== 'rnbo_decision') {
-      issues.push('summary/snippet: РНБО, але slug != rnbo_decision');
+    if (combined.includes('указ про введення в дію') || combined.includes('указом президента')) {
+      // Це указ про введення в дію рішення РНБО → presidential_decree правильний
+      if (slug !== 'presidential_decree') {
+        issues.push('summary/snippet/title: Указ про введення в дію рішення РНБО, але slug != presidential_decree');
+        suggestedSlug = 'presidential_decree';
+      }
+    } else if (slug !== 'rnbo_decision') {
+      issues.push('summary/snippet/title: РНБО, але slug != rnbo_decision');
+      suggestedSlug = 'rnbo_decision';
+      // КРИТИЧНЕ: РНБО не має бути law/code
+      if (slug === 'law' || slug === 'code') {
+        issues.push(`CRITICAL: РНБО документ має slug=${slug} (має бути rnbo_decision)`);
+      }
     }
   }
   
-  // Правило 6: slug = law але є сигнали НБУ/ЦВК/Указ/Розпорядження/РНБО
+  // Правило 6: slug = law але є сигнали НБУ/ЦВК/Указ/Розпорядження/РНБО (КРИТИЧНЕ)
   if (slug === 'law') {
     if (combined.includes('нбу') || combined.includes('національний банк')) {
       issues.push('slug=law, але є сигнали НБУ (має бути nbu_*)');
+      suggestedSlug = combined.includes('повідомлення') || combined.includes('лист') ? 'nbu_letter' : 'nbu_resolution';
     }
     if (combined.includes('цвк') || combined.includes('центральна виборча')) {
       issues.push('slug=law, але є сигнали ЦВК (має бути cec_resolution)');
+      suggestedSlug = 'cec_resolution';
     }
     if (combined.includes('указ') && combined.includes('президент')) {
       issues.push('slug=law, але є сигнали Указ Президента (має бути presidential_decree)');
+      suggestedSlug = 'presidential_decree';
     }
     if (combined.includes('розпорядження') && (combined.includes('кму') || combined.includes('кабінет'))) {
       issues.push('slug=law, але є сигнали Розпорядження КМУ (має бути cmu_order)');
+      suggestedSlug = 'cmu_order';
+    }
+    // КРИТИЧНЕ: РНБО не може бути law
+    if (combined.includes('рнбо') || combined.includes('рада національної безпеки') || combined.includes('ради національної безпеки')) {
+      issues.push('CRITICAL: slug=law, але є сигнали РНБО (має бути rnbo_decision)');
+      suggestedSlug = 'rnbo_decision';
     }
   }
   
@@ -352,16 +381,20 @@ export async function enrichDocumentType(params: {
       params.snippet
     );
     
-    // Якщо валідація fail → перевизначаємо slug на основі suggested_slug
+    // Якщо валідація fail → перевизначаємо slug на основі suggested_slug (КРИТИЧНЕ override)
     let finalSlug = cached.slug;
     let finalConfidence = cached.confidence;
     
     if (validation.status === 'fail') {
-      // Якщо є suggested_slug з валідації → використовуємо його
+      // Якщо є suggested_slug з валідації → використовуємо його (КРИТИЧНЕ override)
       if (validation.suggested_slug) {
         finalSlug = validation.suggested_slug;
-        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet
-      } else if (validation.issues.some(i => i.includes('slug=law'))) {
+        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet/title
+        // КРИТИЧНЕ: якщо є CRITICAL issues (RNBO_AS_LAW, CEC_AS_CMU, etc) → завжди override
+        if (validation.issues.some(i => i.includes('CRITICAL') || i.includes('slug=law') || i.includes('slug=code'))) {
+          finalConfidence = 'high';
+        }
+      } else if (validation.issues.some(i => i.includes('slug=law') || i.includes('slug=code'))) {
         // Критичний конфлікт без suggested_slug → ставимо unknown
         finalSlug = 'unknown';
         finalConfidence = 'low';
@@ -399,11 +432,15 @@ export async function enrichDocumentType(params: {
     let finalConfidence = heuristicsResult.confidence;
     
     if (validation.status === 'fail') {
-      // Якщо є suggested_slug з валідації → використовуємо його
+      // Якщо є suggested_slug з валідації → використовуємо його (КРИТИЧНЕ override)
       if (validation.suggested_slug) {
         finalSlug = validation.suggested_slug;
-        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet
-      } else if (validation.issues.some(i => i.includes('slug=law'))) {
+        finalConfidence = 'high'; // Високий confidence бо базується на summary/snippet/title
+        // КРИТИЧНЕ: якщо є CRITICAL issues (RNBO_AS_LAW, CEC_AS_CMU, etc) → завжди override
+        if (validation.issues.some(i => i.includes('CRITICAL') || i.includes('slug=law') || i.includes('slug=code'))) {
+          finalConfidence = 'high';
+        }
+      } else if (validation.issues.some(i => i.includes('slug=law') || i.includes('slug=code'))) {
         // Критичний конфлікт без suggested_slug → ставимо unknown
         finalSlug = 'unknown';
         finalConfidence = 'low';

@@ -368,6 +368,19 @@ program
   });
 
 program
+  .command('detect-type-absurdities')
+  .description('Системний детектор абсурдних класифікацій document_type (PHASE 1)')
+  .option('--limit <n>', 'Кількість документів для перевірки')
+  .option('--only-red', 'Тільки CRITICAL findings')
+  .action(async (options) => {
+    const { detectTypeAbsurdities } = await import('./commands/detect-type-absurdities.js');
+    await detectTypeAbsurdities({
+      limit: options.limit ? Number(options.limit) : undefined,
+      onlyRed: Boolean(options.onlyRed),
+    });
+  });
+
+program
   .command('collect-mismatch-evidence')
   .description('Збір "golden mismatch list" для валідації типів (PHASE 22)')
   .option('--limit <n>', 'Кількість документів для перевірки', '20')

@@ -320,6 +320,29 @@ export function guessDocumentTypeV2(params: {
     };
   }
   
+  // РНБО: Рішення РНБО (ВАЖЛИВО: перевіряти ПЕРЕД загальними правилами)
+  if (lowerTitle.includes('рішення') &&
+      (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки') ||
+       lowerTitle.includes('ради національної безпеки'))) {
+    return {
+      slug: 'rnbo_decision',
+      confidence: 'high',
+      source: 'heuristics',
+      rationale: 'title indicates RNBO Decision',
+    };
+  }
+  
+  // РНБО: загальна перевірка (якщо не в title, але в summary/snippet)
+  if (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки') ||
+      lowerTitle.includes('ради національної безпеки')) {
+    return {
+      slug: 'rnbo_decision',
+      confidence: 'high',
+      source: 'heuristics',
+      rationale: 'title indicates RNBO',
+    };
+  }
+  
   // Окрема думка судді КСУ (ВАЖЛИВО: перевіряти ПЕРШИМ, перед загальним court_opinion)
   if (lowerTitle.includes('окрема думка') && 
       (lowerTitle.includes('ксу') || lowerTitle.includes('конституційний суд') || 
