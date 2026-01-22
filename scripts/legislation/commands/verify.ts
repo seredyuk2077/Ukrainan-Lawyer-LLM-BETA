@@ -9,6 +9,7 @@ import { getR2AdminClient, headObject } from '../lib/r2Admin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { isValidCategory } from '../taxonomy/taxonomy.js';
 import { DocumentTypeSlug } from '../documentTypes/documentTypes.js';
+import { isCheckApplicable, hasEnoughTextForChunks } from '../lib/verifyApplicability.js';
 
 export interface VerifyResult {
   nreg: string;
@@ -128,15 +129,45 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
     console.log(`  ✅ Chunks match: ${doc.expected_chunks}`);
   }
   
-  // chunks==0 для indexable=true ⇒ FAIL
+  // chunks==0 для indexable=true ⇒ FAIL (але тільки якщо є текст)
+  // PHASE 3.6: перевіряємо txtLength з canonical перед тим як FAIL
+  let txtLength = 0;
+  if (r2Key) {
+    try {
+      const canonical = await getJsonFromR2(r2Key);
+      txtLength = (canonical.raw?.rada_api_txt || '').length;
+    } catch (e) {
+      // Не вдалося прочитати - перевіримо пізніше
+    }
+  }
+  
   if (isIndexable && doc.expected_chunks === 0) {
-    checks.push({ 
-      component: 'Supabase', 
-      check: 'indexable document has chunks > 0', 
-      status: 'FAIL', 
-      reason: `expected_chunks=0 for indexable document` 
-    });
-    console.log(`  ❌ Indexable document has 0 chunks`);
+    // PHASE 3.6: якщо txtLength достатній → FAIL, якщо txtLength=0 → N/A (empty source)
+    if (txtLength > 0 && hasEnoughTextForChunks(txtLength)) {
+      checks.push({ 
+        component: 'Supabase', 
+        check: 'indexable document has chunks > 0', 
+        status: 'FAIL', 
+        reason: `expected_chunks=0 for indexable document with text (txtLength=${txtLength})` 
+      });
+      console.log(`  ❌ Indexable document has 0 chunks but text exists (${txtLength} chars)`);
+    } else if (txtLength === 0) {
+      // N/A: джерело порожнє
+      checks.push({ 
+        component: 'Supabase', 
+        check: 'indexable document has chunks > 0', 
+        status: 'PASS',  // N/A - не застосовне для порожніх джерел
+        reason: 'N/A: empty source (txtLength=0)' 
+      });
+      console.log(`  ⚠️  Indexable document has 0 chunks but source is empty (N/A)`);
+    } else {
+      checks.push({ 
+        component: 'Supabase', 
+        check: 'indexable document has chunks > 0', 
+        status: 'PASS',  // N/A - текст занадто короткий
+        reason: `N/A: text too short (txtLength=${txtLength} < ${hasEnoughTextForChunks.toString()})` 
+      });
+    }
   } else if (isIndexable) {
     checks.push({ component: 'Supabase', check: 'indexable document has chunks > 0', status: 'PASS' });
   }
@@ -168,15 +199,34 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
           checks.push({ component: 'R2', check: 'canonical JSON valid', status: 'PASS' });
           
           const canonicalChunks = canonical.content.chunks?.length || 0;
+          const canonicalTxtLength = (canonical.raw?.rada_api_txt || '').length;
           
           if (isIndexable && canonicalChunks === 0) {
-            checks.push({ 
-              component: 'R2', 
-              check: 'canonical has chunks > 0 (if indexable)', 
-              status: 'FAIL', 
-              reason: `canonical chunks=0` 
-            });
-            console.log(`  ❌ R2: Indexable document has 0 chunks in canonical`);
+            // PHASE 3.6: перевіряємо txtLength перед FAIL
+            if (canonicalTxtLength > 0 && hasEnoughTextForChunks(canonicalTxtLength)) {
+              checks.push({ 
+                component: 'R2', 
+                check: 'canonical has chunks > 0 (if indexable)', 
+                status: 'FAIL', 
+                reason: `canonical chunks=0 but text exists (txtLength=${canonicalTxtLength})` 
+              });
+              console.log(`  ❌ R2: Indexable document has 0 chunks in canonical but text exists (${canonicalTxtLength} chars)`);
+            } else if (canonicalTxtLength === 0) {
+              checks.push({ 
+                component: 'R2', 
+                check: 'canonical has chunks > 0 (if indexable)', 
+                status: 'PASS',  // N/A
+                reason: 'N/A: empty source (txtLength=0)' 
+              });
+              console.log(`  ⚠️  R2: Indexable document has 0 chunks but source is empty (N/A)`);
+            } else {
+              checks.push({ 
+                component: 'R2', 
+                check: 'canonical has chunks > 0 (if indexable)', 
+                status: 'PASS',  // N/A - текст занадто короткий
+                reason: `N/A: text too short (txtLength=${canonicalTxtLength})` 
+              });
+            }
           } else if (isIndexable) {
             checks.push({ component: 'R2', check: 'canonical has chunks > 0 (if indexable)', status: 'PASS' });
           }

@@ -449,26 +449,34 @@ export async function parseContentUnits(
         strategy: txtStrategy, 
         reason: `TXT fallback: ${txtStrategy}` 
       };
-    } else if (txt.length > 500) {
-      // Last resort для неважливих документів теж
-      const paragraphs = txt.split(/\n\s*\n/).filter(p => p.trim().length > 50);
+    } else if (txt && txt.length > 100) {
+      // PHASE 3.6: Last resort для ВСІХ документів з текстом (не тільки важливих)
+      // Гарантуємо мінімум 1 chunk якщо txtLength > 100
+      let paragraphs = txt.split(/\n\s*\n/).filter(p => p.trim().length > 50);
+      
       if (paragraphs.length === 0) {
+        // Спробуємо розбити по реченнях
         const sentences = txt.match(/[^.!?]+[.!?]+/g) || [];
-        let currentPara = '';
-        for (const sentence of sentences) {
-          currentPara += sentence.trim() + ' ';
-          if (currentPara.length > 500) {
+        if (sentences.length > 0) {
+          let currentPara = '';
+          for (const sentence of sentences) {
+            currentPara += sentence.trim() + ' ';
+            if (currentPara.length > 500) {
+              paragraphs.push(currentPara.trim());
+              currentPara = '';
+            }
+          }
+          if (currentPara.trim().length > 50) {
             paragraphs.push(currentPara.trim());
-            currentPara = '';
           }
         }
-        if (currentPara.trim().length > 50) {
-          paragraphs.push(currentPara.trim());
-        }
       }
+      
+      // Якщо все ще порожньо — робимо один unit з усього тексту
       if (paragraphs.length === 0 && txt.length > 100) {
-        paragraphs.push(txt);
+        paragraphs = [txt];
       }
+      
       units = paragraphs.map((text, i) => ({
         unit_type: 'paragraph' as UnitType,
         number: String(i + 1),
@@ -477,11 +485,13 @@ export async function parseContentUnits(
         hierarchy: {},
         source: {},
       }));
+      
       if (units.length > 0) {
         strategyResult = {
           strategy: 'fallback',
           reason: `Last resort: paragraph-based splitting (${units.length} units)`,
         };
+        requiresFallback = true;
       }
     }
   }
