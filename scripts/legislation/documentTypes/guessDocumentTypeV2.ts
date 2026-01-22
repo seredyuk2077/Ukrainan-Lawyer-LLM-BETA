@@ -423,31 +423,19 @@ export function guessDocumentTypeV2(params: {
     };
   }
   
-  // РНБО: Рішення РНБО (ВАЖЛИВО: перевіряти ПЕРЕД загальними правилами)
-  // PHASE 3.4: перевіряємо також summary (бо там може бути "Рішення Ради національної безпеки")
-  const lowerSummary = (summary || '').toLowerCase();
-  const combinedText = `${lowerTitle} ${lowerSummary}`;
-  
-  if (combinedText.includes('рішення') &&
-      (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
-       combinedText.includes('ради національної безпеки'))) {
-    return {
-      slug: 'rnbo_decision',
-      confidence: 'high',
-      source: 'heuristics',
-      rationale: 'title/summary indicates RNBO Decision',
-    };
-  }
-  
   // РНБО: загальна перевірка (якщо не в title, але в summary/snippet)
+  // Використовуємо вже оголошені lowerSummary та combinedText з секції 0.5
   if (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
       combinedText.includes('ради національної безпеки')) {
-    return {
-      slug: 'rnbo_decision',
-      confidence: 'high',
-      source: 'heuristics',
-      rationale: 'title/summary indicates RNBO',
-    };
+    // Перевіряємо чи це не "Указ про введення в дію рішення РНБО"
+    if (!combinedText.includes('указ про введення в дію') && !combinedText.includes('указом президента')) {
+      return {
+        slug: 'rnbo_decision',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: 'title/summary indicates RNBO',
+      };
+    }
   }
   
   // Окрема думка судді КСУ (ВАЖЛИВО: перевіряти ПЕРШИМ, перед загальним court_opinion)
