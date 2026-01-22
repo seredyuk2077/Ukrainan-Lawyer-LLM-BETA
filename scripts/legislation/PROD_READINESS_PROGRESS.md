@@ -93,5 +93,15 @@
 ## Поточний статус
 
 **Останнє оновлення:** 2026-01-22  
-**Поточний етап:** PHASE 0 (Baseline)  
-**Наступний крок:** PHASE 1 (Збір HARD 50)
+**Поточний етап:** Gate A (100) ✅ → PHASE 4 (Ручний аудит)  
+**Наступний крок:** Ручний аудит 20×2 документів
+
+### Прогрес:
+- ✅ PHASE 0: Baseline знято (62 docs)
+- ✅ PHASE 1: hard_batch_50.txt створено (38 нових nreg)
+- ✅ PHASE 2: Імпорт батчами по 10
+  - Batch 1: 10 docs → 73 total
+  - Batch 2: 10 docs → 82 total
+  - Batch 3: 10 docs → 91 total
+  - Batch 4: 8 docs → 100 total ✅
+- ✅ Gate A: total_docs=100, FAIL=0, CRITICAL=0
