@@ -1,0 +1,79 @@
+{
+  "dokid": 551486,
+  "orgid": 4,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "cured": 0,
+  "datred": 20260117,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260117,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 1920
+    }
+  ],
+  "eds_dates": {
+    "20260117": null
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260117
+    },
+    {
+      "podid": 1,
+      "poddat": 20260120
+    }
+  ],
+  "history": "20260117:4:|20260120:1:",
+  "history_chk": -1,
+  "links": "32#6:1#6:1#",
+  "minjust": "",
+  "n_vlas": "60/2026",
+  "nazva": "Про рішення Ради національної безпеки і оборони України \"Про застосування персональних спеціальних економічних та інших обмежувальних заходів (санкцій)\"",
+  "npix": 2,
+  "nreg": "60/2026",
+  "org": 4,
+  "organs": "4:20260117:60/2026",
+  "orgdat": 20260117,
+  "orgnum": "60/2026",
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260117,
+  "pridat": 20260117,
+  "publics": "20260120:9:№ 16",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 1920,
+  "status": 5,
+  "termcnt": 0,
+  "terms": [],
+  "typ": 3,
+  "types": 3
+}

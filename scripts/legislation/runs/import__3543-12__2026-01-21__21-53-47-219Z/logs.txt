@@ -1,0 +1,28 @@
+import:start 2026-01-21T21:53:47.396Z mode=add nreg=3543-12 dryRun=false resume=false
+r2:uploaded=true size=693286
+ai:enrichment=generating...
+ai:enrichment=generated category=defense_mobilization
+embeddings:progress=1/21 processed=3/61
+embeddings:progress=2/21 processed=6/61
+embeddings:progress=3/21 processed=9/61
+embeddings:progress=4/21 processed=12/61
+embeddings:progress=5/21 processed=15/61
+embeddings:progress=6/21 processed=18/61
+embeddings:progress=7/21 processed=21/61
+embeddings:progress=8/21 processed=24/61
+embeddings:progress=9/21 processed=27/61
+embeddings:progress=10/21 processed=30/61
+embeddings:progress=11/21 processed=33/61
+embeddings:progress=12/21 processed=36/61
+embeddings:progress=13/21 processed=39/61
+embeddings:progress=14/21 processed=42/61
+embeddings:progress=15/21 processed=45/61
+embeddings:progress=16/21 processed=48/61
+embeddings:progress=17/21 processed=51/61
+embeddings:progress=18/21 processed=54/61
+embeddings:progress=19/21 processed=57/61
+embeddings:progress=20/21 processed=60/61
+embeddings:progress=21/21 processed=61/61
+qdrant:upsert_progress=1/1
+job:completed id=8324cdb9-c38a-4473-bd47-9e25a731abbd
+import:done status=completed

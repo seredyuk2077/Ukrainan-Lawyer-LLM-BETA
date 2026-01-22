@@ -1,0 +1,81 @@
+{
+  "dokid": 551459,
+  "orgid": 2,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "cured": 0,
+  "datred": 20260119,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260119,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 1429
+    }
+  ],
+  "eds_dates": {
+    "20260119": null
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260119
+    },
+    {
+      "podid": 1,
+      "poddat": 20260119
+    }
+  ],
+  "history": "20260119:4:|20260119:1:",
+  "history_chk": -1,
+  "klasy": 1063,
+  "links": "",
+  "minjust": "",
+  "n_vlas": "30-р",
+  "nazva": "Про звільнення Андарака Р.В. з посади заступника Міністра енергетики України з питань цифрового розвитку, цифрових трансформацій і цифровізації",
+  "npix": 2,
+  "nreg": "30-2026-р",
+  "org": 2,
+  "organs": "2:20260119:30-р",
+  "orgdat": 20260119,
+  "orgnum": "30-р",
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260119,
+  "pridat": 20260119,
+  "publics": "20260122:9:№ 18",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 1429,
+  "status": 5,
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 6,
+  "types": 6
+}

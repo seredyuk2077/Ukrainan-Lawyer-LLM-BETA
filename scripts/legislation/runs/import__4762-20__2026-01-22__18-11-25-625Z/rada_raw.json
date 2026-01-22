@@ -1,0 +1,108 @@
+{
+  "dokid": 551360,
+  "orgid": 1,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "book": [
+    {
+      "id": "n9",
+      "bookid": "551360-1",
+      "nazva": "Перелік законопроектів, додатково включених до порядку денного чотирнадцятої сесії Верховної Ради України дев'ятого скликання",
+      "types": 35
+    }
+  ],
+  "bookids": {
+    "n9": 0
+  },
+  "bookmark": "7#1",
+  "cured": 0,
+  "datred": 20260115,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260115,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 5106
+    }
+  ],
+  "eds_dates": {
+    "20260115": null
+  },
+  "fbook": {
+    "n2": {
+      "g1.gif": "IMAGE"
+    }
+  },
+  "fname": {
+    "g1.gif": {
+      "id": "n2",
+      "name": "g1.gif",
+      "text": "IMAGE"
+    }
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260115
+    },
+    {
+      "podid": 1,
+      "poddat": 20260115
+    }
+  ],
+  "history": "20260115:4:|20260115:1:",
+  "history_chk": -1,
+  "klasy": "19|43",
+  "komitet": "",
+  "links": "41#1:1##",
+  "minjust": "",
+  "n_vlas": "4762-IX",
+  "nazva": "Про внесення змін до порядку денного чотирнадцятої сесії Верховної Ради України дев'ятого скликання",
+  "npix": 2,
+  "nreg": "4762-20",
+  "org": 1,
+  "organs": "1:20260115:4762-IX",
+  "orgdat": 20260115,
+  "orgnum": "4762-IX",
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260115,
+  "pridat": 20260115,
+  "projs": [],
+  "publics": "20260117:8:№ 11",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 5106,
+  "status": 5,
+  "tags": "",
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 2,
+  "types": "2|35"
+}

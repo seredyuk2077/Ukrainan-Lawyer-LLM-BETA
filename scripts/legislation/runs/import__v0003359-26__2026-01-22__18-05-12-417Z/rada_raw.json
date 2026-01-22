@@ -1,0 +1,77 @@
+{
+  "dokid": 551455,
+  "orgid": 47,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "cured": 0,
+  "datred": 20260119,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260119,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 5950
+    }
+  ],
+  "eds_dates": {
+    "20260119": null
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260119
+    }
+  ],
+  "history": "20260119:4:",
+  "history_chk": -1,
+  "klasy": "50|54",
+  "links": "12#6:6##",
+  "minjust": "",
+  "n_vlas": 3,
+  "nazva": "Про визнання Кравця Р.О. обраним народним депутатом України на позачергових виборах народних депутатів України 21 липня 2019 року в загальнодержавному багатомандатному виборчому окрузі",
+  "npix": 2,
+  "nreg": "v0003359-26",
+  "org": 47,
+  "organs": "47:20260119:3",
+  "orgdat": 20260119,
+  "orgnum": 3,
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260119,
+  "pridat": 20260119,
+  "publics": "20260121:8:№ 13|20260121:9:№ 17",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 5950,
+  "status": 0,
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 2,
+  "types": 2
+}

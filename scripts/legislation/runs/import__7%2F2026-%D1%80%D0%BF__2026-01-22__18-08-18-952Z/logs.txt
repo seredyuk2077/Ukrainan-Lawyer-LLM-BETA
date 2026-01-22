@@ -1,0 +1,8 @@
+import:start 2026-01-22T18:08:18.952Z mode=add nreg=7/2026-рп dryRun=false resume=false
+r2:uploaded=true size=8682
+ai:enrichment=generating...
+ai:enrichment=generated category=international_eu
+embeddings:progress=1/1 processed=1/1
+qdrant:upsert_progress=1/1
+job:completed id=a896feaa-7bac-4a30-a5d9-8a843b6aa92e
+import:done status=completed

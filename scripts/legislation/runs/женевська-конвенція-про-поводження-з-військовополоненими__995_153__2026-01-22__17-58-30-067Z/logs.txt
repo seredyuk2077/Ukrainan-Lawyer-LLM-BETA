@@ -1,0 +1,13 @@
+import:start 2026-01-22T17:58:30.069Z mode=add nreg=995_153 dryRun=false resume=false
+r2:uploaded=true size=879490
+ai:enrichment=cached (content_hash=a6c50541...)
+embeddings:progress=1/6 processed=32/170
+embeddings:progress=2/6 processed=64/170
+embeddings:progress=3/6 processed=96/170
+embeddings:progress=4/6 processed=128/170
+embeddings:progress=5/6 processed=160/170
+embeddings:progress=6/6 processed=170/170
+qdrant:upsert_progress=1/2
+qdrant:upsert_progress=2/2
+job:completed id=1b4bc114-3b9c-4e17-9e26-3dbbfe3d9b18
+import:done status=completed

@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "36-2026-п",
+    "title": "Про внесення змін до переліку платних послуг, які надаються підрозділами Міністерства внутрішніх справ, Національної поліції та Державної міграційної служби, і розміру плати за їх надання",
+    "content_hash": "4366d7655b32945bff0411cd5fa4fb4caeb8150e25d44b2ec248bb8852990024",
+    "r2_key": "legislation/other/36-2026-%D0%BF.json",
+    "expected_chunks": 1,
+    "qdrant": {
+      "chunks": 1,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__36-2026-%D0%BF__2026-01-22__18-15-39-475Z"
+  }
+}

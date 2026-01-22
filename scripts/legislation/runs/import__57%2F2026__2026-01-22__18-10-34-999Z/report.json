@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "57/2026",
+    "title": "Про звільнення С. Прилипка з посади заступника Керівника Державного управління справами",
+    "content_hash": "bd112d5e8300e2da7f25e62e3acaa7e22d8a41fbb25d1df2b72fa8dac6b3ecec",
+    "r2_key": "legislation/other/57%2F2026.json",
+    "expected_chunks": 1,
+    "qdrant": {
+      "chunks": 1,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__57%2F2026__2026-01-22__18-10-34-999Z"
+  }
+}

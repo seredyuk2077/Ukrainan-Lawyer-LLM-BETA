@@ -1,0 +1,8 @@
+import:start 2026-01-22T18:15:39.475Z mode=add nreg=36-2026-п dryRun=false resume=false
+r2:uploaded=true size=5856
+ai:enrichment=generating...
+ai:enrichment=generated category=border_migration
+embeddings:progress=1/1 processed=1/1
+qdrant:upsert_progress=1/1
+job:completed id=18b8014d-cda3-40a3-a3fa-88b433e35b6f
+import:done status=completed

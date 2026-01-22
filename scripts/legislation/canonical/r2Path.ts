@@ -6,8 +6,43 @@
 
 /**
  * Mapping категорій права на папки в R2
+ * Тепер використовуємо taxonomy slugs (з taxonomy/taxonomy.ts)
  */
-const CATEGORY_MAPPING: Record<string, string> = {
+import { TaxonomySlug, isValidCategory, TAXONOMY_V1 } from '../taxonomy/taxonomy.js';
+
+export const CATEGORY_TO_R2_FOLDER: Record<TaxonomySlug, string> = {
+  constitutional: 'constitutional',
+  criminal: 'criminal',
+  criminal_procedure: 'criminal',
+  civil: 'civil',
+  civil_procedure: 'civil',
+  administrative: 'administrative',
+  administrative_offenses: 'administrative',
+  labor_social: 'labor',
+  finance_banking: 'finance',
+  tax_customs: 'tax',
+  business_corporate: 'commercial',
+  property_real_estate: 'land',
+  construction_urban: 'land',
+  energy_utilities: 'energy',
+  defense_mobilization: 'defense',
+  national_security: 'security',
+  border_migration: 'migration',
+  anti_corruption: 'anti_corruption',
+  procurement: 'procurement',
+  healthcare: 'healthcare',
+  education_science: 'education',
+  environment: 'environment',
+  transport_infrastructure: 'transport',
+  local_government: 'local',
+  judiciary_justice: 'judiciary',
+  international_eu: 'international',
+  digital_data: 'digital',
+  other: 'other',
+};
+
+// Legacy mapping для сумісності (українські назви)
+const LEGACY_CATEGORY_MAPPING: Record<string, string> = {
   'цивільне': 'civil',
   'кримінальне': 'criminal',
   'трудове': 'labor',
@@ -23,10 +58,31 @@ const CATEGORY_MAPPING: Record<string, string> = {
 
 /**
  * Нормалізує категорію для R2 path
+ * Підтримує як taxonomy slugs, так і legacy українські назви
  */
 function normalizeCategory(category: string): string {
   const normalized = category.toLowerCase().trim();
-  return CATEGORY_MAPPING[normalized] || 'other';
+  
+  // Якщо це taxonomy slug
+  if (isValidCategory(normalized as TaxonomySlug)) {
+    return CATEGORY_TO_R2_FOLDER[normalized as TaxonomySlug];
+  }
+  
+  // Якщо це legacy українська назва
+  if (normalized in LEGACY_CATEGORY_MAPPING) {
+    return LEGACY_CATEGORY_MAPPING[normalized];
+  }
+  
+  // Якщо це українська назва з taxonomy (reverse lookup)
+  const foundSlug = Object.entries(TAXONOMY_V1).find(
+    ([_, label]) => label.toLowerCase() === normalized
+  )?.[0] as TaxonomySlug | undefined;
+  
+  if (foundSlug) {
+    return CATEGORY_TO_R2_FOLDER[foundSlug];
+  }
+  
+  return 'other';
 }
 
 /**
@@ -65,9 +121,12 @@ export function parseR2Key(r2Key: string): { category: string; nreg: string } | 
   const encodedNreg = match[2];
 
   // Знаходимо оригінальну категорію (reverse mapping)
-  const category = Object.entries(CATEGORY_MAPPING).find(
+  // Шукаємо taxonomy slug за R2 folder
+  const foundSlug = Object.entries(CATEGORY_TO_R2_FOLDER).find(
     ([_, folder]) => folder === categoryFolder
-  )?.[0] || categoryFolder;
+  )?.[0] as TaxonomySlug | undefined;
+  
+  const category = foundSlug || categoryFolder;
 
   const nreg = decodeURIComponent(encodedNreg);
 

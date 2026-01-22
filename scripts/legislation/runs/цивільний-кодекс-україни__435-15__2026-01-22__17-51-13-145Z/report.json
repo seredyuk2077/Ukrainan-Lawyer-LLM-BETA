@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "435-15",
+    "title": "Цивільний кодекс України",
+    "content_hash": "4303cbdd58e18c7b74e653e696acd035e382e440f06886fa4b403952f985f516",
+    "r2_key": "legislation/civil/435-15.json",
+    "expected_chunks": 1419,
+    "qdrant": {
+      "chunks": 1419,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/цивільний-кодекс-україни__435-15__2026-01-22__17-51-13-145Z"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "43-2026-п",
+    "title": "Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39",
+    "content_hash": "df1a92e6a326c275224916c6946953790a68506a023fe675f846e7d552e4003b",
+    "r2_key": "legislation/other/43-2026-%D0%BF.json",
+    "expected_chunks": 3,
+    "qdrant": {
+      "chunks": 3,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__43-2026-%D0%BF__2026-01-22__18-07-52-718Z"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "31-2026-п",
+    "title": "Про внесення змін до Порядку проведення іспитів на рівень володіння державною мовою",
+    "content_hash": "f02776f6104bbe84dcf244dd552f2326fba0f7b32d7e93b2de6df2909c8eb406",
+    "r2_key": "legislation/other/31-2026-%D0%BF.json",
+    "expected_chunks": 3,
+    "qdrant": {
+      "chunks": 3,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__31-2026-%D0%BF__2026-01-22__18-17-46-598Z"
+  }
+}

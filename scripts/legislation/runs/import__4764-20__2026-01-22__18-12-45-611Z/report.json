@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "4764-20",
+    "title": "Про посилення ролі української мови в утвердженні Української держави",
+    "content_hash": "77f0e2cd17479386747b2961981c72ad8859fa443250c82e00f679107f1c398f",
+    "r2_key": "legislation/other/4764-20.json",
+    "expected_chunks": 4,
+    "qdrant": {
+      "chunks": 4,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__4764-20__2026-01-22__18-12-45-611Z"
+  }
+}

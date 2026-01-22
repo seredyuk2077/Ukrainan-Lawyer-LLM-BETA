@@ -1,0 +1,143 @@
+{
+  "dokid": 551488,
+  "orgid": 914,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "book": [
+    {
+      "id": "n14",
+      "bookid": "551488-1",
+      "nazva": "Фізичні особи, до яких застосовуються персональні спеціальні економічні та інші обмежувальні заходи (санкції)",
+      "types": 219
+    },
+    {
+      "id": "n16",
+      "bookid": "551488-2",
+      "nazva": "Юридичні особи, до яких застосовуються персональні спеціальні економічні та інші обмежувальні заходи (санкції)",
+      "types": 219
+    }
+  ],
+  "bookids": {
+    "n14": 0,
+    "n16": 1
+  },
+  "bookmark": "3#2",
+  "cured": 0,
+  "datred": 20260117,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260117,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 4817
+    }
+  ],
+  "eds_dates": {
+    "20260117": null
+  },
+  "fbook": {
+    "n14": {
+      "f551488n18.docx": "ФІЗИЧНІ ОСОБИ"
+    },
+    "n16": {
+      "f551488n19.docx": "ЮРИДИЧНІ ОСОБИ"
+    },
+    "n2": {
+      "g1.gif": "IMAGE"
+    }
+  },
+  "fname": {
+    "f551488n18.docx": {
+      "id": "n14",
+      "book": "n14",
+      "name": "f551488n18.docx",
+      "text": "ФІЗИЧНІ ОСОБИ"
+    },
+    "f551488n19.docx": {
+      "id": "n16",
+      "book": "n16",
+      "name": "f551488n19.docx",
+      "text": "ЮРИДИЧНІ ОСОБИ"
+    },
+    "g1.gif": {
+      "id": "n2",
+      "name": "g1.gif",
+      "text": "IMAGE"
+    }
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260117
+    }
+  ],
+  "history": "20260117:4:",
+  "history_chk": -1,
+  "klasy": "",
+  "komitet": "",
+  "links": "30#6:2##",
+  "minjust": "",
+  "n_vlas": "",
+  "nazva": "Про застосування персональних спеціальних економічних та інших обмежувальних заходів (санкцій)",
+  "npix": 2,
+  "nreg": "n0002525-26",
+  "org": 914,
+  "organs": "914:20260117:",
+  "orgdat": 20260117,
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260117,
+  "pridat": 20260117,
+  "publics": "20260120:9:№ 16",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 133807,
+      "date": "22.01.26 10:55",
+      "filename": "/text/133/f551488n18.docx",
+      "filepath": "/data/docs/files/133/f551488n18.docx",
+      "name": "f551488n18.docx",
+      "size": 24341
+    },
+    {
+      "id": 133808,
+      "date": "22.01.26 10:55",
+      "filename": "/text/133/f551488n19.docx",
+      "filepath": "/data/docs/files/133/f551488n19.docx",
+      "name": "f551488n19.docx",
+      "size": 24523
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 4817,
+  "status": 0,
+  "tags": "",
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 22,
+  "types": "22|219"
+}

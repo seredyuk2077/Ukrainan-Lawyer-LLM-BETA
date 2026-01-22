@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "n0024500-26",
+    "title": "Про облікову ціну банківських металів",
+    "content_hash": "d5ce30fe95c6d0ad3a1edd3a7e3196c5de5baabd171e79d95487a24d7f31b33f",
+    "r2_key": "legislation/other/n0024500-26.json",
+    "expected_chunks": 1,
+    "qdrant": {
+      "chunks": 1,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__n0024500-26__2026-01-22__18-09-12-940Z"
+  }
+}

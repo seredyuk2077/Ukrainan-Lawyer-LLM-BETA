@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "57-95-п",
+    "title": "Про затвердження Правил перетинання державного кордону громадянами України",
+    "content_hash": "b3b5f8df48cae3d388e6da4e905529bd1b48208f66bcf3298feef1d0eca75aba",
+    "r2_key": "legislation/other/57-95-%D0%BF.json",
+    "expected_chunks": 69,
+    "qdrant": {
+      "chunks": 69,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__57-95-%D0%BF__2026-01-21__20-11-43-620Z"
+  }
+}

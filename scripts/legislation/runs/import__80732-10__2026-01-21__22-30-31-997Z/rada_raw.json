@@ -1,0 +1,4599 @@
+{
+  "dokid": 23498,
+  "orgid": 600,
+  "podid": 0,
+  "anotcnt": 0,
+  "anots": [],
+  "comped": 314,
+  "cured": 0,
+  "datcomp": 20250417,
+  "datred": 20250901,
+  "edcnt": 317,
+  "eds": [
+    {
+      "podid": 0,
+      "datred": 20250901,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "3620-20",
+      "size": 721483
+    },
+    {
+      "podid": 0,
+      "datred": 19961001,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "386/96-вр",
+      "size": 193934
+    },
+    {
+      "podid": 0,
+      "datred": 19961023,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "398/96-вр",
+      "size": 194178
+    },
+    {
+      "podid": 0,
+      "datred": 19961126,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "489/96-вр",
+      "size": 194356
+    },
+    {
+      "podid": 0,
+      "datred": 19961229,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "497/96-вр",
+      "size": 194694
+    },
+    {
+      "podid": 0,
+      "datred": 19970211,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "23/97-вр",
+      "size": 195334
+    },
+    {
+      "podid": 0,
+      "datred": 19970318,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "55/97-вр",
+      "size": 198525
+    },
+    {
+      "podid": 0,
+      "datred": 19970620,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "308/97-вр",
+      "size": 196920
+    },
+    {
+      "podid": 0,
+      "datred": 19971119,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "651/97-вр",
+      "size": 197326
+    },
+    {
+      "podid": 0,
+      "datred": 19971216,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "666/97-вр",
+      "size": 198809
+    },
+    {
+      "podid": 0,
+      "datred": 19980225,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "73/98-вр",
+      "size": 198957
+    },
+    {
+      "podid": 0,
+      "datred": 19980428,
+      "format": 1,
+      "pages": 4,
+      "pidstava": "210/98-вр",
+      "size": 199137
+    },
+    {
+      "podid": 0,
+      "datred": 19990119,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "352-14",
+      "size": 202481
+    },
+    {
+      "podid": 0,
+      "datred": 19990310,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "444-14",
+      "size": 202796
+    },
+    {
+      "podid": 0,
+      "datred": 19990324,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "557-14",
+      "size": 206764
+    },
+    {
+      "podid": 0,
+      "datred": 19990702,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "812-14",
+      "size": 208226
+    },
+    {
+      "podid": 0,
+      "datred": 19990708,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "863-14",
+      "size": 208226
+    },
+    {
+      "podid": 0,
+      "datred": 19990804,
+      "format": 1,
+      "gotov": 1,
+      "pages": 5,
+      "pidstava": "898-14",
+      "size": 208316
+    },
+    {
+      "podid": 0,
+      "datred": 19990827,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "998-14",
+      "size": 209165
+    },
+    {
+      "podid": 0,
+      "datred": 19991007,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1040-14",
+      "size": 210202
+    },
+    {
+      "podid": 0,
+      "datred": 19991019,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1080-14",
+      "size": 210578
+    },
+    {
+      "podid": 0,
+      "datred": 19991030,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1142-14",
+      "size": 210578
+    },
+    {
+      "podid": 0,
+      "datred": 19991207,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1228-14",
+      "size": 211969
+    },
+    {
+      "podid": 0,
+      "datred": 20000118,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1288-14",
+      "size": 212059
+    },
+    {
+      "podid": 0,
+      "datred": 20000119,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1342-14",
+      "size": 212883
+    },
+    {
+      "podid": 0,
+      "datred": 20000201,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1368-14",
+      "size": 214253
+    },
+    {
+      "podid": 0,
+      "datred": 20000225,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1381-14",
+      "size": 215455
+    },
+    {
+      "podid": 0,
+      "datred": 20000420,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1580-14,1685-14",
+      "size": 216483
+    },
+    {
+      "podid": 0,
+      "datred": 20000609,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1744-14",
+      "size": 216750
+    },
+    {
+      "podid": 0,
+      "datred": 20000823,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1929-14",
+      "size": 216901
+    },
+    {
+      "podid": 0,
+      "datred": 20000921,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1969-14,1986-14",
+      "size": 217364
+    },
+    {
+      "podid": 0,
+      "datred": 20001005,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2029-14",
+      "size": 217995
+    },
+    {
+      "podid": 0,
+      "datred": 20001019,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2056-14",
+      "size": 215458
+    },
+    {
+      "podid": 0,
+      "datred": 20001219,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2114-14",
+      "size": 216117
+    },
+    {
+      "podid": 0,
+      "datred": 20010211,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2171-14",
+      "size": 216217
+    },
+    {
+      "podid": 0,
+      "datred": 20010220,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2247-14",
+      "size": 216604
+    },
+    {
+      "podid": 0,
+      "datred": 20010505,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2350-14",
+      "size": 213995
+    },
+    {
+      "podid": 0,
+      "datred": 20010517,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2415-14",
+      "size": 213614
+    },
+    {
+      "podid": 0,
+      "datred": 20010524,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2443-14",
+      "size": 213110
+    },
+    {
+      "podid": 0,
+      "datred": 20010711,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2550-14",
+      "size": 213520
+    },
+    {
+      "podid": 0,
+      "datred": 20010913,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2686-14",
+      "size": 212943
+    },
+    {
+      "podid": 0,
+      "datred": 20011016,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2703-14",
+      "size": 213458
+    },
+    {
+      "podid": 0,
+      "datred": 20011031,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2747-14",
+      "size": 213988
+    },
+    {
+      "podid": 0,
+      "datred": 20011214,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2787-14",
+      "size": 214701
+    },
+    {
+      "podid": 0,
+      "datred": 20020116,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2888-14",
+      "size": 214832
+    },
+    {
+      "podid": 0,
+      "datred": 20020117,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2953-14",
+      "size": 215117
+    },
+    {
+      "podid": 0,
+      "datred": 20020307,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3048-14",
+      "size": 215653
+    },
+    {
+      "podid": 0,
+      "datred": 20021128,
+      "format": 1,
+      "gotov": 1,
+      "pages": 5,
+      "pidstava": "254-15",
+      "size": 215745
+    },
+    {
+      "podid": 0,
+      "datred": 20030129,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "394-15",
+      "size": 215912
+    },
+    {
+      "podid": 0,
+      "datred": 20030211,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "429-15",
+      "size": 219098
+    },
+    {
+      "podid": 0,
+      "datred": 20030312,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "552-15",
+      "size": 219098
+    },
+    {
+      "podid": 0,
+      "datred": 20030322,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "548-15",
+      "size": 219618
+    },
+    {
+      "podid": 0,
+      "datred": 20030425,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "666-15",
+      "size": 220043
+    },
+    {
+      "podid": 0,
+      "datred": 20030506,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "676-15",
+      "size": 220412
+    },
+    {
+      "podid": 0,
+      "datred": 20030605,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "743-15,749-15",
+      "size": 222737
+    },
+    {
+      "podid": 0,
+      "datred": 20030607,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "759-15",
+      "size": 223116
+    },
+    {
+      "podid": 0,
+      "datred": 20030611,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "249-15,762-15",
+      "size": 224708
+    },
+    {
+      "podid": 0,
+      "datred": 20030620,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "860-15",
+      "size": 224870
+    },
+    {
+      "podid": 0,
+      "datred": 20030801,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "662-15",
+      "size": 227437
+    },
+    {
+      "podid": 0,
+      "datred": 20030806,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1107-15",
+      "size": 227560
+    },
+    {
+      "podid": 0,
+      "datred": 20030809,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1128-15",
+      "size": 228173
+    },
+    {
+      "podid": 0,
+      "datred": 20030812,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1122-15",
+      "size": 230236
+    },
+    {
+      "podid": 0,
+      "datred": 20031002,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1155-15",
+      "size": 230596
+    },
+    {
+      "podid": 0,
+      "datred": 20031119,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1098-15",
+      "size": 230750
+    },
+    {
+      "podid": 0,
+      "datred": 20031209,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1254-15",
+      "size": 231268
+    },
+    {
+      "podid": 0,
+      "datred": 20031223,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1280-15,1299-15",
+      "size": 233709
+    },
+    {
+      "podid": 0,
+      "datred": 20040108,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1377-15",
+      "size": 233869
+    },
+    {
+      "podid": 0,
+      "datred": 20040302,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1410-15",
+      "size": 234099
+    },
+    {
+      "podid": 0,
+      "datred": 20040607,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1284-15",
+      "size": 235191
+    },
+    {
+      "podid": 0,
+      "datred": 20040608,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1725-15",
+      "size": 235508
+    },
+    {
+      "podid": 0,
+      "datred": 20040609,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1703-15,1723-15",
+      "size": 237706
+    },
+    {
+      "podid": 0,
+      "datred": 20040626,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1745-15",
+      "size": 238262
+    },
+    {
+      "podid": 0,
+      "datred": 20040708,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1805-15",
+      "size": 239706
+    },
+    {
+      "podid": 0,
+      "datred": 20040803,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1876-15",
+      "size": 239802
+    },
+    {
+      "podid": 0,
+      "datred": 20041214,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2197-15",
+      "size": 240557
+    },
+    {
+      "podid": 0,
+      "datred": 20050111,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2188-15",
+      "size": 241101
+    },
+    {
+      "podid": 0,
+      "datred": 20050113,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2247-15",
+      "size": 241376
+    },
+    {
+      "podid": 0,
+      "datred": 20050216,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2322-15",
+      "size": 241714
+    },
+    {
+      "podid": 0,
+      "datred": 20050622,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2600-15",
+      "size": 242231
+    },
+    {
+      "podid": 0,
+      "datred": 20050630,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2598-15,2635-15",
+      "size": 246632
+    },
+    {
+      "podid": 0,
+      "datred": 20051025,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2899-15",
+      "size": 248899
+    },
+    {
+      "podid": 0,
+      "datred": 20051213,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3108-15",
+      "size": 248948
+    },
+    {
+      "podid": 0,
+      "datred": 20060105,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "2806-15",
+      "size": 249216
+    },
+    {
+      "podid": 0,
+      "datred": 20060107,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3078-15",
+      "size": 249248
+    },
+    {
+      "podid": 0,
+      "datred": 20060114,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3201-15",
+      "size": 249864
+    },
+    {
+      "podid": 0,
+      "datred": 20060210,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3349-15",
+      "size": 250505
+    },
+    {
+      "podid": 0,
+      "datred": 20060302,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3336-15",
+      "size": 250647
+    },
+    {
+      "podid": 0,
+      "datred": 20060325,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3504-15",
+      "size": 251435
+    },
+    {
+      "podid": 0,
+      "datred": 20070101,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "3475-15",
+      "size": 252020
+    },
+    {
+      "podid": 0,
+      "datred": 20070112,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "435-16",
+      "size": 252232
+    },
+    {
+      "podid": 0,
+      "datred": 20070117,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "534-16",
+      "size": 252489
+    },
+    {
+      "podid": 0,
+      "datred": 20070120,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "577-16",
+      "size": 253518
+    },
+    {
+      "podid": 0,
+      "datred": 20070228,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "622-16",
+      "size": 253461
+    },
+    {
+      "podid": 0,
+      "datred": 20070311,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "424-16",
+      "size": 253341
+    },
+    {
+      "podid": 0,
+      "datred": 20070316,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "695-16",
+      "size": 253523
+    },
+    {
+      "podid": 0,
+      "datred": 20070331,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "736-16",
+      "size": 253879
+    },
+    {
+      "podid": 0,
+      "datred": 20070614,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "956-16",
+      "size": 254411
+    },
+    {
+      "podid": 0,
+      "datred": 20070619,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1033-16",
+      "size": 255409
+    },
+    {
+      "podid": 0,
+      "datred": 20070620,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1014-16",
+      "size": 255491
+    },
+    {
+      "podid": 0,
+      "datred": 20080101,
+      "format": 1,
+      "pages": 5,
+      "pidstava": "1026-16",
+      "size": 255488
+    },
+    {
+      "podid": 0,
+      "datred": 20080507,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "271-17",
+      "size": 256369
+    },
+    {
+      "podid": 0,
+      "datred": 20081116,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "586-17",
+      "size": 275271
+    },
+    {
+      "podid": 0,
+      "datred": 20090101,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "599-17",
+      "size": 275547
+    },
+    {
+      "podid": 0,
+      "datred": 20090114,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "801-17",
+      "size": 276917
+    },
+    {
+      "podid": 0,
+      "datred": 20090204,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "885-17",
+      "size": 271823
+    },
+    {
+      "podid": 0,
+      "datred": 20090311,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1027-17",
+      "size": 271945
+    },
+    {
+      "podid": 0,
+      "datred": 20090312,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "692-17",
+      "size": 273679
+    },
+    {
+      "podid": 0,
+      "datred": 20090430,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1180-17",
+      "size": 273870
+    },
+    {
+      "podid": 0,
+      "datred": 20090611,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1254-17",
+      "size": 274859
+    },
+    {
+      "podid": 0,
+      "datred": 20090613,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1386-17",
+      "size": 277635
+    },
+    {
+      "podid": 0,
+      "datred": 20090619,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1393-17",
+      "size": 277782
+    },
+    {
+      "podid": 0,
+      "datred": 20090625,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1435-17",
+      "size": 278162
+    },
+    {
+      "podid": 0,
+      "datred": 20090711,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1512-17",
+      "size": 278283
+    },
+    {
+      "podid": 0,
+      "datred": 20091208,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1708-17",
+      "size": 278416
+    },
+    {
+      "podid": 0,
+      "datred": 20100216,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1825-17,1827-17",
+      "size": 279805
+    },
+    {
+      "podid": 0,
+      "datred": 20100515,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2181-17",
+      "size": 280026
+    },
+    {
+      "podid": 0,
+      "datred": 20100630,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2299-17",
+      "size": 279451
+    },
+    {
+      "podid": 0,
+      "datred": 20100707,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2339-17",
+      "size": 279459
+    },
+    {
+      "podid": 0,
+      "datred": 20100722,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2479-17",
+      "size": 280409
+    },
+    {
+      "podid": 0,
+      "datred": 20100723,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2374-17",
+      "size": 280511
+    },
+    {
+      "podid": 0,
+      "datred": 20100727,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2430-17",
+      "size": 280837
+    },
+    {
+      "podid": 0,
+      "datred": 20100803,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2453-17",
+      "size": 283086
+    },
+    {
+      "podid": 0,
+      "datred": 20100820,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2258-17",
+      "size": 283540
+    },
+    {
+      "podid": 0,
+      "datred": 20101012,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2518-17",
+      "size": 284166
+    },
+    {
+      "podid": 0,
+      "datred": 20101016,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2558-17",
+      "size": 284354
+    },
+    {
+      "podid": 0,
+      "datred": 20110101,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "1508-17,2464-17,2511-17",
+      "size": 289294
+    },
+    {
+      "podid": 0,
+      "datred": 20110105,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2808-17",
+      "size": 287987
+    },
+    {
+      "podid": 0,
+      "datred": 20110106,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2742-17",
+      "size": 288642
+    },
+    {
+      "podid": 0,
+      "datred": 20110205,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2947-17",
+      "size": 288115
+    },
+    {
+      "podid": 0,
+      "datred": 20110308,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2677-17",
+      "size": 288187
+    },
+    {
+      "podid": 0,
+      "datred": 20110413,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3161-17",
+      "size": 289611
+    },
+    {
+      "podid": 0,
+      "datred": 20110415,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3163-17",
+      "size": 290117
+    },
+    {
+      "podid": 0,
+      "datred": 20110701,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3207-17",
+      "size": 293381
+    },
+    {
+      "podid": 0,
+      "datred": 20110705,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "2735-17",
+      "size": 294446
+    },
+    {
+      "podid": 0,
+      "datred": 20110714,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3530-17",
+      "size": 294495
+    },
+    {
+      "podid": 0,
+      "datred": 20110717,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3521-17",
+      "size": 294235
+    },
+    {
+      "podid": 0,
+      "datred": 20110805,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3532-17",
+      "size": 294493
+    },
+    {
+      "podid": 0,
+      "datred": 20110807,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3610-17",
+      "size": 294915
+    },
+    {
+      "podid": 0,
+      "datred": 20110813,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3565-17",
+      "size": 294801
+    },
+    {
+      "podid": 0,
+      "datred": 20110916,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3393-17",
+      "size": 292809
+    },
+    {
+      "podid": 0,
+      "datred": 20110918,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3045-17",
+      "size": 293324
+    },
+    {
+      "podid": 0,
+      "datred": 20111101,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3718-17",
+      "size": 296625
+    },
+    {
+      "podid": 0,
+      "datred": 20111109,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3830-17",
+      "size": 295639
+    },
+    {
+      "podid": 0,
+      "datred": 20111125,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3261-17",
+      "size": 296288
+    },
+    {
+      "podid": 0,
+      "datred": 20111218,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3384-17",
+      "size": 296867
+    },
+    {
+      "podid": 0,
+      "datred": 20120105,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "3720-17",
+      "size": 297859
+    },
+    {
+      "podid": 0,
+      "datred": 20120117,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "4025-17",
+      "size": 299566
+    },
+    {
+      "podid": 0,
+      "datred": 20120119,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "4220-17",
+      "size": 300521
+    },
+    {
+      "podid": 0,
+      "datred": 20120205,
+      "format": 1,
+      "pages": 6,
+      "pidstava": "4319-17",
+      "size": 301458
+    },
+    {
+      "podid": 0,
+      "datred": 20120321,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4444-17",
+      "size": 301632
+    },
+    {
+      "podid": 0,
+      "datred": 20120406,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4082-17",
+      "size": 301817
+    },
+    {
+      "podid": 0,
+      "datred": 20120419,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4565-17",
+      "size": 302125
+    },
+    {
+      "podid": 0,
+      "datred": 20120615,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4837-17",
+      "size": 302754
+    },
+    {
+      "podid": 0,
+      "datred": 20120617,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4847-17",
+      "size": 317443
+    },
+    {
+      "podid": 0,
+      "datred": 20120701,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "3454-17",
+      "size": 318092
+    },
+    {
+      "podid": 0,
+      "datred": 20120705,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4950-17",
+      "size": 318744
+    },
+    {
+      "podid": 0,
+      "datred": 20120802,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5065-17",
+      "size": 318798
+    },
+    {
+      "podid": 0,
+      "datred": 20120803,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5007-17",
+      "size": 318855
+    },
+    {
+      "podid": 0,
+      "datred": 20120815,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5076-17",
+      "size": 320946
+    },
+    {
+      "podid": 0,
+      "datred": 20120916,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "3778-17",
+      "size": 320932
+    },
+    {
+      "podid": 0,
+      "datred": 20120921,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4452-17",
+      "size": 322222
+    },
+    {
+      "podid": 0,
+      "datred": 20121013,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5289-17",
+      "size": 322340
+    },
+    {
+      "podid": 0,
+      "datred": 20121018,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5284-17",
+      "size": 322418
+    },
+    {
+      "podid": 0,
+      "datred": 20121104,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5316-17,5411-17",
+      "size": 323219
+    },
+    {
+      "podid": 0,
+      "datred": 20121118,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5456-17,5459-17",
+      "size": 323748
+    },
+    {
+      "podid": 0,
+      "datred": 20121119,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4652-17",
+      "size": 319319
+    },
+    {
+      "podid": 0,
+      "datred": 20121201,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5288-17",
+      "size": 321111
+    },
+    {
+      "podid": 0,
+      "datred": 20121202,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5463-17",
+      "size": 322737
+    },
+    {
+      "podid": 0,
+      "datred": 20121205,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5460-17",
+      "size": 322770
+    },
+    {
+      "podid": 0,
+      "datred": 20121209,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5462-17",
+      "size": 318544
+    },
+    {
+      "podid": 0,
+      "datred": 20121212,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5461-17",
+      "size": 318874
+    },
+    {
+      "podid": 0,
+      "datred": 20130101,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "3460-17,3613-17,5178-17,5518-17",
+      "size": 321415
+    },
+    {
+      "podid": 0,
+      "datred": 20130105,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5496-17,5502-17",
+      "size": 323546
+    },
+    {
+      "podid": 0,
+      "datred": 20130518,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "221-18",
+      "size": 324805
+    },
+    {
+      "podid": 0,
+      "datred": 20130608,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "243-18",
+      "size": 324901
+    },
+    {
+      "podid": 0,
+      "datred": 20130613,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "4709-17",
+      "size": 324799
+    },
+    {
+      "podid": 0,
+      "datred": 20130811,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "406-18",
+      "size": 323791
+    },
+    {
+      "podid": 0,
+      "datred": 20131023,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "590-18",
+      "size": 324050
+    },
+    {
+      "podid": 0,
+      "datred": 20131116,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "656-18",
+      "size": 327742
+    },
+    {
+      "podid": 0,
+      "datred": 20140101,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "5404-17,383-18",
+      "size": 328517
+    },
+    {
+      "podid": 0,
+      "datred": 20140122,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "721-18",
+      "size": 330041
+    },
+    {
+      "podid": 0,
+      "datred": 20140201,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "709-18",
+      "size": 331673
+    },
+    {
+      "podid": 0,
+      "datred": 20140202,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "732-18",
+      "size": 331951
+    },
+    {
+      "podid": 0,
+      "datred": 20140302,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "767-18",
+      "size": 332548
+    },
+    {
+      "podid": 0,
+      "datred": 20140427,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1207-18",
+      "size": 333773
+    },
+    {
+      "podid": 0,
+      "datred": 20140604,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1261-18",
+      "size": 334251
+    },
+    {
+      "podid": 0,
+      "datred": 20140608,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1275-18",
+      "size": 334344
+    },
+    {
+      "podid": 0,
+      "datred": 20140622,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1283-18",
+      "size": 333469
+    },
+    {
+      "podid": 0,
+      "datred": 20140707,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1258-18",
+      "size": 334218
+    },
+    {
+      "podid": 0,
+      "datred": 20140817,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1600-18",
+      "size": 334660
+    },
+    {
+      "podid": 0,
+      "datred": 20141026,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1697-18",
+      "size": 335683
+    },
+    {
+      "podid": 0,
+      "datred": 20141125,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1701-18",
+      "size": 336527
+    },
+    {
+      "podid": 0,
+      "datred": 20150101,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1648-18,77-19",
+      "size": 337004
+    },
+    {
+      "podid": 0,
+      "datred": 20150304,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "198-19",
+      "size": 337315
+    },
+    {
+      "podid": 0,
+      "datred": 20150305,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "158-19,187-19",
+      "size": 337634
+    },
+    {
+      "podid": 0,
+      "datred": 20150328,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "192-19",
+      "size": 337375
+    },
+    {
+      "podid": 0,
+      "datred": 20150401,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "77-19",
+      "size": 336219
+    },
+    {
+      "podid": 0,
+      "datred": 20150410,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "193-19",
+      "size": 335958
+    },
+    {
+      "podid": 0,
+      "datred": 20150426,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1700-18,198-19",
+      "size": 336958
+    },
+    {
+      "podid": 0,
+      "datred": 20150509,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "322-19",
+      "size": 337154
+    },
+    {
+      "podid": 0,
+      "datred": 20150628,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "222-19",
+      "size": 336314
+    },
+    {
+      "podid": 0,
+      "datred": 20150808,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "596-19",
+      "size": 352500
+    },
+    {
+      "podid": 0,
+      "datred": 20150809,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "576-19",
+      "size": 352649
+    },
+    {
+      "podid": 0,
+      "datred": 20150812,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "629-19",
+      "size": 352976
+    },
+    {
+      "podid": 0,
+      "datred": 20150822,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "649-19",
+      "size": 353199
+    },
+    {
+      "podid": 0,
+      "datred": 20150901,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "320-19",
+      "size": 353886
+    },
+    {
+      "podid": 0,
+      "datred": 20150920,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1602-18",
+      "size": 354100
+    },
+    {
+      "podid": 0,
+      "datred": 20150930,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "530-19",
+      "size": 354509
+    },
+    {
+      "podid": 0,
+      "datred": 20151006,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "597-19",
+      "size": 354689
+    },
+    {
+      "podid": 0,
+      "datred": 20151126,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "734-19,731-19",
+      "size": 355522
+    },
+    {
+      "podid": 0,
+      "datred": 20151228,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "901-19",
+      "size": 352348
+    },
+    {
+      "podid": 0,
+      "datred": 20160101,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "1314-18,834-19",
+      "size": 353674
+    },
+    {
+      "podid": 0,
+      "datred": 20160210,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "124-19",
+      "size": 353190
+    },
+    {
+      "podid": 0,
+      "datred": 20160401,
+      "format": 1,
+      "pages": 7,
+      "pidstava": "922-19",
+      "size": 353362
+    },
+    {
+      "podid": 0,
+      "datred": 20160404,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "888-19",
+      "size": 355076
+    },
+    {
+      "podid": 0,
+      "datred": 20160611,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "772-19",
+      "size": 355090
+    },
+    {
+      "podid": 0,
+      "datred": 20160618,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1379-19",
+      "size": 357253
+    },
+    {
+      "podid": 0,
+      "datred": 20161005,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1404-19",
+      "size": 359748
+    },
+    {
+      "podid": 0,
+      "datred": 20161102,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1666-19",
+      "size": 359870
+    },
+    {
+      "podid": 0,
+      "datred": 20161126,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1540-19",
+      "size": 358944
+    },
+    {
+      "podid": 0,
+      "datred": 20161130,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1723-19,1727-19",
+      "size": 359225
+    },
+    {
+      "podid": 0,
+      "datred": 20161204,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1742-19",
+      "size": 359385
+    },
+    {
+      "podid": 0,
+      "datred": 20170101,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1774-19",
+      "size": 359508
+    },
+    {
+      "podid": 0,
+      "datred": 20170105,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1798-19",
+      "size": 359624
+    },
+    {
+      "podid": 0,
+      "datred": 20170416,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1952-19",
+      "size": 362465
+    },
+    {
+      "podid": 0,
+      "datred": 20170426,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1977-19",
+      "size": 362699
+    },
+    {
+      "podid": 0,
+      "datred": 20170507,
+      "format": 1,
+      "pages": 8,
+      "pidstava": "1812-19",
+      "size": 362828
+    },
+    {
+      "podid": 0,
+      "datred": 20170610,
+      "format": 2,
+      "pages": 9,
+      "pidstava": "1817-19",
+      "size": 542696
+    },
+    {
+      "podid": 0,
+      "datred": 20170709,
+      "format": 2,
+      "pages": 9,
+      "pidstava": "2081-19",
+      "size": 543477
+    },
+    {
+      "podid": 0,
+      "datred": 20170719,
+      "format": 2,
+      "pages": 9,
+      "pidstava": "1982-19",
+      "size": 543997
+    },
+    {
+      "podid": 0,
+      "datred": 20170802,
+      "format": 2,
+      "pages": 9,
+      "pidstava": "2119-19",
+      "size": 544797
+    },
+    {
+      "podid": 0,
+      "datred": 20170803,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2136-19",
+      "size": 545705
+    },
+    {
+      "podid": 0,
+      "datred": 20170804,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2120-19",
+      "size": 546062
+    },
+    {
+      "podid": 0,
+      "datred": 20171026,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2109-19",
+      "size": 547733
+    },
+    {
+      "podid": 0,
+      "datred": 20171215,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2147а-19",
+      "size": 550221
+    },
+    {
+      "podid": 0,
+      "datred": 20171218,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2059-19",
+      "size": 551545
+    },
+    {
+      "podid": 0,
+      "datred": 20180101,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2245-19",
+      "size": 551716
+    },
+    {
+      "podid": 0,
+      "datred": 20180206,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2234-19",
+      "size": 556786
+    },
+    {
+      "podid": 0,
+      "datred": 20180429,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2293-19",
+      "size": 562655
+    },
+    {
+      "podid": 0,
+      "datred": 20180525,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2444-19",
+      "size": 563117
+    },
+    {
+      "podid": 0,
+      "datred": 20180723,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2118-19",
+      "size": 563835
+    },
+    {
+      "podid": 0,
+      "datred": 20180802,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2505-19",
+      "size": 564220
+    },
+    {
+      "podid": 0,
+      "datred": 20180828,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2475-19",
+      "size": 567290
+    },
+    {
+      "podid": 0,
+      "datred": 20180927,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2262-19",
+      "size": 594742
+    },
+    {
+      "podid": 0,
+      "datred": 20181231,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2444-19",
+      "size": 595368
+    },
+    {
+      "podid": 0,
+      "datred": 20190101,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2628-19",
+      "size": 596838
+    },
+    {
+      "podid": 0,
+      "datred": 20190111,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2646-19",
+      "size": 598727
+    },
+    {
+      "podid": 0,
+      "datred": 20190119,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2657-19",
+      "size": 599271
+    },
+    {
+      "podid": 0,
+      "datred": 20190202,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2501-19",
+      "size": 599815
+    },
+    {
+      "podid": 0,
+      "datred": 20190207,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2258-19,2473-19",
+      "size": 603471
+    },
+    {
+      "podid": 0,
+      "datred": 20190627,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2747-19",
+      "size": 603580
+    },
+    {
+      "podid": 0,
+      "datred": 20190703,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2740-19",
+      "size": 603593
+    },
+    {
+      "podid": 0,
+      "datred": 20190822,
+      "format": 2,
+      "pages": 10,
+      "pidstava": "2612-19",
+      "size": 604233
+    },
+    {
+      "podid": 0,
+      "datred": 20190925,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "54-20",
+      "size": 620264
+    },
+    {
+      "podid": 0,
+      "datred": 20191018,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "140-20",
+      "size": 621477
+    },
+    {
+      "podid": 0,
+      "datred": 20191019,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "165-20",
+      "size": 621667
+    },
+    {
+      "podid": 0,
+      "datred": 20191120,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "224-20",
+      "size": 621953
+    },
+    {
+      "podid": 0,
+      "datred": 20191218,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "139-20",
+      "size": 622357
+    },
+    {
+      "podid": 0,
+      "datred": 20191229,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "402-20",
+      "size": 622665
+    },
+    {
+      "podid": 0,
+      "datred": 20200101,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2754-19,198-20,293-20",
+      "size": 625777
+    },
+    {
+      "podid": 0,
+      "datred": 20200119,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "122-20",
+      "size": 628002
+    },
+    {
+      "podid": 0,
+      "datred": 20200213,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "440-20",
+      "size": 628288
+    },
+    {
+      "podid": 0,
+      "datred": 20200301,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "199-20",
+      "size": 628826
+    },
+    {
+      "podid": 0,
+      "datred": 20200317,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "530-20",
+      "size": 629804
+    },
+    {
+      "podid": 0,
+      "datred": 20200318,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "463-20",
+      "size": 630943
+    },
+    {
+      "podid": 0,
+      "datred": 20200419,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "114-20",
+      "size": 631902
+    },
+    {
+      "podid": 0,
+      "datred": 20200428,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "361-20",
+      "size": 632360
+    },
+    {
+      "podid": 0,
+      "datred": 20200607,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "554-20",
+      "size": 632998
+    },
+    {
+      "podid": 0,
+      "datred": 20200627,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "376-20",
+      "size": 633310
+    },
+    {
+      "podid": 0,
+      "datred": 20200701,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2617-19,79-20",
+      "size": 632008
+    },
+    {
+      "podid": 0,
+      "datred": 20200723,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "805-20",
+      "size": 633143
+    },
+    {
+      "podid": 0,
+      "datred": 20200813,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "768-20",
+      "size": 633754
+    },
+    {
+      "podid": 0,
+      "datred": 20201121,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1000-20",
+      "size": 634795
+    },
+    {
+      "podid": 0,
+      "datred": 20201129,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "943-20",
+      "size": 634480
+    },
+    {
+      "podid": 0,
+      "datred": 20201230,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1074-20",
+      "size": 634618
+    },
+    {
+      "podid": 0,
+      "datred": 20201231,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1080-20",
+      "size": 638737
+    },
+    {
+      "podid": 0,
+      "datred": 20210101,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "377-20",
+      "size": 639487
+    },
+    {
+      "podid": 0,
+      "datred": 20210304,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1187-20",
+      "size": 639390
+    },
+    {
+      "podid": 0,
+      "datred": 20210317,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1231-20",
+      "size": 644093
+    },
+    {
+      "podid": 0,
+      "datred": 20210321,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1206-20",
+      "size": 644791
+    },
+    {
+      "podid": 0,
+      "datred": 20210417,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1366-20,1367-20",
+      "size": 645565
+    },
+    {
+      "podid": 0,
+      "datred": 20210423,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1357-20",
+      "size": 647789
+    },
+    {
+      "podid": 0,
+      "datred": 20210427,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1320-20",
+      "size": 648133
+    },
+    {
+      "podid": 0,
+      "datred": 20210523,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1438-20",
+      "size": 649647
+    },
+    {
+      "podid": 0,
+      "datred": 20210527,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1423-20",
+      "size": 651282
+    },
+    {
+      "podid": 0,
+      "datred": 20210701,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "738-20",
+      "size": 652129
+    },
+    {
+      "podid": 0,
+      "datred": 20210721,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1542-20",
+      "size": 652148
+    },
+    {
+      "podid": 0,
+      "datred": 20210801,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1604-20",
+      "size": 652655
+    },
+    {
+      "podid": 0,
+      "datred": 20210808,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1684-20",
+      "size": 655307
+    },
+    {
+      "podid": 0,
+      "datred": 20211001,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1582-20",
+      "size": 666335
+    },
+    {
+      "podid": 0,
+      "datred": 20211125,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1888-20",
+      "size": 668502
+    },
+    {
+      "podid": 0,
+      "datred": 20211210,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1886-20",
+      "size": 670039
+    },
+    {
+      "podid": 0,
+      "datred": 20220101,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1054-20",
+      "size": 674775
+    },
+    {
+      "podid": 0,
+      "datred": 20220105,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1965-20",
+      "size": 675462
+    },
+    {
+      "podid": 0,
+      "datred": 20220211,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1995-20",
+      "size": 675921
+    },
+    {
+      "podid": 0,
+      "datred": 20220317,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2120-20",
+      "size": 676193
+    },
+    {
+      "podid": 0,
+      "datred": 20220427,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2200-20",
+      "size": 676696
+    },
+    {
+      "podid": 0,
+      "datred": 20220526,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1423-20",
+      "size": 680005
+    },
+    {
+      "podid": 0,
+      "datred": 20220716,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2704-19",
+      "size": 681703
+    },
+    {
+      "podid": 0,
+      "datred": 20221029,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2657-20,2658-20",
+      "size": 684277
+    },
+    {
+      "podid": 0,
+      "datred": 20221106,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2685-20,2690-20",
+      "size": 685270
+    },
+    {
+      "podid": 0,
+      "datred": 20221223,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2806-20",
+      "size": 685810
+    },
+    {
+      "podid": 0,
+      "datred": 20221229,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2803-20",
+      "size": 686001
+    },
+    {
+      "podid": 0,
+      "datred": 20230127,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2839-20",
+      "size": 692301
+    },
+    {
+      "podid": 0,
+      "datred": 20230320,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "1206-20",
+      "size": 691693
+    },
+    {
+      "podid": 0,
+      "datred": 20230415,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "3000-20",
+      "size": 692683
+    },
+    {
+      "podid": 0,
+      "datred": 20230729,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "3234-20",
+      "size": 693744
+    },
+    {
+      "podid": 0,
+      "datred": 20230820,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "3196-20",
+      "size": 695119
+    },
+    {
+      "podid": 0,
+      "datred": 20231014,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "2982-20",
+      "size": 695913
+    },
+    {
+      "podid": 0,
+      "datred": 20240519,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "3696-20",
+      "size": 697223
+    },
+    {
+      "podid": 0,
+      "datred": 20240809,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "3886-20",
+      "size": 698027
+    },
+    {
+      "podid": 0,
+      "datred": 20241025,
+      "format": 2,
+      "pages": 11,
+      "pidstava": "4009-20",
+      "size": 698027
+    },
+    {
+      "podid": 0,
+      "datred": 20241219,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "3733-20",
+      "size": 701580
+    },
+    {
+      "podid": 0,
+      "datred": 20250201,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "4200-20",
+      "size": 703857
+    },
+    {
+      "podid": 0,
+      "datred": 20250417,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "4316-20",
+      "size": 719496
+    },
+    {
+      "podid": 0,
+      "datred": 20250614,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "4240-20",
+      "size": 720477
+    },
+    {
+      "podid": 0,
+      "comment": "через 30 днів із дня опублікування ДСА України повідомлення про початок функціонування Єдиного державного реєстру виконавчих документів у газеті \"Голос України\"",
+      "datred": 30000101,
+      "format": 2,
+      "pages": 12,
+      "pidstava": "2147а-19",
+      "size": 721933
+    }
+  ],
+  "eds_dates": {
+    "19961001": 1,
+    "19961023": 2,
+    "19961126": 3,
+    "19961229": 4,
+    "19970211": 5,
+    "19970318": 6,
+    "19970620": 7,
+    "19971119": 8,
+    "19971216": 9,
+    "19980225": 10,
+    "19980428": 11,
+    "19990119": 12,
+    "19990310": 13,
+    "19990324": 14,
+    "19990702": 15,
+    "19990708": 16,
+    "19990804": 17,
+    "19990827": 18,
+    "19991007": 19,
+    "19991019": 20,
+    "19991030": 21,
+    "19991207": 22,
+    "20000118": 23,
+    "20000119": 24,
+    "20000201": 25,
+    "20000225": 26,
+    "20000420": 27,
+    "20000609": 28,
+    "20000823": 29,
+    "20000921": 30,
+    "20001005": 31,
+    "20001019": 32,
+    "20001219": 33,
+    "20010211": 34,
+    "20010220": 35,
+    "20010505": 36,
+    "20010517": 37,
+    "20010524": 38,
+    "20010711": 39,
+    "20010913": 40,
+    "20011016": 41,
+    "20011031": 42,
+    "20011214": 43,
+    "20020116": 44,
+    "20020117": 45,
+    "20020307": 46,
+    "20021128": 47,
+    "20030129": 48,
+    "20030211": 49,
+    "20030312": 50,
+    "20030322": 51,
+    "20030425": 52,
+    "20030506": 53,
+    "20030605": 54,
+    "20030607": 55,
+    "20030611": 56,
+    "20030620": 57,
+    "20030801": 58,
+    "20030806": 59,
+    "20030809": 60,
+    "20030812": 61,
+    "20031002": 62,
+    "20031119": 63,
+    "20031209": 64,
+    "20031223": 65,
+    "20040108": 66,
+    "20040302": 67,
+    "20040607": 68,
+    "20040608": 69,
+    "20040609": 70,
+    "20040626": 71,
+    "20040708": 72,
+    "20040803": 73,
+    "20041214": 74,
+    "20050111": 75,
+    "20050113": 76,
+    "20050216": 77,
+    "20050622": 78,
+    "20050630": 79,
+    "20051025": 80,
+    "20051213": 81,
+    "20060105": 82,
+    "20060107": 83,
+    "20060114": 84,
+    "20060210": 85,
+    "20060302": 86,
+    "20060325": 87,
+    "20070101": 88,
+    "20070112": 89,
+    "20070117": 90,
+    "20070120": 91,
+    "20070228": 92,
+    "20070311": 93,
+    "20070316": 94,
+    "20070331": 95,
+    "20070614": 96,
+    "20070619": 97,
+    "20070620": 98,
+    "20080101": 99,
+    "20080507": 100,
+    "20081116": 101,
+    "20090101": 102,
+    "20090114": 103,
+    "20090204": 104,
+    "20090311": 105,
+    "20090312": 106,
+    "20090430": 107,
+    "20090611": 108,
+    "20090613": 109,
+    "20090619": 110,
+    "20090625": 111,
+    "20090711": 112,
+    "20091208": 113,
+    "20100216": 114,
+    "20100515": 115,
+    "20100630": 116,
+    "20100707": 117,
+    "20100722": 118,
+    "20100723": 119,
+    "20100727": 120,
+    "20100803": 121,
+    "20100820": 122,
+    "20101012": 123,
+    "20101016": 124,
+    "20110101": 125,
+    "20110105": 126,
+    "20110106": 127,
+    "20110205": 128,
+    "20110308": 129,
+    "20110413": 130,
+    "20110415": 131,
+    "20110701": 132,
+    "20110705": 133,
+    "20110714": 134,
+    "20110717": 135,
+    "20110805": 136,
+    "20110807": 137,
+    "20110813": 138,
+    "20110916": 139,
+    "20110918": 140,
+    "20111101": 141,
+    "20111109": 142,
+    "20111125": 143,
+    "20111218": 144,
+    "20120105": 145,
+    "20120117": 146,
+    "20120119": 147,
+    "20120205": 148,
+    "20120321": 149,
+    "20120406": 150,
+    "20120419": 151,
+    "20120615": 152,
+    "20120617": 153,
+    "20120701": 154,
+    "20120705": 155,
+    "20120802": 156,
+    "20120803": 157,
+    "20120815": 158,
+    "20120916": 159,
+    "20120921": 160,
+    "20121013": 161,
+    "20121018": 162,
+    "20121104": 163,
+    "20121118": 164,
+    "20121119": 165,
+    "20121201": 166,
+    "20121202": 167,
+    "20121205": 168,
+    "20121209": 169,
+    "20121212": 170,
+    "20130101": 171,
+    "20130105": 172,
+    "20130518": 173,
+    "20130608": 174,
+    "20130613": 175,
+    "20130811": 176,
+    "20131023": 177,
+    "20131116": 178,
+    "20140101": 179,
+    "20140122": 180,
+    "20140201": 181,
+    "20140202": 182,
+    "20140302": 183,
+    "20140427": 184,
+    "20140604": 185,
+    "20140608": 186,
+    "20140622": 187,
+    "20140707": 188,
+    "20140817": 189,
+    "20141026": 190,
+    "20141125": 191,
+    "20150101": 192,
+    "20150304": 193,
+    "20150305": 194,
+    "20150328": 195,
+    "20150401": 196,
+    "20150410": 197,
+    "20150426": 198,
+    "20150509": 199,
+    "20150628": 200,
+    "20150808": 201,
+    "20150809": 202,
+    "20150812": 203,
+    "20150822": 204,
+    "20150901": 205,
+    "20150920": 206,
+    "20150930": 207,
+    "20151006": 208,
+    "20151126": 209,
+    "20151228": 210,
+    "20160101": 211,
+    "20160210": 212,
+    "20160401": 213,
+    "20160404": 214,
+    "20160611": 215,
+    "20160618": 216,
+    "20161005": 217,
+    "20161102": 218,
+    "20161126": 219,
+    "20161130": 220,
+    "20161204": 221,
+    "20170101": 222,
+    "20170105": 223,
+    "20170416": 224,
+    "20170426": 225,
+    "20170507": 226,
+    "20170610": 227,
+    "20170709": 228,
+    "20170719": 229,
+    "20170802": 230,
+    "20170803": 231,
+    "20170804": 232,
+    "20171026": 233,
+    "20171215": 234,
+    "20171218": 235,
+    "20180101": 236,
+    "20180206": 237,
+    "20180429": 238,
+    "20180525": 239,
+    "20180723": 240,
+    "20180802": 241,
+    "20180828": 242,
+    "20180927": 243,
+    "20181231": 244,
+    "20190101": 245,
+    "20190111": 246,
+    "20190119": 247,
+    "20190202": 248,
+    "20190207": 249,
+    "20190627": 250,
+    "20190703": 251,
+    "20190822": 252,
+    "20190925": 253,
+    "20191018": 254,
+    "20191019": 255,
+    "20191120": 256,
+    "20191218": 257,
+    "20191229": 258,
+    "20200101": 259,
+    "20200119": 260,
+    "20200213": 261,
+    "20200301": 262,
+    "20200317": 263,
+    "20200318": 264,
+    "20200419": 265,
+    "20200428": 266,
+    "20200607": 267,
+    "20200627": 268,
+    "20200701": 269,
+    "20200723": 270,
+    "20200813": 271,
+    "20201121": 272,
+    "20201129": 273,
+    "20201230": 274,
+    "20201231": 275,
+    "20210101": 276,
+    "20210304": 277,
+    "20210317": 278,
+    "20210321": 279,
+    "20210417": 280,
+    "20210423": 281,
+    "20210427": 282,
+    "20210523": 283,
+    "20210527": 284,
+    "20210701": 285,
+    "20210721": 286,
+    "20210801": 287,
+    "20210808": 288,
+    "20211001": 289,
+    "20211125": 290,
+    "20211210": 291,
+    "20220101": 292,
+    "20220105": 293,
+    "20220211": 294,
+    "20220317": 295,
+    "20220427": 296,
+    "20220526": 297,
+    "20220716": 298,
+    "20221029": 299,
+    "20221106": 300,
+    "20221223": 301,
+    "20221229": 302,
+    "20230127": 303,
+    "20230320": 304,
+    "20230415": 305,
+    "20230729": 306,
+    "20230820": 307,
+    "20231014": 308,
+    "20240519": 309,
+    "20240809": 310,
+    "20241025": 311,
+    "20241219": 312,
+    "20250201": 313,
+    "20250417": 314,
+    "20250614": 315,
+    "20250901": null,
+    "30000101": 316
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 19841207
+    },
+    {
+      "podid": 20,
+      "pidstava": "8074-10",
+      "poddat": 19850601
+    },
+    {
+      "podid": 0,
+      "pidstava": "386/96-вр",
+      "poddat": 19961001
+    },
+    {
+      "podid": 0,
+      "pidstava": "398/96-вр",
+      "poddat": 19961023
+    },
+    {
+      "podid": 0,
+      "pidstava": "489/96-вр",
+      "poddat": 19961126
+    },
+    {
+      "podid": 0,
+      "pidstava": "497/96-вр",
+      "poddat": 19961229
+    },
+    {
+      "podid": 0,
+      "pidstava": "23/97-вр",
+      "poddat": 19970211
+    },
+    {
+      "podid": 0,
+      "pidstava": "55/97-вр",
+      "poddat": 19970318
+    },
+    {
+      "podid": 0,
+      "pidstava": "308/97-вр",
+      "poddat": 19970620
+    },
+    {
+      "podid": 0,
+      "pidstava": "651/97-вр",
+      "poddat": 19971119
+    },
+    {
+      "podid": 0,
+      "pidstava": "666/97-вр",
+      "poddat": 19971216
+    },
+    {
+      "podid": 0,
+      "pidstava": "73/98-вр",
+      "poddat": 19980225
+    },
+    {
+      "podid": 0,
+      "pidstava": "210/98-вр",
+      "poddat": 19980428
+    },
+    {
+      "podid": 0,
+      "pidstava": "352-14",
+      "poddat": 19990119
+    },
+    {
+      "podid": 0,
+      "pidstava": "444-14",
+      "poddat": 19990310
+    },
+    {
+      "podid": 0,
+      "pidstava": "557-14",
+      "poddat": 19990324
+    },
+    {
+      "podid": 0,
+      "pidstava": "812-14",
+      "poddat": 19990702
+    },
+    {
+      "podid": 0,
+      "pidstava": "863-14",
+      "poddat": 19990708
+    },
+    {
+      "podid": 0,
+      "pidstava": "898-14",
+      "poddat": 19990804
+    },
+    {
+      "podid": 0,
+      "pidstava": "998-14",
+      "poddat": 19990827
+    },
+    {
+      "podid": 0,
+      "pidstava": "1040-14",
+      "poddat": 19991007
+    },
+    {
+      "podid": 0,
+      "pidstava": "1080-14",
+      "poddat": 19991019
+    },
+    {
+      "podid": 0,
+      "pidstava": "1142-14",
+      "poddat": 19991030
+    },
+    {
+      "podid": 0,
+      "pidstava": "1228-14",
+      "poddat": 19991207
+    },
+    {
+      "podid": 0,
+      "pidstava": "1288-14",
+      "poddat": 20000118
+    },
+    {
+      "podid": 0,
+      "pidstava": "1342-14",
+      "poddat": 20000119
+    },
+    {
+      "podid": 0,
+      "pidstava": "1368-14",
+      "poddat": 20000201
+    },
+    {
+      "podid": 0,
+      "pidstava": "1379-14",
+      "poddat": 20000203
+    },
+    {
+      "podid": 0,
+      "pidstava": "1381-14",
+      "poddat": 20000225
+    },
+    {
+      "podid": 0,
+      "pidstava": "1587-14",
+      "poddat": 20000323
+    },
+    {
+      "podid": 0,
+      "pidstava": "1580-14,1685-14",
+      "poddat": 20000420
+    },
+    {
+      "podid": 0,
+      "pidstava": "1744-14",
+      "poddat": 20000609
+    },
+    {
+      "podid": 0,
+      "pidstava": "1929-14",
+      "poddat": 20000823
+    },
+    {
+      "podid": 0,
+      "pidstava": "1969-14,1986-14",
+      "poddat": 20000921
+    },
+    {
+      "podid": 0,
+      "pidstava": "2029-14",
+      "poddat": 20001005
+    },
+    {
+      "podid": 0,
+      "pidstava": "2056-14",
+      "poddat": 20001019
+    },
+    {
+      "podid": 0,
+      "pidstava": "v013p710-00",
+      "poddat": 20001116
+    },
+    {
+      "podid": 0,
+      "pidstava": "2114-14",
+      "poddat": 20001219
+    },
+    {
+      "podid": 0,
+      "pidstava": "2171-14",
+      "poddat": 20010211
+    },
+    {
+      "podid": 0,
+      "pidstava": "2247-14",
+      "poddat": 20010220
+    },
+    {
+      "podid": 0,
+      "pidstava": "2360-14,2372-14,2362-14,2359-14,2342-14",
+      "poddat": 20010405
+    },
+    {
+      "podid": 0,
+      "pidstava": "2350-14",
+      "poddat": 20010505
+    },
+    {
+      "podid": 0,
+      "pidstava": "2415-14",
+      "poddat": 20010517
+    },
+    {
+      "podid": 0,
+      "pidstava": "2443-14",
+      "poddat": 20010524
+    },
+    {
+      "podid": 0,
+      "pidstava": "2550-14",
+      "poddat": 20010711
+    },
+    {
+      "podid": 0,
+      "pidstava": "2686-14",
+      "poddat": 20010913
+    },
+    {
+      "podid": 0,
+      "pidstava": "2703-14",
+      "poddat": 20011016
+    },
+    {
+      "podid": 0,
+      "pidstava": "2747-14",
+      "poddat": 20011031
+    },
+    {
+      "podid": 0,
+      "pidstava": "2787-14",
+      "poddat": 20011214
+    },
+    {
+      "podid": 0,
+      "pidstava": "2888-14",
+      "poddat": 20020116
+    },
+    {
+      "podid": 0,
+      "pidstava": "2953-14",
+      "poddat": 20020117
+    },
+    {
+      "podid": 0,
+      "pidstava": "3048-14",
+      "poddat": 20020307
+    },
+    {
+      "podid": 0,
+      "pidstava": "254-15",
+      "poddat": 20021128
+    },
+    {
+      "podid": 0,
+      "pidstava": "394-15",
+      "poddat": 20030129
+    },
+    {
+      "podid": 0,
+      "pidstava": "429-15",
+      "poddat": 20030211
+    },
+    {
+      "podid": 0,
+      "pidstava": "552-15",
+      "poddat": 20030312
+    },
+    {
+      "podid": 0,
+      "pidstava": "548-15",
+      "poddat": 20030322
+    },
+    {
+      "podid": 0,
+      "pidstava": "666-15",
+      "poddat": 20030425
+    },
+    {
+      "podid": 0,
+      "pidstava": "676-15",
+      "poddat": 20030506
+    },
+    {
+      "podid": 0,
+      "pidstava": "743-15,749-15",
+      "poddat": 20030605
+    },
+    {
+      "podid": 0,
+      "pidstava": "759-15",
+      "poddat": 20030607
+    },
+    {
+      "podid": 0,
+      "pidstava": "249-15,762-15",
+      "poddat": 20030611
+    },
+    {
+      "podid": 0,
+      "pidstava": "860-15",
+      "poddat": 20030620
+    },
+    {
+      "podid": 0,
+      "pidstava": "662-15",
+      "poddat": 20030801
+    },
+    {
+      "podid": 0,
+      "pidstava": "1107-15",
+      "poddat": 20030806
+    },
+    {
+      "podid": 0,
+      "pidstava": "1128-15",
+      "poddat": 20030809
+    },
+    {
+      "podid": 0,
+      "pidstava": "1122-15",
+      "poddat": 20030812
+    },
+    {
+      "podid": 0,
+      "pidstava": "1155-15",
+      "poddat": 20031002
+    },
+    {
+      "podid": 0,
+      "pidstava": "1098-15",
+      "poddat": 20031119
+    },
+    {
+      "podid": 0,
+      "pidstava": "1254-15",
+      "poddat": 20031209
+    },
+    {
+      "podid": 0,
+      "pidstava": "1280-15,1299-15",
+      "poddat": 20031223
+    },
+    {
+      "podid": 0,
+      "pidstava": "1377-15",
+      "poddat": 20040108
+    },
+    {
+      "podid": 0,
+      "pidstava": "1410-15",
+      "poddat": 20040302
+    },
+    {
+      "podid": 0,
+      "pidstava": "1284-15",
+      "poddat": 20040607
+    },
+    {
+      "podid": 0,
+      "pidstava": "1725-15",
+      "poddat": 20040608
+    },
+    {
+      "podid": 0,
+      "pidstava": "1703-15,1723-15",
+      "poddat": 20040609
+    },
+    {
+      "podid": 0,
+      "pidstava": "1745-15",
+      "poddat": 20040626
+    },
+    {
+      "podid": 0,
+      "pidstava": "1805-15",
+      "poddat": 20040708
+    },
+    {
+      "podid": 0,
+      "pidstava": "1876-15",
+      "poddat": 20040803
+    },
+    {
+      "podid": 0,
+      "pidstava": "2197-15",
+      "poddat": 20041214
+    },
+    {
+      "podid": 0,
+      "pidstava": "2188-15",
+      "poddat": 20050111
+    },
+    {
+      "podid": 0,
+      "pidstava": "2247-15",
+      "poddat": 20050113
+    },
+    {
+      "podid": 0,
+      "pidstava": "2322-15",
+      "poddat": 20050216
+    },
+    {
+      "podid": 0,
+      "pidstava": "2600-15",
+      "poddat": 20050622
+    },
+    {
+      "podid": 0,
+      "pidstava": "2598-15,2635-15",
+      "poddat": 20050630
+    },
+    {
+      "podid": 0,
+      "pidstava": "2899-15",
+      "poddat": 20051025
+    },
+    {
+      "podid": 0,
+      "pidstava": "3108-15",
+      "poddat": 20051213
+    },
+    {
+      "podid": 0,
+      "pidstava": "2806-15",
+      "poddat": 20060105
+    },
+    {
+      "podid": 0,
+      "pidstava": "3078-15",
+      "poddat": 20060107
+    },
+    {
+      "podid": 0,
+      "pidstava": "3201-15",
+      "poddat": 20060114
+    },
+    {
+      "podid": 0,
+      "pidstava": "3349-15",
+      "poddat": 20060210
+    },
+    {
+      "podid": 0,
+      "pidstava": "3336-15",
+      "poddat": 20060302
+    },
+    {
+      "podid": 0,
+      "pidstava": "3504-15",
+      "poddat": 20060325
+    },
+    {
+      "podid": 0,
+      "pidstava": "3475-15",
+      "poddat": 20070101
+    },
+    {
+      "podid": 0,
+      "pidstava": "435-16",
+      "poddat": 20070112
+    },
+    {
+      "podid": 0,
+      "pidstava": "534-16",
+      "poddat": 20070117
+    },
+    {
+      "podid": 0,
+      "pidstava": "577-16",
+      "poddat": 20070120
+    },
+    {
+      "podid": 0,
+      "pidstava": "622-16",
+      "poddat": 20070228
+    },
+    {
+      "podid": 0,
+      "pidstava": "424-16",
+      "poddat": 20070311
+    },
+    {
+      "podid": 0,
+      "pidstava": "695-16",
+      "poddat": 20070316
+    },
+    {
+      "podid": 0,
+      "pidstava": "736-16",
+      "poddat": 20070331
+    },
+    {
+      "podid": 0,
+      "pidstava": "956-16",
+      "poddat": 20070614
+    },
+    {
+      "podid": 0,
+      "pidstava": "1033-16",
+      "poddat": 20070619
+    },
+    {
+      "podid": 0,
+      "pidstava": "1014-16",
+      "poddat": 20070620
+    },
+    {
+      "podid": 0,
+      "pidstava": "1026-16",
+      "poddat": 20080101
+    },
+    {
+      "podid": 0,
+      "pidstava": "271-17",
+      "poddat": 20080507
+    },
+    {
+      "podid": 0,
+      "pidstava": "586-17",
+      "poddat": 20081116
+    },
+    {
+      "podid": 0,
+      "pidstava": "599-17",
+      "poddat": 20090101
+    },
+    {
+      "podid": 0,
+      "pidstava": "801-17",
+      "poddat": 20090114
+    },
+    {
+      "podid": 25,
+      "pidstava": "v004p710-09",
+      "poddat": 20090203
+    },
+    {
+      "podid": 0,
+      "pidstava": "885-17",
+      "poddat": 20090204
+    },
+    {
+      "podid": 0,
+      "pidstava": "1027-17",
+      "poddat": 20090311
+    },
+    {
+      "podid": 0,
+      "pidstava": "692-17",
+      "poddat": 20090312
+    },
+    {
+      "podid": 0,
+      "pidstava": "1180-17",
+      "poddat": 20090430
+    },
+    {
+      "podid": 0,
+      "pidstava": "1254-17",
+      "poddat": 20090611
+    },
+    {
+      "podid": 0,
+      "pidstava": "1386-17",
+      "poddat": 20090613
+    },
+    {
+      "podid": 0,
+      "pidstava": "1393-17",
+      "poddat": 20090619
+    },
+    {
+      "podid": 0,
+      "pidstava": "1435-17",
+      "poddat": 20090625
+    },
+    {
+      "podid": 0,
+      "pidstava": "1512-17",
+      "poddat": 20090711
+    },
+    {
+      "podid": 0,
+      "pidstava": "1708-17",
+      "poddat": 20091208
+    },
+    {
+      "podid": 0,
+      "pidstava": "1825-17,1827-17",
+      "poddat": 20100216
+    },
+    {
+      "podid": 0,
+      "pidstava": "2181-17",
+      "poddat": 20100515
+    },
+    {
+      "podid": 0,
+      "pidstava": "2299-17",
+      "poddat": 20100630
+    },
+    {
+      "podid": 0,
+      "pidstava": "2339-17",
+      "poddat": 20100707
+    },
+    {
+      "podid": 0,
+      "pidstava": "2479-17",
+      "poddat": 20100722
+    },
+    {
+      "podid": 0,
+      "pidstava": "2374-17",
+      "poddat": 20100723
+    },
+    {
+      "podid": 0,
+      "pidstava": "2430-17",
+      "poddat": 20100727
+    },
+    {
+      "podid": 0,
+      "pidstava": "2453-17",
+      "poddat": 20100803
+    },
+    {
+      "podid": 0,
+      "pidstava": "2258-17",
+      "poddat": 20100820
+    },
+    {
+      "podid": 0,
+      "pidstava": "2518-17",
+      "poddat": 20101012
+    },
+    {
+      "podid": 0,
+      "pidstava": "2558-17",
+      "poddat": 20101016
+    },
+    {
+      "podid": 26,
+      "pidstava": "v023p710-10",
+      "poddat": 20101222
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "1508-17": "Дату змін узгоджено з Глазуновою"
+      },
+      "pidstava": "1508-17,2464-17,2511-17",
+      "poddat": 20110101
+    },
+    {
+      "podid": 0,
+      "pidstava": "2808-17",
+      "poddat": 20110105
+    },
+    {
+      "podid": 0,
+      "pidstava": "2742-17",
+      "poddat": 20110106
+    },
+    {
+      "podid": 0,
+      "pidstava": "2947-17",
+      "poddat": 20110205
+    },
+    {
+      "podid": 0,
+      "pidstava": "2677-17",
+      "poddat": 20110308
+    },
+    {
+      "podid": 0,
+      "pidstava": "3161-17",
+      "poddat": 20110413
+    },
+    {
+      "podid": 0,
+      "pidstava": "3163-17",
+      "poddat": 20110415
+    },
+    {
+      "podid": 0,
+      "pidstava": "3207-17",
+      "poddat": 20110701
+    },
+    {
+      "podid": 0,
+      "pidstava": "2735-17",
+      "poddat": 20110705
+    },
+    {
+      "podid": 0,
+      "pidstava": "3530-17",
+      "poddat": 20110714
+    },
+    {
+      "podid": 0,
+      "pidstava": "3521-17",
+      "poddat": 20110717
+    },
+    {
+      "podid": 0,
+      "pidstava": "3532-17",
+      "poddat": 20110805
+    },
+    {
+      "podid": 0,
+      "pidstava": "3610-17",
+      "poddat": 20110807
+    },
+    {
+      "podid": 0,
+      "pidstava": "3565-17",
+      "poddat": 20110813
+    },
+    {
+      "podid": 0,
+      "pidstava": "3393-17",
+      "poddat": 20110916
+    },
+    {
+      "podid": 0,
+      "pidstava": "3045-17",
+      "poddat": 20110918
+    },
+    {
+      "podid": 26,
+      "pidstava": "v010p710-11",
+      "poddat": 20111011
+    },
+    {
+      "podid": 25,
+      "pidstava": "v010p710-11",
+      "poddat": 20111011
+    },
+    {
+      "podid": 0,
+      "pidstava": "3718-17",
+      "poddat": 20111101
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "3830-17": "АДМ дата змін - Людмила Кирилівна"
+      },
+      "pidstava": "3830-17",
+      "poddat": 20111109
+    },
+    {
+      "podid": 0,
+      "pidstava": "3261-17",
+      "poddat": 20111125
+    },
+    {
+      "podid": 0,
+      "pidstava": "3384-17",
+      "poddat": 20111218
+    },
+    {
+      "podid": 0,
+      "pidstava": "3720-17",
+      "poddat": 20120105
+    },
+    {
+      "podid": 0,
+      "pidstava": "4025-17",
+      "poddat": 20120117
+    },
+    {
+      "podid": 0,
+      "pidstava": "4220-17",
+      "poddat": 20120119
+    },
+    {
+      "podid": 0,
+      "pidstava": "4319-17",
+      "poddat": 20120205
+    },
+    {
+      "podid": 0,
+      "pidstava": "4444-17",
+      "poddat": 20120321
+    },
+    {
+      "podid": 0,
+      "pidstava": "4082-17",
+      "poddat": 20120406
+    },
+    {
+      "podid": 0,
+      "pidstava": "4565-17",
+      "poddat": 20120419
+    },
+    {
+      "podid": 0,
+      "pidstava": "4837-17",
+      "poddat": 20120615
+    },
+    {
+      "podid": 0,
+      "pidstava": "4847-17",
+      "poddat": 20120617
+    },
+    {
+      "podid": 0,
+      "pidstava": "3454-17",
+      "poddat": 20120701
+    },
+    {
+      "podid": 0,
+      "pidstava": "4950-17",
+      "poddat": 20120705
+    },
+    {
+      "podid": 0,
+      "pidstava": "5065-17",
+      "poddat": 20120802
+    },
+    {
+      "podid": 0,
+      "pidstava": "5007-17",
+      "poddat": 20120803
+    },
+    {
+      "podid": 0,
+      "pidstava": "5076-17",
+      "poddat": 20120815
+    },
+    {
+      "podid": 0,
+      "pidstava": "3778-17",
+      "poddat": 20120916
+    },
+    {
+      "podid": 0,
+      "pidstava": "4452-17",
+      "poddat": 20120921
+    },
+    {
+      "podid": 0,
+      "pidstava": "5289-17",
+      "poddat": 20121013
+    },
+    {
+      "podid": 0,
+      "pidstava": "5284-17",
+      "poddat": 20121018
+    },
+    {
+      "podid": 0,
+      "pidstava": "5316-17,5411-17",
+      "poddat": 20121104
+    },
+    {
+      "podid": 0,
+      "pidstava": "5456-17,5459-17",
+      "poddat": 20121118
+    },
+    {
+      "podid": 0,
+      "pidstava": "4652-17",
+      "poddat": 20121119
+    },
+    {
+      "podid": 0,
+      "pidstava": "5288-17",
+      "poddat": 20121201
+    },
+    {
+      "podid": 0,
+      "pidstava": "5463-17",
+      "poddat": 20121202
+    },
+    {
+      "podid": 0,
+      "pidstava": "5460-17",
+      "poddat": 20121205
+    },
+    {
+      "podid": 0,
+      "pidstava": "5462-17",
+      "poddat": 20121209
+    },
+    {
+      "podid": 0,
+      "pidstava": "5461-17",
+      "poddat": 20121212
+    },
+    {
+      "podid": 0,
+      "pidstava": "3460-17,3613-17,5178-17,5518-17",
+      "poddat": 20130101
+    },
+    {
+      "podid": 0,
+      "pidstava": "5496-17,5502-17",
+      "poddat": 20130105
+    },
+    {
+      "podid": 0,
+      "pidstava": "221-18",
+      "poddat": 20130518
+    },
+    {
+      "podid": 0,
+      "pidstava": "243-18",
+      "poddat": 20130608
+    },
+    {
+      "podid": 0,
+      "pidstava": "4709-17",
+      "poddat": 20130613
+    },
+    {
+      "podid": 0,
+      "pidstava": "406-18",
+      "poddat": 20130811
+    },
+    {
+      "podid": 0,
+      "pidstava": "590-18",
+      "poddat": 20131023
+    },
+    {
+      "podid": 0,
+      "pidstava": "656-18",
+      "poddat": 20131116
+    },
+    {
+      "podid": 0,
+      "pidstava": "5404-17,383-18",
+      "poddat": 20140101
+    },
+    {
+      "podid": 0,
+      "pidstava": "721-18",
+      "poddat": 20140122
+    },
+    {
+      "podid": 0,
+      "pidstava": "709-18",
+      "poddat": 20140201
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "732-18": "АДМ зміни не вертати - юристи (Кирилівна, Ніжнік)"
+      },
+      "pidstava": "732-18",
+      "poddat": 20140202
+    },
+    {
+      "podid": 0,
+      "pidstava": "767-18",
+      "poddat": 20140302
+    },
+    {
+      "podid": 0,
+      "pidstava": "1207-18",
+      "poddat": 20140427
+    },
+    {
+      "podid": 0,
+      "pidstava": "1261-18",
+      "poddat": 20140604
+    },
+    {
+      "podid": 0,
+      "pidstava": "1275-18",
+      "poddat": 20140608
+    },
+    {
+      "podid": 0,
+      "pidstava": "1283-18",
+      "poddat": 20140622
+    },
+    {
+      "podid": 0,
+      "pidstava": "1258-18",
+      "poddat": 20140707
+    },
+    {
+      "podid": 0,
+      "pidstava": "1600-18",
+      "poddat": 20140817
+    },
+    {
+      "podid": 0,
+      "pidstava": "1697-18",
+      "poddat": 20141026
+    },
+    {
+      "podid": 0,
+      "pidstava": "1701-18",
+      "poddat": 20141125
+    },
+    {
+      "podid": 0,
+      "pidstava": "1648-18,77-19",
+      "poddat": 20150101
+    },
+    {
+      "podid": 0,
+      "pidstava": "198-19",
+      "poddat": 20150304
+    },
+    {
+      "podid": 0,
+      "pidstava": "158-19,187-19",
+      "poddat": 20150305
+    },
+    {
+      "podid": 0,
+      "pidstava": "192-19",
+      "poddat": 20150328
+    },
+    {
+      "podid": 19,
+      "pidstava": "v002p710-15",
+      "poddat": 20150331
+    },
+    {
+      "podid": 0,
+      "pidstava": "77-19",
+      "poddat": 20150401
+    },
+    {
+      "podid": 0,
+      "pidstava": "193-19",
+      "poddat": 20150410
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "198-19": "АДМ. п.11 ч. перша ст.255 не враховані зміни по Закону 158-19"
+      },
+      "pidstava": "1700-18,198-19",
+      "poddat": 20150426
+    },
+    {
+      "podid": 0,
+      "pidstava": "322-19",
+      "poddat": 20150509
+    },
+    {
+      "podid": 19,
+      "pidstava": "v005p710-15",
+      "poddat": 20150526
+    },
+    {
+      "podid": 0,
+      "pidstava": "222-19",
+      "poddat": 20150628
+    },
+    {
+      "podid": 0,
+      "pidstava": "596-19",
+      "poddat": 20150808
+    },
+    {
+      "podid": 0,
+      "pidstava": "576-19",
+      "poddat": 20150809
+    },
+    {
+      "podid": 0,
+      "pidstava": "629-19",
+      "poddat": 20150812
+    },
+    {
+      "podid": 0,
+      "pidstava": "649-19",
+      "poddat": 20150822
+    },
+    {
+      "podid": 0,
+      "pidstava": "320-19",
+      "poddat": 20150901
+    },
+    {
+      "podid": 0,
+      "pidstava": "1602-18",
+      "poddat": 20150920
+    },
+    {
+      "podid": 0,
+      "pidstava": "530-19",
+      "poddat": 20150930
+    },
+    {
+      "podid": 0,
+      "pidstava": "597-19",
+      "poddat": 20151006
+    },
+    {
+      "podid": 0,
+      "pidstava": "734-19,731-19",
+      "poddat": 20151126
+    },
+    {
+      "podid": 0,
+      "pidstava": "901-19",
+      "poddat": 20151228
+    },
+    {
+      "podid": 0,
+      "pidstava": "1314-18,834-19",
+      "poddat": 20160101
+    },
+    {
+      "podid": 0,
+      "pidstava": "124-19",
+      "poddat": 20160210
+    },
+    {
+      "podid": 0,
+      "pidstava": "922-19",
+      "poddat": 20160401
+    },
+    {
+      "podid": 0,
+      "pidstava": "888-19",
+      "poddat": 20160404
+    },
+    {
+      "podid": 0,
+      "pidstava": "772-19",
+      "poddat": 20160611
+    },
+    {
+      "podid": 0,
+      "pidstava": "1379-19",
+      "poddat": 20160618
+    },
+    {
+      "podid": 0,
+      "pidstava": "1404-19",
+      "poddat": 20161005
+    },
+    {
+      "podid": 0,
+      "pidstava": "1666-19",
+      "poddat": 20161102
+    },
+    {
+      "podid": 0,
+      "pidstava": "1540-19",
+      "poddat": 20161126
+    },
+    {
+      "podid": 0,
+      "pidstava": "1723-19,1727-19",
+      "poddat": 20161130
+    },
+    {
+      "podid": 0,
+      "pidstava": "1742-19",
+      "poddat": 20161204
+    },
+    {
+      "podid": 0,
+      "pidstava": "1774-19",
+      "poddat": 20170101
+    },
+    {
+      "podid": 0,
+      "pidstava": "1798-19",
+      "poddat": 20170105
+    },
+    {
+      "podid": 0,
+      "pidstava": "1952-19",
+      "poddat": 20170416
+    },
+    {
+      "podid": 0,
+      "pidstava": "1977-19",
+      "poddat": 20170426
+    },
+    {
+      "podid": 0,
+      "pidstava": "1812-19",
+      "poddat": 20170507
+    },
+    {
+      "podid": 0,
+      "pidstava": "1817-19",
+      "poddat": 20170610
+    },
+    {
+      "podid": 0,
+      "pidstava": "2081-19",
+      "poddat": 20170709
+    },
+    {
+      "podid": 0,
+      "pidstava": "1982-19",
+      "poddat": 20170719
+    },
+    {
+      "podid": 0,
+      "pidstava": "2119-19",
+      "poddat": 20170802
+    },
+    {
+      "podid": 0,
+      "pidstava": "2136-19",
+      "poddat": 20170803
+    },
+    {
+      "podid": 0,
+      "pidstava": "2120-19",
+      "poddat": 20170804
+    },
+    {
+      "podid": 0,
+      "pidstava": "2109-19",
+      "poddat": 20171026
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "2147а-19": "АДМ. Ст. 297-5, 297-6 зміни не внесені на 15.12.17 Лариса"
+      },
+      "pidstava": "2147а-19",
+      "poddat": 20171215
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "2059-19": "АДМ. Додали ст.89 по Закону 2120-19, так.як 2059 зробили на введ. в дію, а не на н.ч."
+      },
+      "pidstava": "2059-19",
+      "poddat": 20171218
+    },
+    {
+      "podid": 0,
+      "pidstava": "2245-19",
+      "poddat": 20180101
+    },
+    {
+      "podid": 0,
+      "pidstava": "2234-19",
+      "poddat": 20180206
+    },
+    {
+      "podid": 0,
+      "pidstava": "2293-19",
+      "poddat": 20180429
+    },
+    {
+      "podid": 0,
+      "pidstava": "2444-19",
+      "poddat": 20180525
+    },
+    {
+      "podid": 0,
+      "pidstava": "2118-19",
+      "poddat": 20180723
+    },
+    {
+      "podid": 0,
+      "pidstava": "2505-19",
+      "poddat": 20180802
+    },
+    {
+      "podid": 0,
+      "pidstava": "2475-19",
+      "poddat": 20180828
+    },
+    {
+      "podid": 0,
+      "pidstava": "2262-19",
+      "poddat": 20180927
+    },
+    {
+      "podid": 26,
+      "pidstava": "v010p710-18",
+      "poddat": 20181123
+    },
+    {
+      "podid": 0,
+      "pidstava": "2444-19",
+      "poddat": 20181231
+    },
+    {
+      "podid": 0,
+      "pidstava": "2628-19",
+      "poddat": 20190101
+    },
+    {
+      "podid": 0,
+      "pidstava": "2646-19",
+      "poddat": 20190111
+    },
+    {
+      "podid": 0,
+      "pidstava": "2657-19",
+      "poddat": 20190119
+    },
+    {
+      "podid": 0,
+      "pidstava": "2501-19",
+      "poddat": 20190202
+    },
+    {
+      "podid": 0,
+      "pidstava": "2258-19,2473-19",
+      "poddat": 20190207
+    },
+    {
+      "podid": 0,
+      "pidstava": "2747-19",
+      "poddat": 20190627
+    },
+    {
+      "podid": 0,
+      "pidstava": "2740-19",
+      "poddat": 20190703
+    },
+    {
+      "podid": 0,
+      "pidstava": "2612-19",
+      "poddat": 20190822
+    },
+    {
+      "podid": 0,
+      "pidstava": "54-20",
+      "poddat": 20190925
+    },
+    {
+      "podid": 0,
+      "pidstava": "140-20",
+      "poddat": 20191018
+    },
+    {
+      "podid": 0,
+      "pidstava": "165-20",
+      "poddat": 20191019
+    },
+    {
+      "podid": 0,
+      "pidstava": "224-20",
+      "poddat": 20191120
+    },
+    {
+      "podid": 0,
+      "pidstava": "139-20",
+      "poddat": 20191218
+    },
+    {
+      "podid": 0,
+      "pidstava": "402-20",
+      "poddat": 20191229
+    },
+    {
+      "podid": 0,
+      "pidstava": "2754-19,198-20,293-20",
+      "poddat": 20200101
+    },
+    {
+      "podid": 0,
+      "pidstava": "122-20",
+      "poddat": 20200119
+    },
+    {
+      "podid": 0,
+      "pidstava": "440-20",
+      "poddat": 20200213
+    },
+    {
+      "podid": 0,
+      "pidstava": "199-20",
+      "poddat": 20200301
+    },
+    {
+      "podid": 0,
+      "pidstava": "530-20",
+      "poddat": 20200317
+    },
+    {
+      "podid": 0,
+      "pidstava": "463-20",
+      "poddat": 20200318
+    },
+    {
+      "podid": 0,
+      "pidstava": "114-20",
+      "poddat": 20200419
+    },
+    {
+      "podid": 0,
+      "pidstava": "361-20",
+      "poddat": 20200428
+    },
+    {
+      "podid": 0,
+      "pidstava": "554-20",
+      "poddat": 20200607
+    },
+    {
+      "podid": 0,
+      "pidstava": "376-20",
+      "poddat": 20200627
+    },
+    {
+      "podid": 0,
+      "pidstava": "2617-19,79-20",
+      "poddat": 20200701
+    },
+    {
+      "podid": 0,
+      "pidstava": "805-20",
+      "poddat": 20200723
+    },
+    {
+      "podid": 0,
+      "pidstava": "768-20",
+      "poddat": 20200813
+    },
+    {
+      "podid": 0,
+      "pidstava": "1000-20",
+      "poddat": 20201121
+    },
+    {
+      "podid": 0,
+      "pidstava": "943-20",
+      "poddat": 20201129
+    },
+    {
+      "podid": 0,
+      "pidstava": "1074-20",
+      "poddat": 20201230
+    },
+    {
+      "podid": 0,
+      "pidstava": "1080-20",
+      "poddat": 20201231
+    },
+    {
+      "podid": 0,
+      "pidstava": "377-20",
+      "poddat": 20210101
+    },
+    {
+      "podid": 0,
+      "pidstava": "1187-20",
+      "poddat": 20210304
+    },
+    {
+      "podid": 0,
+      "pidstava": "1231-20",
+      "poddat": 20210317
+    },
+    {
+      "podid": 0,
+      "pidstava": "1206-20",
+      "poddat": 20210321
+    },
+    {
+      "podid": 0,
+      "pidstava": "1366-20,1367-20",
+      "poddat": 20210417
+    },
+    {
+      "podid": 0,
+      "pidstava": "1357-20",
+      "poddat": 20210423
+    },
+    {
+      "podid": 0,
+      "pidstava": "1320-20",
+      "poddat": 20210427
+    },
+    {
+      "podid": 0,
+      "pidstava": "1438-20",
+      "poddat": 20210523
+    },
+    {
+      "podid": 0,
+      "pidstava": "1423-20",
+      "poddat": 20210527
+    },
+    {
+      "podid": 0,
+      "pidstava": "738-20",
+      "poddat": 20210701
+    },
+    {
+      "podid": 0,
+      "pidstava": "1542-20",
+      "poddat": 20210721
+    },
+    {
+      "podid": 25,
+      "pidstava": "v005p710-21",
+      "poddat": 20210721
+    },
+    {
+      "podid": 0,
+      "pidstava": "1604-20",
+      "poddat": 20210801
+    },
+    {
+      "podid": 0,
+      "pidstava": "1684-20",
+      "poddat": 20210808
+    },
+    {
+      "podid": 0,
+      "pidstava": "1582-20",
+      "poddat": 20211001
+    },
+    {
+      "podid": 0,
+      "pidstava": "1888-20",
+      "poddat": 20211125
+    },
+    {
+      "podid": 0,
+      "pidstava": "1886-20",
+      "poddat": 20211210
+    },
+    {
+      "podid": 0,
+      "pidstava": "1054-20",
+      "poddat": 20220101
+    },
+    {
+      "podid": 0,
+      "pidstava": "1965-20",
+      "poddat": 20220105
+    },
+    {
+      "podid": 0,
+      "pidstava": "1995-20",
+      "poddat": 20220211
+    },
+    {
+      "podid": 0,
+      "pidstava": "2120-20",
+      "poddat": 20220317
+    },
+    {
+      "podid": 0,
+      "pidstava": "2200-20",
+      "poddat": 20220427
+    },
+    {
+      "podid": 0,
+      "pidstava": "1423-20",
+      "poddat": 20220526
+    },
+    {
+      "podid": 0,
+      "pidstava": "2704-19",
+      "poddat": 20220716
+    },
+    {
+      "podid": 0,
+      "pidstava": "2657-20,2658-20",
+      "poddat": 20221029
+    },
+    {
+      "podid": 0,
+      "pidstava": "2685-20,2690-20",
+      "poddat": 20221106
+    },
+    {
+      "podid": 0,
+      "pidstava": "2806-20",
+      "poddat": 20221223
+    },
+    {
+      "podid": 0,
+      "pidstava": "2803-20",
+      "poddat": 20221229
+    },
+    {
+      "podid": 0,
+      "pidstava": "2839-20",
+      "poddat": 20230127
+    },
+    {
+      "podid": 0,
+      "pidstava": "1206-20",
+      "poddat": 20230320
+    },
+    {
+      "podid": 0,
+      "pidstava": "3000-20",
+      "poddat": 20230415
+    },
+    {
+      "podid": 0,
+      "pidstava": "3234-20",
+      "poddat": 20230729
+    },
+    {
+      "podid": 0,
+      "pidstava": "3196-20",
+      "poddat": 20230820
+    },
+    {
+      "podid": 0,
+      "pidstava": "2982-20",
+      "poddat": 20231014
+    },
+    {
+      "podid": 0,
+      "pidstava": "3696-20",
+      "poddat": 20240519
+    },
+    {
+      "podid": 0,
+      "pidstava": "3886-20",
+      "poddat": 20240809
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "4009-20": "Адм. створено редакцію на 25.10.24 для відображення тексту Word зі змінами по 4009, як в першій частині Кодексу. В цю частину зміни по 4009 не передбачено"
+      },
+      "pidstava": "4009-20",
+      "poddat": 20241025
+    },
+    {
+      "podid": 0,
+      "pidstava": "3733-20",
+      "poddat": 20241219
+    },
+    {
+      "podid": 0,
+      "pidstava": "4200-20",
+      "poddat": 20250201
+    },
+    {
+      "podid": 0,
+      "pidstava": "4316-20",
+      "poddat": 20250417
+    },
+    {
+      "podid": 0,
+      "pidstava": "4240-20",
+      "poddat": 20250614
+    },
+    {
+      "podid": 0,
+      "pidstava": "3620-20",
+      "poddat": 20250901
+    },
+    {
+      "podid": 0,
+      "comments": {
+        "2147а-19": "! через 30 днів із дня опублікування ДСА України повідомлення про початок функціонування Єдиного державного реєстру виконавчих документів у газеті \"Голос України\""
+      },
+      "pidstava": "2147а-19",
+      "poddat": 30000101
+    }
+  ],
+  "history": "19841207:4:|19850601:20:8074-10|19961001:0:386/96-вр|19961023:0:398/96-вр|19961126:0:489/96-вр|19961229:0:497/96-вр|19970211:0:23/97-вр|19970318:0:55/97-вр|19970620:0:308/97-вр|19971119:0:651/97-вр|19971216:0:666/97-вр|19980225:0:73/98-вр|19980428:0:210/98-вр|19990119:0:352-14|19990310:0:444-14|19990324:0:557-14|19990702:0:812-14|19990708:0:863-14|19990804:0:898-14|19990827:0:998-14|19991007:0:1040-14|19991019:0:1080-14|19991030:0:1142-14|19991207:0:1228-14|20000118:0:1288-14|20000119:0:1342-14|20000201:0:1368-14|20000203:0:1379-14|20000225:0:1381-14|20000323:0:1587-14|20000420:0:1580-14,1685-14|20000609:0:1744-14|20000823:0:1929-14|20000921:0:1969-14,1986-14|20001005:0:2029-14|20001019:0:2056-14|20001116:0:v013p710-00|20001219:0:2114-14|20010211:0:2171-14|20010220:0:2247-14|20010405:0:2360-14,2372-14,2362-14,2359-14,2342-14|20010505:0:2350-14|20010517:0:2415-14|20010524:0:2443-14|20010711:0:2550-14|20010913:0:2686-14|20011016:0:2703-14|20011031:0:2747-14|20011214:0:2787-14|20020116:0:2888-14|20020117:0:2953-14|20020307:0:3048-14|20021128:0:254-15|20030129:0:394-15|20030211:0:429-15|20030312:0:552-15|20030322:0:548-15|20030425:0:666-15|20030506:0:676-15|20030605:0:743-15,749-15|20030607:0:759-15|20030611:0:249-15,762-15|20030620:0:860-15|20030801:0:662-15|20030806:0:1107-15|20030809:0:1128-15|20030812:0:1122-15|20031002:0:1155-15|20031119:0:1098-15|20031209:0:1254-15|20031223:0:1280-15,1299-15|20040108:0:1377-15|20040302:0:1410-15|20040607:0:1284-15|20040608:0:1725-15|20040609:0:1703-15,1723-15|20040626:0:1745-15|20040708:0:1805-15|20040803:0:1876-15|20041214:0:2197-15|20050111:0:2188-15|20050113:0:2247-15|20050216:0:2322-15|20050622:0:2600-15|20050630:0:2598-15,2635-15|20051025:0:2899-15|20051213:0:3108-15|20060105:0:2806-15|20060107:0:3078-15|20060114:0:3201-15|20060210:0:3349-15|20060302:0:3336-15|20060325:0:3504-15|20070101:0:3475-15|20070112:0:435-16|20070117:0:534-16|20070120:0:577-16|20070228:0:622-16|20070311:0:424-16|20070316:0:695-16|20070331:0:736-16|20070614:0:956-16|20070619:0:1033-16|20070620:0:1014-16|20080101:0:1026-16|20080507:0:271-17|20081116:0:586-17|20090101:0:599-17|20090114:0:801-17|20090203:25:v004p710-09|20090204:0:885-17|20090311:0:1027-17|20090312:0:692-17|20090430:0:1180-17|20090611:0:1254-17|20090613:0:1386-17|20090619:0:1393-17|20090625:0:1435-17|20090711:0:1512-17|20091208:0:1708-17|20100216:0:1825-17,1827-17|20100515:0:2181-17|20100630:0:2299-17|20100707:0:2339-17|20100722:0:2479-17|20100723:0:2374-17|20100727:0:2430-17|20100803:0:2453-17|20100820:0:2258-17|20101012:0:2518-17|20101016:0:2558-17|20101222:26:v023p710-10|20110101:0:1508-17,2464-17,2511-17|20110105:0:2808-17|20110106:0:2742-17|20110205:0:2947-17|20110308:0:2677-17|20110413:0:3161-17|20110415:0:3163-17|20110701:0:3207-17|20110705:0:2735-17|20110714:0:3530-17|20110717:0:3521-17|20110805:0:3532-17|20110807:0:3610-17|20110813:0:3565-17|20110916:0:3393-17|20110918:0:3045-17|20111011:26:v010p710-11|20111011:25:v010p710-11|20111101:0:3718-17|20111109:0:3830-17|20111125:0:3261-17|20111218:0:3384-17|20120105:0:3720-17|20120117:0:4025-17|20120119:0:4220-17|20120205:0:4319-17|20120321:0:4444-17|20120406:0:4082-17|20120419:0:4565-17|20120615:0:4837-17|20120617:0:4847-17|20120701:0:3454-17|20120705:0:4950-17|20120802:0:5065-17|20120803:0:5007-17|20120815:0:5076-17|20120916:0:3778-17|20120921:0:4452-17|20121013:0:5289-17|20121018:0:5284-17|20121104:0:5316-17,5411-17|20121118:0:5456-17,5459-17|20121119:0:4652-17|20121201:0:5288-17|20121202:0:5463-17|20121205:0:5460-17|20121209:0:5462-17|20121212:0:5461-17|20130101:0:3460-17,3613-17,5178-17,5518-17|20130105:0:5496-17,5502-17|20130518:0:221-18|20130608:0:243-18|20130613:0:4709-17|20130811:0:406-18|20131023:0:590-18|20131116:0:656-18|20140101:0:5404-17,383-18|20140122:0:721-18|20140201:0:709-18|20140202:0:732-18|20140302:0:767-18|20140427:0:1207-18|20140604:0:1261-18|20140608:0:1275-18|20140622:0:1283-18|20140707:0:1258-18|20140817:0:1600-18|20141026:0:1697-18|20141125:0:1701-18|20150101:0:1648-18,77-19|20150304:0:198-19|20150305:0:158-19,187-19|20150328:0:192-19|20150331:19:v002p710-15|20150401:0:77-19|20150410:0:193-19|20150426:0:1700-18,198-19|20150509:0:322-19|20150526:19:v005p710-15|20150628:0:222-19|20150808:0:596-19|20150809:0:576-19|20150812:0:629-19|20150822:0:649-19|20150901:0:320-19|20150920:0:1602-18|20150930:0:530-19|20151006:0:597-19|20151126:0:734-19,731-19|20151228:0:901-19|20160101:0:1314-18,834-19|20160210:0:124-19|20160401:0:922-19|20160404:0:888-19|20160611:0:772-19|20160618:0:1379-19|20161005:0:1404-19|20161102:0:1666-19|20161126:0:1540-19|20161130:0:1723-19,1727-19|20161204:0:1742-19|20170101:0:1774-19|20170105:0:1798-19|20170416:0:1952-19|20170426:0:1977-19|20170507:0:1812-19|20170610:0:1817-19|20170709:0:2081-19|20170719:0:1982-19|20170802:0:2119-19|20170803:0:2136-19|20170804:0:2120-19|20171026:0:2109-19|20171215:0:2147а-19|20171218:0:2059-19|20180101:0:2245-19|20180206:0:2234-19|20180429:0:2293-19|20180525:0:2444-19|20180723:0:2118-19|20180802:0:2505-19|20180828:0:2475-19|20180927:0:2262-19|20181123:26:v010p710-18|20181231:0:2444-19|20190101:0:2628-19|20190111:0:2646-19|20190119:0:2657-19|20190202:0:2501-19|20190207:0:2258-19,2473-19|20190627:0:2747-19|20190703:0:2740-19|20190822:0:2612-19|20190925:0:54-20|20191018:0:140-20|20191019:0:165-20|20191120:0:224-20|20191218:0:139-20|20191229:0:402-20|20200101:0:2754-19,198-20,293-20|20200119:0:122-20|20200213:0:440-20|20200301:0:199-20|20200317:0:530-20|20200318:0:463-20|20200419:0:114-20|20200428:0:361-20|20200607:0:554-20|20200627:0:376-20|20200701:0:2617-19,79-20|20200723:0:805-20|20200813:0:768-20|20201121:0:1000-20|20201129:0:943-20|20201230:0:1074-20|20201231:0:1080-20|20210101:0:377-20|20210304:0:1187-20|20210317:0:1231-20|20210321:0:1206-20|20210417:0:1366-20,1367-20|20210423:0:1357-20|20210427:0:1320-20|20210523:0:1438-20|20210527:0:1423-20|20210701:0:738-20|20210721:0:1542-20|20210721:25:v005p710-21|20210801:0:1604-20|20210808:0:1684-20|20211001:0:1582-20|20211125:0:1888-20|20211210:0:1886-20|20220101:0:1054-20|20220105:0:1965-20|20220211:0:1995-20|20220317:0:2120-20|20220427:0:2200-20|20220526:0:1423-20|20220716:0:2704-19|20221029:0:2657-20,2658-20|20221106:0:2685-20,2690-20|20221223:0:2806-20|20221229:0:2803-20|20230127:0:2839-20|20230320:0:1206-20|20230415:0:3000-20|20230729:0:3234-20|20230820:0:3196-20|20231014:0:2982-20|20240519:0:3696-20|20240809:0:3886-20|20241025:0:4009-20|20241219:0:3733-20|20250201:0:4200-20|20250417:0:4316-20|20250614:0:4240-20|20250901:0:3620-20|30000101:0:2147а-19",
+  "history_chk": 2,
+  "klasy": 913,
+  "links": "1996084#2:13|6:26#1:349|3:1|6:1366|16:2|20:3|21:2#",
+  "minjust": "",
+  "n_vlas": "8073-X",
+  "nazva": "Кодекс України про адміністративні правопорушення (статті 213 - 330)",
+  "npix": 1,
+  "nreg": "80732-10",
+  "org": 600,
+  "organs": "600:19841207:8073-X",
+  "orgdat": 19841207,
+  "orgnum": "8073-X",
+  "pages": 12,
+  "pere": [],
+  "pidstava": "3620-20",
+  "poddat": 20250901,
+  "pridat": 19841207,
+  "projs": [],
+  "publics": "19841218:14:1984 р., № 51, стаття 1122",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 721483,
+  "status": 5,
+  "temy": 8,
+  "termcnt": 5,
+  "terms": [
+    61937,
+    12236,
+    12237,
+    111965,
+    61938
+  ],
+  "typ": 21,
+  "types": "21|1|124"
+}

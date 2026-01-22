@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "schema_version": "1.0",
+  "metadata": {
+    "rada_nreg": "n0022500-26",
+    "rada_dokid": 551278,
+    "title": "Про облікову ціну банківських металів",
+    "document_type": "Документ",
+    "document_type_slug": "law",
+    "category": "інше",
+    "document_number": "n0022500-26",
+    "rada_datred": "2026-01-15",
+    "source_url": "https://data.rada.gov.ua/laws/show/n0022500-26",
+    "imported_at": "2026-01-22T18:13:25.318Z",
+    "updated_at": "2026-01-22T18:13:25.318Z",
+    "content_hash": "435a17c0dc2f02299429d1510060e3ca3a05278eff390f56475a2e3b3ecbce2d",
+    "previous_hash": null,
+    "r2_key": "legislation/other/n0022500-26.json"
+  },
+  "content": {
+    "articles": [],
+    "chunks": [
+      {
+        "chunk_index": 0,
+        "article_number": "1",
+        "text": "Про облікову ціну банківських металів (Документ): Параграф 1\n\nНАЦІОНАЛЬНИЙ БАНК УКРАЇНИ\r\nПОВІДОМЛЕННЯ\r\n15.01.2026\r\nОблікова ціна банківських металів на дату 15.01.2026\r\nКод цифровий\r\nКод літерний\r\nКількість тройських унцій\r\nНазва банківського металу\r\nОблікова ціна*\r\n959\r\nXAU\r\n1\r\nЗолото\r\n199963,27\r\n961\r\nXAG\r\n1\r\nСрібло\r\n3959,05\r\n962\r\nXPT\r\n1\r\nПлатина\r\n104432,42\r\n964\r\nXPD\r\n1\r\nПаладій\r\n80231,03\r\n___________\r\n* без зобов'язань Національного банку України купувати та продавати зазначені банківські метали за цими обліковими цінами\r\n{Джерело: https://www.bank.gov.ua/}",
+        "title": "Параграф 1",
+        "token_count": 142
+      }
+    ],
+    "structure": {
+      "type": "document",
+      "parsing_strategy": "fallback",
+      "parsing_strategy_reason": "Last resort: paragraph-based splitting (1 units)",
+      "units_count": 1,
+      "requires_fallback": true
+    }
+  },
+  "raw": {
+    "rada_api_json": {
+      "nreg": "n0022500-26",
+      "dokid": 551278,
+      "nazva": "Про облікову ціну банківських металів",
+      "datred": "2026-01-15"
+    },
+    "rada_api_txt": "НАЦІОНАЛЬНИЙ БАНК УКРАЇНИ\r\nПОВІДОМЛЕННЯ\r\n15.01.2026\r\nОблікова ціна банківських металів на дату 15.01.2026\r\nКод цифровий\r\nКод літерний\r\nКількість тройських унцій\r\nНазва банківського металу\r\nОблікова ціна*\r\n959\r\nXAU\r\n1\r\nЗолото\r\n199963,27\r\n961\r\nXAG\r\n1\r\nСрібло\r\n3959,05\r\n962\r\nXPT\r\n1\r\nПлатина\r\n104432,42\r\n964\r\nXPD\r\n1\r\nПаладій\r\n80231,03\r\n___________\r\n* без зобов'язань Національного банку України купувати та продавати зазначені банківські метали за цими обліковими цінами\r\n{Джерело: https://www.bank.gov.ua/}\r\n"
+  }
+}

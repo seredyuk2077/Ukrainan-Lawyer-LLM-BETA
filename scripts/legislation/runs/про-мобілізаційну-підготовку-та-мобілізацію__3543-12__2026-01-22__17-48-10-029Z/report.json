@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "3543-12",
+    "title": "Про мобілізаційну підготовку та мобілізацію",
+    "content_hash": "6bb8cf4eb14dcd1333d0e2f02e18b7aed64f586142641bb3ee927dd04f3cfd35",
+    "r2_key": "legislation/other/3543-12.json",
+    "expected_chunks": 116,
+    "qdrant": {
+      "chunks": 116,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/про-мобілізаційну-підготовку-та-мобілізацію__3543-12__2026-01-22__17-48-10-029Z"
+  }
+}

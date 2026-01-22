@@ -1,0 +1,29 @@
+import:start 2026-01-21T21:55:50.501Z mode=add nreg=57-95-п dryRun=false resume=false
+r2:uploaded=true size=435837
+ai:enrichment=cached (content_hash=b3b5f8df...)
+embeddings:progress=1/23 processed=3/69
+embeddings:progress=2/23 processed=6/69
+embeddings:progress=3/23 processed=9/69
+embeddings:progress=4/23 processed=12/69
+embeddings:progress=5/23 processed=15/69
+embeddings:progress=6/23 processed=18/69
+embeddings:progress=7/23 processed=21/69
+embeddings:progress=8/23 processed=24/69
+embeddings:progress=9/23 processed=27/69
+embeddings:progress=10/23 processed=30/69
+embeddings:progress=11/23 processed=33/69
+embeddings:progress=12/23 processed=36/69
+embeddings:progress=13/23 processed=39/69
+embeddings:progress=14/23 processed=42/69
+embeddings:progress=15/23 processed=45/69
+embeddings:progress=16/23 processed=48/69
+embeddings:progress=17/23 processed=51/69
+embeddings:progress=18/23 processed=54/69
+embeddings:progress=19/23 processed=57/69
+embeddings:progress=20/23 processed=60/69
+embeddings:progress=21/23 processed=63/69
+embeddings:progress=22/23 processed=66/69
+embeddings:progress=23/23 processed=69/69
+qdrant:upsert_progress=1/1
+job:completed id=60e218c8-b386-486b-af85-e695aa31f49c
+import:done status=completed

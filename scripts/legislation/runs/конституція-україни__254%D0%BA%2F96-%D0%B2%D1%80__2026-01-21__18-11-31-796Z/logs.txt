@@ -1,0 +1,13 @@
+remove:start 2026-01-21T18:11:31.798Z nreg=254к/96-вр
+remove:preview done confirm=true
+remove:job started id=ec35e6d0-4716-41d2-a17c-8752e18e93f4
+r2:archive copy legislation/constitutional/254%D0%BA%2F96-%D0%B2%D1%80.json -> legislation/archive/constitutional/254%D0%BA%2F96-%D0%B2%D1%80__2026-01-21T18-11-32-494Z.json
+r2:archive verified size=786994
+r2:delete original legislation/constitutional/254%D0%BA%2F96-%D0%B2%D1%80.json
+r2:delete verified (original removed)
+supabase:delete chunks
+supabase:delete document
+supabase:verify docs=0 chunks=0
+qdrant:delete acts/chunks by nreg
+qdrant:verify acts=0 chunks=0
+remove:done status=completed

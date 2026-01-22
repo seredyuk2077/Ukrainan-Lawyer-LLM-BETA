@@ -1,0 +1,12 @@
+import:start 2026-01-21T22:40:17.351Z mode=update nreg=nb07d710-25 dryRun=false resume=false
+r2:uploaded=true size=119435
+ai:enrichment=generating...
+ai:enrichment=generated category=constitutional
+embeddings:progress=1/5 processed=3/14
+embeddings:progress=2/5 processed=6/14
+embeddings:progress=3/5 processed=9/14
+embeddings:progress=4/5 processed=12/14
+embeddings:progress=5/5 processed=14/14
+qdrant:upsert_progress=1/1
+job:completed id=6f117e3b-ff23-4490-8c1f-4305f143c626
+import:done status=completed

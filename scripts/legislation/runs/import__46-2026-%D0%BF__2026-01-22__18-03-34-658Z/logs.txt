@@ -1,0 +1,8 @@
+import:start 2026-01-22T18:03:34.658Z mode=add nreg=46-2026-п dryRun=false resume=false
+r2:uploaded=true size=11264
+ai:enrichment=generating...
+ai:enrichment=generated category=procurement
+embeddings:progress=1/1 processed=2/2
+qdrant:upsert_progress=1/1
+job:completed id=acc6a83b-0af7-4ae0-bcb1-a40e5a45fa40
+import:done status=completed

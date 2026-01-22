@@ -2,12 +2,22 @@
 
 Ця папка містить скрипти для імпорту та обробки нормативно-правових актів з rada.gov.ua.
 
-## 📋 Статус: Phase 2 Complete ✅
+## 📋 Статус: Production-Ready ✅
 
-**Дата:** 2025-12-28  
-**Готовність до Phase 3 (DB Design):** ✅ READY
+**Дата:** 2026-01-21  
+**Архітектура:** Supabase (registry) + R2 (canonical) + Qdrant (retrieval)
 
-Детальний опис Phase 2: [docs/legislation-rag/PHASE2.md](../../docs/legislation-rag/PHASE2.md)
+**Завершені Phases:**
+- ✅ PHASE 1: Diagnostics + Risk Register
+- ✅ PHASE 2: Parsing Hardening (розширені стратегії, no-empty-index)
+- ✅ PHASE 3: Controlled AI (Taxonomy V1, caching, deduplication)
+- ✅ PHASE 4: Timeout/Resume/Progress (job tracking, progressive commits)
+- ✅ PHASE 5: Act Group (багаточастинні акти)
+- ✅ PHASE 6: Real World Test (ККУ 2341-14) — 943 chunks, indexed ✅
+- ✅ PHASE 7: Corpus Tests + Batch Report Generator
+
+Детальна архітектура: [docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md](../../docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md)  
+Operational Guide: [OPERATIONAL_GUIDE.md](./OPERATIONAL_GUIDE.md)
 
 ## 📁 Структура
 
@@ -37,11 +47,71 @@ scripts/legislation/
    pnpm install
    ```
 
-2. Налаштувати змінні оточення (якщо потрібно):
-   - Створити `.env` файл в корені проєкту
-   - Додати необхідні змінні (за потреби)
+2. Налаштувати змінні оточення (`.env` в корені проєкту):
+   - `SUPABASE_LEGISLATION_URL`
+   - `SUPABASE_LEGISLATION_SERVICE_ROLE_KEY`
+   - `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+   - `R2_LEGISLATION_BUCKET` (або default: "legislation")
+   - `qdrant_clusterENDPOINT_LEXERY_LEGISLATION_DB`
+   - `qdrant_clusterAPI_LEXERY_LEGISLATION_DB`
+   - `OPEN_ROUTER_API_RAG`
 
-### Команди
+### Admin CLI (Legislation RAG)
+
+**Основні команди:**
+
+```bash
+# Імпорт
+pnpm tsx scripts/legislation/admin-cli.ts add --nreg "2341-14"
+pnpm tsx scripts/legislation/admin-cli.ts update --nreg "2341-14" --force
+
+# Jobs & Resume
+pnpm tsx scripts/legislation/admin-cli.ts jobs list
+pnpm tsx scripts/legislation/admin-cli.ts jobs resume --job-id <uuid>
+
+# Діагностика
+pnpm tsx scripts/legislation/admin-cli.ts inspect --nreg "2341-14"
+pnpm tsx scripts/legislation/admin-cli.ts search --query "кримінальна відповідальність"
+
+# Тестування
+pnpm tsx scripts/legislation/admin-cli.ts test-kku
+pnpm tsx scripts/legislation/admin-cli.ts test-corpus --file test/corpus_nregs.txt --report
+```
+
+**Детальніше:** [OPERATIONAL_GUIDE.md](./OPERATIONAL_GUIDE.md)
+
+### Legacy CLI (deprecated)
+
+```bash
+# Перевірка готовності інфраструктури
+pnpm tsx scripts/legislation/admin-cli.ts status
+
+# Імпорт одного документа
+pnpm tsx scripts/legislation/admin-cli.ts add --nreg "254к/96-вр"
+
+# Batch імпорт
+echo -e "254к/96-вр\n123/45" > nregs.txt
+pnpm tsx scripts/legislation/admin-cli.ts add-batch --file nregs.txt --concurrency 2
+
+# Оновлення документа (тільки якщо змінився content_hash)
+pnpm tsx scripts/legislation/admin-cli.ts update --nreg "254к/96-вр"
+
+# Видалення документа (з архівуванням canonical)
+pnpm tsx scripts/legislation/admin-cli.ts remove --nreg "254к/96-вр" --confirm
+
+# Детальна інформація про документ
+pnpm tsx scripts/legislation/admin-cli.ts inspect --nreg "254к/96-вр"
+
+# Retrieval sanity test
+pnpm tsx scripts/legislation/admin-cli.ts search --query "право власності" --topk 5
+
+# Повне очищення (з подвійним підтвердженням)
+pnpm tsx scripts/legislation/admin-cli.ts purge-all --i-know-what-im-doing
+```
+
+**Runs directory:** Кожна операція створює папку `scripts/legislation/runs/...` з report, enrichment, logs.
+
+### Legacy команди
 
 #### Швидкий lookup документів (РЕКОМЕНДОВАНО)
 
@@ -116,8 +186,18 @@ tmp/
 ## 📚 Документація
 
 Повна архітектурна документація знаходиться в:
+- `docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md` — архітектура міграції
+- `docs/legislation-rag/R2_POLICY.md` — політика R2 (prefix, guardrails)
 - `docs/legislation-rag/` — повна документація системи
 - `docs/RADA_API_DOCUMENTATION.md` — документація API rada.gov.ua
+
+## 🏗️ Архітектура
+
+- **Supabase:** Registry/Control Plane (метадані, статуси, версії, jobs)
+- **R2:** Source of Truth (canonical JSON)
+- **Qdrant:** Data Plane (embeddings + retrieval)
+
+Детальніше: [ARCHITECTURE_AS_IS_TO_BE.md](../../docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md)
 
 ## ⚠️ Важливо
 

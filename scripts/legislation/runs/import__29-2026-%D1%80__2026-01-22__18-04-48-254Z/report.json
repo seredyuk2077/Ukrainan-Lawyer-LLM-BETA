@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "29-2026-р",
+    "title": "Про звільнення Корзуна А.В. з посади заступника Міністра енергетики України",
+    "content_hash": "d604d4a845f94263794d0ab45d5dcf490cfa08f9b23f37dbfa6404cada2e7acf",
+    "r2_key": "legislation/other/29-2026-%D1%80.json",
+    "expected_chunks": 0,
+    "qdrant": {
+      "chunks": 0,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__29-2026-%D1%80__2026-01-22__18-04-48-254Z"
+  }
+}

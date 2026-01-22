@@ -86,19 +86,25 @@ export async function generateEmbedding(
  * @param texts - Масив текстів
  * @param apiKey - OpenRouter API key
  * @param concurrency - Максимальна кількість одночасних запитів (default: 5)
+ * @param onProgress - Optional callback для прогресу (batchIndex, totalBatches, processed)
  * @returns Масив результатів embeddings
  */
 export async function generateEmbeddingsBatch(
   texts: string[],
   apiKey: string,
-  concurrency: number = 5
+  concurrency: number = 5,
+  onProgress?: (batchIndex: number, totalBatches: number, processed: number) => void
 ): Promise<EmbeddingResult[]> {
   const results: EmbeddingResult[] = [];
   const errors: Array<{ index: number; error: Error }> = [];
+  
+  const totalBatches = Math.ceil(texts.length / concurrency);
+  let processed = 0;
 
   // Обробляємо батчами з обмеженням concurrency
   for (let i = 0; i < texts.length; i += concurrency) {
     const batch = texts.slice(i, i + concurrency);
+    const batchIndex = Math.floor(i / concurrency);
     
     const batchPromises = batch.map(async (text, batchIndex) => {
       const globalIndex = i + batchIndex;
@@ -122,7 +128,13 @@ export async function generateEmbeddingsBatch(
     for (const result of batchResults) {
       if (result.status === 'fulfilled') {
         results.push(result.value);
+        processed++;
       }
+    }
+    
+    // Викликаємо progress callback
+    if (onProgress) {
+      onProgress(batchIndex + 1, totalBatches, processed);
     }
 
     // Пауза між батчами

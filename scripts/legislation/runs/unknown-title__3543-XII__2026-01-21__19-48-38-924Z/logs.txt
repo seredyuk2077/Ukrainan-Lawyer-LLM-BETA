@@ -1,0 +1,10 @@
+remove:start 2026-01-21T19:48:38.928Z nreg=3543-XII
+remove:preview done confirm=true
+remove:job started id=5db550b1-8897-41ff-a168-e0077bb2af21
+r2:canonical missing or unknown; continuing (key=null)
+supabase:delete chunks
+supabase:delete document
+supabase:verify docs=0 chunks=0
+qdrant:delete acts/chunks by nreg
+qdrant:verify acts=0 chunks=0
+remove:done status=completed

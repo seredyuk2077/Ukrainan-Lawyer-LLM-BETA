@@ -1,0 +1,121 @@
+{
+  "dokid": 551465,
+  "orgid": 2,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "book": [
+    {
+      "id": "n11",
+      "bookid": "551465-1",
+      "nazva": "Перелік консультативних, дорадчих та інших допоміжних органів, утворених Кабінетом Міністрів України, що ліквідуються",
+      "types": 35
+    },
+    {
+      "id": "n18",
+      "bookid": "551465-2",
+      "nazva": "Зміни, що вносяться до постанов Кабінету Міністрів України",
+      "types": 203
+    },
+    {
+      "id": "n32",
+      "bookid": "551465-3",
+      "nazva": "Перелік актів Кабінету Міністрів України, що втратили чинність",
+      "types": 35
+    }
+  ],
+  "bookids": {
+    "n11": 0,
+    "n18": 1,
+    "n32": 2
+  },
+  "bookmark": "12#3",
+  "cured": 0,
+  "datred": 20260114,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260114,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 10879
+    }
+  ],
+  "eds_dates": {
+    "20260114": null
+  },
+  "fbook": {
+    "n2": {
+      "g1.gif": "IMAGE"
+    }
+  },
+  "fname": {
+    "g1.gif": {
+      "id": "n2",
+      "name": "g1.gif",
+      "text": "IMAGE"
+    }
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260114
+    },
+    {
+      "podid": 1,
+      "poddat": 20260120
+    }
+  ],
+  "history": "20260114:4:|20260120:1:",
+  "history_chk": -1,
+  "klasy": 43,
+  "komitet": "",
+  "links": "62#6:7|22:4##",
+  "minjust": "",
+  "n_vlas": 38,
+  "nazva": "Деякі питання консультативних, дорадчих та інших допоміжних органів, утворених Кабінетом Міністрів України",
+  "npix": 2,
+  "nreg": "38-2026-п",
+  "org": 2,
+  "organs": "2:20260114:38",
+  "orgdat": 20260114,
+  "orgnum": 38,
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260114,
+  "pridat": 20260114,
+  "publics": "20260120:9:№ 16",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 10879,
+  "status": 5,
+  "tags": "",
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 2,
+  "types": "2|35"
+}

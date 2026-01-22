@@ -220,6 +220,9 @@ devDependencies:
   '@metagptx/vite-plugin-source-locator':
     specifier: latest
     version: 0.0.6(rollup@2.79.2)(vite@5.4.20)
+  '@qdrant/js-client-rest':
+    specifier: ^1.16.2
+    version: 1.16.2(typescript@5.9.2)
   '@tailwindcss/aspect-ratio':
     specifier: ^0.4.2
     version: 0.4.2(tailwindcss@3.4.17)
@@ -241,6 +244,9 @@ devDependencies:
   autoprefixer:
     specifier: ^10.4.20
     version: 10.4.21(postcss@8.5.6)
+  commander:
+    specifier: ^14.0.2
+    version: 14.0.2
   eslint:
     specifier: ^9.9.0
     version: 9.36.0
@@ -1885,6 +1891,22 @@ packages:
     engines: {node: '>=14'}
     requiresBuild: true
     optional: true
+
+  /@qdrant/js-client-rest@1.16.2(typescript@5.9.2):
+    resolution: {integrity: sha512-Zm4wEZURrZ24a+Hmm4l1QQYjiz975Ep3vF0yzWR7ICGcxittNz47YK2iBOk8kb8qseCu8pg7WmO1HOIsO8alvw==}
+    engines: {node: '>=18.17.0', pnpm: '>=8'}
+    peerDependencies:
+      typescript: '>=4.7'
+    dependencies:
+      '@qdrant/openapi-typescript-fetch': 1.2.6
+      typescript: 5.9.2
+      undici: 6.23.0
+    dev: true
+
+  /@qdrant/openapi-typescript-fetch@1.2.6:
+    resolution: {integrity: sha512-oQG/FejNpItrxRHoyctYvT3rwGZOnK4jr3JdppO/c78ktDvkWiPXPHNsrDf33K9sZdRb6PR7gi4noIapu5q4HA==}
+    engines: {node: '>=18.0.0', pnpm: '>=8'}
+    dev: true
 
   /@radix-ui/number@1.1.1:
     resolution: {integrity: sha512-MkKCwxlXTgz6CFoJx3pCwn07GKp36+aZyu/u2Ln2VrA5DcdyCZkASEDBTd8x5whTQQL5CiYf4prXKLcgQdv29g==}
@@ -4675,6 +4697,11 @@ packages:
       delayed-stream: 1.0.0
     dev: false
 
+  /commander@14.0.2:
+    resolution: {integrity: sha512-TywoWNNRbhoD0BXs1P3ZEScW8W5iKrnbithIl0YH+uCmBd0QpPOA8yc82DS3BIE5Ma6FnBVUsJ7wVUDz4dvOWQ==}
+    engines: {node: '>=20'}
+    dev: true
+
   /commander@2.20.3:
     resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
     dev: true
@@ -6888,6 +6915,11 @@ packages:
   /undici-types@7.12.0:
     resolution: {integrity: sha512-goOacqME2GYyOZZfb5Lgtu+1IDmAlAEu5xnD3+xTzS10hT0vzpf0SPjkXwAw9Jm+4n/mQGDP3LO8CPbYROeBfQ==}
     dev: false
+
+  /undici@6.23.0:
+    resolution: {integrity: sha512-VfQPToRA5FZs/qJxLIinmU59u0r7LXqoJkCzinq3ckNJp3vKEh7jTWN589YQ5+aoAC/TGRLyJLCPKcLQbM8r9g==}
+    engines: {node: '>=18.17'}
+    dev: true
 
   /undici@7.16.0:
     resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}

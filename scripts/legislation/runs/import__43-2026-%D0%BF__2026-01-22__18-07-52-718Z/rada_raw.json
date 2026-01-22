@@ -1,0 +1,107 @@
+{
+  "dokid": 551467,
+  "orgid": 2,
+  "podid": 4,
+  "anotcnt": 0,
+  "anots": [],
+  "book": [
+    {
+      "id": "n8",
+      "bookid": "551467-1",
+      "nazva": "Зміни, що вносяться до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39",
+      "types": 203
+    }
+  ],
+  "bookids": {
+    "n8": 0
+  },
+  "bookmark": "6#1",
+  "cured": 0,
+  "datred": 20260117,
+  "edcnt": 1,
+  "eds": [
+    {
+      "podid": 4,
+      "datred": 20260117,
+      "format": 2,
+      "pages": 1,
+      "pidstava": "",
+      "size": 5036
+    }
+  ],
+  "eds_dates": {
+    "20260117": null
+  },
+  "fbook": {
+    "n2": {
+      "g1.gif": "IMAGE"
+    }
+  },
+  "fname": {
+    "g1.gif": {
+      "id": "n2",
+      "name": "g1.gif",
+      "text": "IMAGE"
+    }
+  },
+  "format": 2,
+  "gotov": null,
+  "hist": [
+    {
+      "podid": 4,
+      "poddat": 20260117
+    },
+    {
+      "podid": 1,
+      "poddat": 20260117
+    }
+  ],
+  "history": "20260117:4:|20260117:1:",
+  "history_chk": -1,
+  "klasy": "43|550",
+  "komitet": "",
+  "links": "36#1:2##",
+  "minjust": "",
+  "n_vlas": 43,
+  "nazva": "Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39",
+  "npix": 2,
+  "nreg": "43-2026-п",
+  "org": 2,
+  "organs": "2:20260117:43",
+  "orgdat": 20260117,
+  "orgnum": 43,
+  "pages": 1,
+  "pere": [],
+  "pidstava": "",
+  "poddat": 20260117,
+  "pridat": 20260117,
+  "publics": "20260117:9:№ 15",
+  "result": "ok",
+  "result_code": 200,
+  "sig": [
+    {
+      "id": 78,
+      "date": "19.02.25 10:50",
+      "filename": "/imgs/0/g1.gif",
+      "filepath": "/data/docs/files/0/g1.gif",
+      "name": "g1.gif",
+      "size": 875
+    },
+    {
+      "id": 77,
+      "date": "12.01.26 17:35",
+      "filename": "/util/0/u_text.css",
+      "filepath": "/data/docs/files/0/u_text.css",
+      "name": "u_text.css",
+      "size": 29364
+    }
+  ],
+  "size": 5036,
+  "status": 5,
+  "tags": "",
+  "temy": "",
+  "termcnt": 0,
+  "terms": [],
+  "typ": 2,
+  "types": 2
+}

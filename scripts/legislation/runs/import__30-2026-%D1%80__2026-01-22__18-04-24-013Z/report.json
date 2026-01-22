@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "30-2026-р",
+    "title": "Про звільнення Андарака Р.В. з посади заступника Міністра енергетики України з питань цифрового розвитку, цифрових трансформацій і цифровізації",
+    "content_hash": "febeb32130cdd74a07c212d74790c0c0f3dbcd350f9a40472b39df891276f8c1",
+    "r2_key": "legislation/other/30-2026-%D1%80.json",
+    "expected_chunks": 0,
+    "qdrant": {
+      "chunks": 0,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__30-2026-%D1%80__2026-01-22__18-04-24-013Z"
+  }
+}

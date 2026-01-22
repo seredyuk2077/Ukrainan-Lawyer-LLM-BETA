@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "80732-10",
+    "title": "Кодекс України про адміністративні правопорушення (статті 213 - 330)",
+    "content_hash": "7f70083c40f510e9a3d0e5fc4a865b49f48ac6bff3e4a4cf45fd4aa55703f917",
+    "r2_key": "legislation/administrative/80732-10.json",
+    "expected_chunks": 242,
+    "qdrant": {
+      "chunks": 242,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/кодекс-україни-про-адміністративні-правопорушення-статті-213-330__80732-10__2026-01-21__22-41-52-798Z"
+  }
+}

@@ -26,8 +26,10 @@ export interface CanonicalMetadata {
   rada_dokid?: number;
   title: string;
   document_type: string;
+  document_type_slug?: string; // PHASE 14: стандартизований EN slug
   category: string;
   law_number?: string;
+  document_number?: string; // PHASE 15: універсальний номер
   rada_datred: string;
   source_url: string;
   imported_at: string;
@@ -45,7 +47,7 @@ export interface CanonicalContent {
 
 export interface CanonicalChunk {
   chunk_index: number;
-  article_number: string;
+  article_number: string | null; // може бути null для постанов (points)
   text: string;
   title?: string;
   token_count: number;
@@ -127,6 +129,15 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
   const nazva = jsonData?.nazva || jsonData?.meta?.nazva || jsonData?.metadata?.nazva || 'Без назви';
   const dokid = jsonData?.dokid || jsonData?.meta?.dokid || jsonData?.metadata?.dokid;
   
+  // Витягуємо law_number (системний підхід)
+  const { extractLawNumber } = await import('./extractLawNumber.js');
+  const lawNumberResult = extractLawNumber({
+    nazva,
+    nreg,
+    jsonData,
+  });
+  const lawNumber = lawNumberResult.law_number || undefined;
+  
   let datred: string;
   const datredRaw = jsonData?.datred || jsonData?.meta?.datred || jsonData?.metadata?.datred;
   if (datredRaw) {
@@ -150,53 +161,79 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
     }
   }
 
-  // Парсимо статті з TXT
-  let articles: ParsedArticle[] = [];
-  if (txtContent) {
-    articles = parseArticlesFromTxt(txtContent);
-  } else if (jsonData?.stru && Array.isArray(jsonData.stru)) {
-    // Якщо є stru в JSON, використовуємо його
-    articles = parseArticlesFromStru(jsonData.stru);
-  }
-
   // Визначаємо тип документа та категорію (простий rule-based підхід)
   const documentType = guessDocumentType(nazva, jsonData);
   const category = guessCategory(nazva, documentType);
+  
+  // PHASE 14: Document Type System V1 — стандартизований slug
+  const { guessDocumentTypeV2 } = await import('../documentTypes/guessDocumentTypeV2.js');
+  const docTypeGuess = guessDocumentTypeV2({
+    title: nazva,
+    typ: jsonData?.typ,
+    typn: jsonData?.typn,
+    organs: jsonData?.organs,
+    stru: jsonData?.stru,
+  });
+  const documentTypeSlug = docTypeGuess.slug;
 
   // Генеруємо R2 key path
   const r2Key = generateR2Key(category, nreg);
 
-  // Будуємо canonical articles
-  const canonicalArticles: CanonicalArticle[] = articles.map(article => ({
-    number: article.number,
-    title: article.title,
-    content: article.content,
-    parts: article.parts?.map(part => ({
-      number: part.number,
-      content: part.content,
-      points: part.points?.map(point => ({
-        number: point.number,
-        content: point.content,
-        subpoints: point.subpoints?.map(subpoint => ({
-          number: subpoint.number,
-          content: subpoint.content,
-        })),
-      })),
-    })),
-  }));
+  // Парсимо Content Units (універсальний підхід)
+  const { parseContentUnits } = await import('./parseUnits.js');
+  const { units, strategy, strategyReason, distribution, requiresFallback } = await parseContentUnits(
+    jsonData?.stru,
+    txtContent,
+    documentType,
+    {
+      title: nazva,
+      nreg: nreg,
+      lawNumber: lawNumber,
+    }
+  );
 
-  // Створюємо chunks зі статей
-  const chunks = createChunksFromArticles(canonicalArticles);
+  // Логування стратегії (для debug)
+  if (units.length === 0) {
+    console.warn(`⚠️  Не знайдено content units (strategy: ${strategy}, reason: ${strategyReason}, distribution: ${JSON.stringify(distribution)})`);
+  } else {
+    console.log(`✓ Parsed ${units.length} units using strategy: ${strategy} (${strategyReason})`);
+    if (requiresFallback) {
+      console.warn(`⚠️  Used TXT fallback due to no-empty-index policy for document_type=${documentType}`);
+    }
+  }
+
+  // Будуємо canonical articles (для сумісності, але тепер з units)
+  const canonicalArticles: CanonicalArticle[] = units
+    .filter(u => u.unit_type === 'article')
+    .map(unit => ({
+      number: unit.number,
+      title: unit.title || `Стаття ${unit.number}`,
+      content: unit.text,
+    }));
+
+  // Створюємо chunks зі всіх units (не тільки статей!)
+  const { createChunksFromUnits } = await import('./chunking.js');
+  const chunks = createChunksFromUnits(units, {
+    title: nazva,
+    document_type: documentType,
+    category,
+  });
   const canonicalChunks: CanonicalChunk[] = chunks.map(chunk => ({
     chunk_index: chunk.chunk_index,
-    article_number: chunk.article_number,
+    article_number: chunk.article_number || chunk.unit_number || null,
     text: chunk.text,
-    title: chunk.title,
+    title: chunk.title || undefined,
     token_count: chunk.token_count,
   }));
 
-  // Будуємо структуру (поки що проста, можна покращити)
+  // Будуємо структуру (з інформацією про strategy для debug)
   const structure = buildStructure(canonicalArticles, txtContent);
+  if (structure) {
+    (structure as any).parsing_strategy = strategy;
+    (structure as any).parsing_strategy_reason = strategyReason;
+    (structure as any).units_count = units.length;
+    (structure as any).requires_fallback = requiresFallback;
+  }
 
   // Генеруємо content hash (включаємо chunks)
   const contentHash = generateContentHash(nazva, canonicalArticles, canonicalChunks);
@@ -213,7 +250,10 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
       rada_dokid: dokid,
       title: nazva,
       document_type: documentType,
+      document_type_slug: documentTypeSlug, // PHASE 14
       category,
+      law_number: lawNumber,
+      document_number: jsonData?.organs?.orgnum || nreg, // PHASE 15: orgnum або nreg
       rada_datred: datred,
       source_url: sourceUrl,
       imported_at: now,
@@ -265,34 +305,84 @@ function parseArticlesFromStru(stru: any[]): ParsedArticle[] {
 }
 
 /**
- * Визначає тип документа (rule-based)
+ * Визначає тип документа (rule-based + JSON typ)
+ * 
+ * Typ значення з rada.gov.ua:
+ * - 216: Конституція
+ * - 2: Постанова
+ * - 1: Закон
+ * - 3: Розпорядження
+ * - 4: Указ
+ * - 5: Кодекс
  */
 function guessDocumentType(nazva: string, jsonData: any): string {
   const lowerNazva = nazva.toLowerCase();
+  const typ = jsonData?.typ;
+  const organs = jsonData?.organs;
 
+  // Спочатку перевіряємо JSON typ (більш надійний)
+  if (typ === 216) {
+    return 'Конституція';
+  }
+  // Кодекс може мати різні typ значення (5, 21, тощо)
+  if (typ === 5 || typ === 21) {
+    return 'Кодекс';
+  }
+  if (typ === 1) {
+    return 'Закон';
+  }
+  if (typ === 2) {
+    // Постанова - уточнюємо тип
+    // organs формат: "2:19950127:57" де перше число - орган (2 = КМУ, 1 = ВР)
+    if (organs && typeof organs === 'string') {
+      const organMatch = organs.match(/^(\d+):/);
+      if (organMatch && organMatch[1] === '2') {
+        return 'Постанова КМУ';
+      }
+      if (organMatch && organMatch[1] === '1') {
+        return 'Постанова ВР';
+      }
+    }
+    // Перевіряємо в назві
+    if (lowerNazva.includes('кабінет') || lowerNazva.includes('кму') || lowerNazva.includes('км')) {
+      return 'Постанова КМУ';
+    }
+    if (lowerNazva.includes('верховна') || lowerNazva.includes('вр')) {
+      return 'Постанова ВР';
+    }
+    return 'Постанова';
+  }
+  if (typ === 3) {
+    return 'Розпорядження';
+  }
+  if (typ === 4) {
+    return 'Указ';
+  }
+
+  // Якщо typ не визначений, використовуємо rule-based з назви
   if (lowerNazva.includes('конституція')) {
     return 'Конституція';
   }
   if (lowerNazva.includes('кодекс')) {
     return 'Кодекс';
   }
+  if (lowerNazva.includes('постанова')) {
+    if (lowerNazva.includes('кабінет') || lowerNazva.includes('кму') || lowerNazva.includes('км')) {
+      return 'Постанова КМУ';
+    }
+    if (lowerNazva.includes('верховна') || lowerNazva.includes('вр')) {
+      return 'Постанова ВР';
+    }
+    return 'Постанова';
+  }
   if (lowerNazva.includes('закон')) {
     return 'Закон';
-  }
-  if (lowerNazva.includes('постанова')) {
-    return 'Постанова';
   }
   if (lowerNazva.includes('указ')) {
     return 'Указ';
   }
   if (lowerNazva.includes('розпорядження')) {
     return 'Розпорядження';
-  }
-
-  // Спробуємо з JSON
-  const typ = jsonData?.typ;
-  if (typ === 216) {
-    return 'Конституція';
   }
 
   return 'Документ';

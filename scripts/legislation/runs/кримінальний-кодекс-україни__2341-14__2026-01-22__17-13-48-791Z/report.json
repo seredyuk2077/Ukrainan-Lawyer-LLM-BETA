@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "2341-14",
+    "title": "Кримінальний кодекс України",
+    "content_hash": "1ca6a321b313cff840d178a85f579a433328707cd8e4374258165dc784406218",
+    "r2_key": "legislation/criminal/2341-14.json",
+    "expected_chunks": 943,
+    "qdrant": {
+      "chunks": 943,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/кримінальний-кодекс-україни__2341-14__2026-01-22__17-13-48-791Z"
+  }
+}

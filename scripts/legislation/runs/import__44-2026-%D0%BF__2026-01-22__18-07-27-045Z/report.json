@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "44-2026-п",
+    "title": "Про внесення зміни до пункту 19 особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування",
+    "content_hash": "84e7f5d5ff9d4efebe602a269a4fb2083990a65fba9e930d3374127460a2773a",
+    "r2_key": "legislation/other/44-2026-%D0%BF.json",
+    "expected_chunks": 4,
+    "qdrant": {
+      "chunks": 4,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__44-2026-%D0%BF__2026-01-22__18-07-27-045Z"
+  }
+}

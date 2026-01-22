@@ -1,0 +1,524 @@
+/**
+ * Verify command — перевірка консистентності Supabase ↔ Qdrant ↔ R2
+ * 
+ * PHASE 18: Final Production Hardening — Invariants V1
+ */
+import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
+import { createQdrantClient, countByNreg, QDRANT_COLLECTION_ACTS, QDRANT_COLLECTION_CHUNKS } from '../lib/qdrantAdmin.js';
+import { getR2AdminClient, headObject } from '../lib/r2Admin.js';
+import { getJsonFromR2 } from '../lib/r2Json.js';
+import { isValidCategory } from '../taxonomy/taxonomy.js';
+import { DocumentTypeSlug } from '../documentTypes/documentTypes.js';
+
+export interface VerifyResult {
+  nreg: string;
+  pass: boolean;
+  issues: Array<{ component: string; check: string; status: 'PASS' | 'FAIL'; reason?: string }>;
+}
+
+export async function verifyDocument(nreg: string, options?: { writeHealth?: boolean }): Promise<VerifyResult> {
+  console.log(`\n═══════════════════════════════════════════════════════════`);
+  console.log(`Verify: ${nreg}`);
+  console.log(`═══════════════════════════════════════════════════════════\n`);
+  
+  const supabase = createSupabaseAdminClient();
+  const checks: Array<{ component: string; check: string; status: 'PASS' | 'FAIL'; reason?: string }> = [];
+  
+  // 1. Supabase
+  const { data: doc, error: docError } = await supabase
+    .from('legislation_documents')
+    .select('*')
+    .eq('rada_nreg', nreg)
+    .maybeSingle();
+  
+  if (docError) {
+    throw new Error(`Supabase read error: ${docError.message}`);
+  }
+  
+  if (!doc) {
+    checks.push({ component: 'Supabase', check: 'Document exists', status: 'FAIL', reason: 'Not found' });
+    return { nreg, pass: false, issues: checks };
+  }
+  
+  console.log(`✅ Supabase: Found`);
+  console.log(`  title: ${doc.title}`);
+  
+  // A) Supabase core invariants
+  
+  // document_type_slug NOT NULL
+  if (!doc.document_type_slug) {
+    checks.push({ component: 'Supabase', check: 'document_type_slug NOT NULL', status: 'FAIL', reason: 'NULL' });
+    console.log(`  ❌ document_type_slug: NULL`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'document_type_slug NOT NULL', status: 'PASS' });
+    console.log(`  ✅ document_type_slug: ${doc.document_type_slug}`);
+  }
+  
+  // category_slug NOT NULL (EN taxonomy)
+  if (!doc.category || !isValidCategory(doc.category)) {
+    checks.push({ component: 'Supabase', check: 'category_slug NOT NULL (EN)', status: 'FAIL', reason: `Invalid: ${doc.category || 'NULL'}` });
+    console.log(`  ❌ category: ${doc.category || 'NULL'}`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'category_slug NOT NULL (EN)', status: 'PASS' });
+    console.log(`  ✅ category: ${doc.category}`);
+  }
+  
+  // document_number NOT NULL
+  if (!doc.document_number) {
+    checks.push({ component: 'Supabase', check: 'document_number NOT NULL', status: 'FAIL', reason: 'NULL' });
+    console.log(`  ❌ document_number: NULL`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'document_number NOT NULL', status: 'PASS' });
+    console.log(`  ✅ document_number: ${doc.document_number}`);
+  }
+  
+  // storage_category NOT NULL
+  if (!doc.storage_category) {
+    checks.push({ component: 'Supabase', check: 'storage_category NOT NULL', status: 'FAIL', reason: 'NULL' });
+    console.log(`  ❌ storage_category: NULL`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'storage_category NOT NULL', status: 'PASS' });
+    console.log(`  ✅ storage_category: ${doc.storage_category}`);
+  }
+  
+  // act_is_part=false ⇒ act_group_key IS NULL
+  const actIsPart = doc.act_is_part === true;
+  if (!actIsPart && (doc.act_group_key !== null || doc.act_part_label !== null)) {
+    checks.push({ 
+      component: 'Supabase', 
+      check: 'act_is_part=false ⇒ act_group_key IS NULL', 
+      status: 'FAIL', 
+      reason: `act_group_key=${doc.act_group_key}, act_part_label=${doc.act_part_label}` 
+    });
+    console.log(`  ❌ Act group sanity: single act has act_group_key`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'act_is_part=false ⇒ act_group_key IS NULL', status: 'PASS' });
+    console.log(`  ✅ Act group sanity: OK`);
+  }
+  
+  // expected_chunks >= 0, indexed_chunks >= 0
+  if (doc.expected_chunks === null || doc.expected_chunks < 0) {
+    checks.push({ component: 'Supabase', check: 'expected_chunks >= 0', status: 'FAIL', reason: `value=${doc.expected_chunks}` });
+    console.log(`  ❌ expected_chunks: ${doc.expected_chunks}`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'expected_chunks >= 0', status: 'PASS' });
+  }
+  
+  if (doc.indexed_chunks === null || doc.indexed_chunks < 0) {
+    checks.push({ component: 'Supabase', check: 'indexed_chunks >= 0', status: 'FAIL', reason: `value=${doc.indexed_chunks}` });
+    console.log(`  ❌ indexed_chunks: ${doc.indexed_chunks}`);
+  } else {
+    checks.push({ component: 'Supabase', check: 'indexed_chunks >= 0', status: 'PASS' });
+  }
+  
+  // qdrant_status=indexed ⇒ indexed_chunks == expected_chunks
+  const isIndexable = doc.document_type_slug && 
+    !['other'].includes(doc.document_type_slug as DocumentTypeSlug);
+  
+  if (doc.qdrant_status === 'indexed' && doc.expected_chunks !== doc.indexed_chunks) {
+    checks.push({ 
+      component: 'Supabase', 
+      check: 'qdrant_status=indexed ⇒ indexed_chunks == expected_chunks', 
+      status: 'FAIL', 
+      reason: `expected=${doc.expected_chunks}, indexed=${doc.indexed_chunks}` 
+    });
+    console.log(`  ❌ Chunks mismatch: expected=${doc.expected_chunks}, indexed=${doc.indexed_chunks}`);
+  } else if (doc.qdrant_status === 'indexed') {
+    checks.push({ component: 'Supabase', check: 'qdrant_status=indexed ⇒ indexed_chunks == expected_chunks', status: 'PASS' });
+    console.log(`  ✅ Chunks match: ${doc.expected_chunks}`);
+  }
+  
+  // chunks==0 для indexable=true ⇒ FAIL
+  if (isIndexable && doc.expected_chunks === 0) {
+    checks.push({ 
+      component: 'Supabase', 
+      check: 'indexable document has chunks > 0', 
+      status: 'FAIL', 
+      reason: `expected_chunks=0 for indexable document` 
+    });
+    console.log(`  ❌ Indexable document has 0 chunks`);
+  } else if (isIndexable) {
+    checks.push({ component: 'Supabase', check: 'indexable document has chunks > 0', status: 'PASS' });
+  }
+  
+  // B) R2 invariants
+  const r2Key = doc.r2_key as string;
+  if (!r2Key) {
+    checks.push({ component: 'R2', check: 'r2_key exists', status: 'FAIL', reason: 'NULL' });
+    console.log(`  ❌ R2: r2_key is NULL`);
+  } else {
+    const { client: r2, bucket } = getR2AdminClient();
+    const head = await headObject(r2, bucket, r2Key);
+    
+    if (!head.exists) {
+      checks.push({ component: 'R2', check: 'r2_key exists in bucket', status: 'FAIL', reason: `Not found: ${r2Key}` });
+      console.log(`  ❌ R2: Canonical not found: ${r2Key}`);
+    } else {
+      checks.push({ component: 'R2', check: 'r2_key exists in bucket', status: 'PASS' });
+      console.log(`  ✅ R2: Canonical exists (${head.size || 0} bytes)`);
+      
+      // Verify canonical content
+      try {
+        const canonical = await getJsonFromR2(r2Key);
+        
+        if (!canonical || !canonical.content) {
+          checks.push({ component: 'R2', check: 'canonical JSON valid', status: 'FAIL', reason: 'Missing content' });
+          console.log(`  ❌ R2: Invalid canonical structure`);
+        } else {
+          checks.push({ component: 'R2', check: 'canonical JSON valid', status: 'PASS' });
+          
+          const canonicalChunks = canonical.content.chunks?.length || 0;
+          
+          if (isIndexable && canonicalChunks === 0) {
+            checks.push({ 
+              component: 'R2', 
+              check: 'canonical has chunks > 0 (if indexable)', 
+              status: 'FAIL', 
+              reason: `canonical chunks=0` 
+            });
+            console.log(`  ❌ R2: Indexable document has 0 chunks in canonical`);
+          } else if (isIndexable) {
+            checks.push({ component: 'R2', check: 'canonical has chunks > 0 (if indexable)', status: 'PASS' });
+          }
+          
+          if (canonicalChunks !== doc.expected_chunks) {
+            checks.push({ 
+              component: 'R2', 
+              check: 'canonical chunks count == expected_chunks', 
+              status: 'FAIL', 
+              reason: `canonical=${canonicalChunks}, expected=${doc.expected_chunks}` 
+            });
+            console.log(`  ⚠️  Canonical chunks: ${canonicalChunks} (expected: ${doc.expected_chunks})`);
+          } else {
+            checks.push({ component: 'R2', check: 'canonical chunks count == expected_chunks', status: 'PASS' });
+            console.log(`  ✅ Canonical chunks match: ${canonicalChunks}`);
+          }
+        }
+      } catch (e: any) {
+        checks.push({ component: 'R2', check: 'canonical JSON readable', status: 'FAIL', reason: e.message });
+        console.log(`  ❌ Failed to read canonical: ${e.message}`);
+      }
+    }
+  }
+  
+  // C) Qdrant invariants
+  const qdrant = createQdrantClient();
+  const qActs = await countByNreg(qdrant, QDRANT_COLLECTION_ACTS, nreg);
+  const qChunks = await countByNreg(qdrant, QDRANT_COLLECTION_CHUNKS, nreg);
+  
+  console.log(`\n✅ Qdrant: Found`);
+  console.log(`  acts: ${qActs}`);
+  console.log(`  chunks: ${qChunks}`);
+  
+  // Acts count MUST be exactly 1 (PHASE 18.1b: BLOCKER)
+  if (qActs !== 1) {
+    checks.push({ 
+      component: 'Qdrant', 
+      check: 'Qdrant acts count == 1', 
+      status: 'FAIL', 
+      reason: `Qdrant=${qActs}, expected=1` 
+    });
+    console.log(`  ❌ Acts count mismatch: Qdrant=${qActs}, expected=1`);
+  } else {
+    checks.push({ component: 'Qdrant', check: 'Qdrant acts count == 1', status: 'PASS' });
+    console.log(`  ✅ Acts count match: ${qActs}`);
+  }
+  
+  // Qdrant points count == indexed_chunks
+  if (qChunks !== doc.indexed_chunks) {
+    checks.push({ 
+      component: 'Qdrant', 
+      check: 'Qdrant chunks count == indexed_chunks', 
+      status: 'FAIL', 
+      reason: `Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks}` 
+    });
+    console.log(`  ❌ Chunks count mismatch: Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks}`);
+  } else {
+    checks.push({ component: 'Qdrant', check: 'Qdrant chunks count == indexed_chunks', status: 'PASS' });
+    console.log(`  ✅ Chunks count match: ${qChunks}`);
+  }
+  
+  // Check payloads
+  if (qChunks > 0) {
+    const chunks = await qdrant.scroll(QDRANT_COLLECTION_CHUNKS, {
+      filter: {
+        must: [{ key: 'rada_nreg', match: { value: nreg } }],
+      },
+      limit: 1,
+      with_payload: true,
+    });
+    
+    if (chunks.points && chunks.points.length > 0) {
+      const payload = chunks.points[0].payload as any;
+      
+      // Required payload fields
+      const requiredFields = ['rada_nreg', 'r2_key', 'json_path', 'chunk_index', 'content_hash'];
+      for (const field of requiredFields) {
+        if (!payload[field]) {
+          checks.push({ component: 'Qdrant', check: `payload has ${field}`, status: 'FAIL', reason: `Missing ${field}` });
+        } else {
+          checks.push({ component: 'Qdrant', check: `payload has ${field}`, status: 'PASS' });
+        }
+      }
+      
+      // document_type_slug in payload
+      if (payload.document_type_slug !== doc.document_type_slug) {
+        checks.push({ 
+          component: 'Qdrant', 
+          check: 'payload document_type_slug matches Supabase', 
+          status: 'FAIL', 
+          reason: `Supabase=${doc.document_type_slug}, Qdrant=${payload.document_type_slug}` 
+        });
+        console.log(`  ⚠️  Payload document_type_slug mismatch`);
+      } else {
+        checks.push({ component: 'Qdrant', check: 'payload document_type_slug matches Supabase', status: 'PASS' });
+      }
+      
+      // category in payload
+      if (payload.category !== doc.category) {
+        checks.push({ 
+          component: 'Qdrant', 
+          check: 'payload category matches Supabase', 
+          status: 'FAIL', 
+          reason: `Supabase=${doc.category}, Qdrant=${payload.category}` 
+        });
+        console.log(`  ⚠️  Payload category mismatch: Supabase=${doc.category}, Qdrant=${payload.category}`);
+      } else {
+        checks.push({ component: 'Qdrant', check: 'payload category matches Supabase', status: 'PASS' });
+        console.log(`  ✅ Payload category matches: ${payload.category}`);
+      }
+    }
+  }
+  
+  // D) Cross-store invariants
+  // canonical chunks count == expected_chunks (вже перевірено в R2 секції)
+  // Qdrant points count == indexed_chunks (вже перевірено вище)
+  
+  // Calculate sync_health if writeHealth enabled (PHASE 19)
+  let syncHealth: 'green' | 'yellow' | 'red' | 'unknown' | null = null;
+  let syncIssue: string | null = null;
+  let legalStatus: 'active' | 'inactive' | 'unknown' | null = null;
+  
+  const failCount = checks.filter(c => c.status === 'FAIL').length;
+  const hasR2 = checks.find(c => c.component === 'R2' && c.check === 'r2_key exists in bucket')?.status === 'PASS';
+  const hasQdrantMatch = checks.find(c => c.component === 'Qdrant' && c.check === 'Qdrant chunks count == indexed_chunks')?.status === 'PASS';
+  const hasActsMatch = checks.find(c => c.component === 'Qdrant' && c.check === 'Qdrant acts count == 1')?.status === 'PASS';
+  const chunksMatch = doc.expected_chunks === doc.indexed_chunks;
+  
+  // GREEN: всі інваріанти PASS
+  if (failCount === 0 && hasR2 && hasQdrantMatch && hasActsMatch && chunksMatch && 
+      doc.sync_status === 'synced' && doc.qdrant_status === 'indexed' &&
+      doc.document_type_slug && doc.category && doc.document_number) {
+    syncHealth = 'green';
+    syncIssue = null;
+  } 
+  // RED: критичні помилки
+  else if (failCount > 0 && (
+    doc.sync_status === 'error' || 
+    doc.qdrant_status === 'error' ||
+    !hasR2 ||
+    !hasQdrantMatch ||
+    !hasActsMatch ||
+    (isIndexable && doc.expected_chunks === 0)
+  )) {
+    syncHealth = 'red';
+    const failChecks = checks.filter(c => c.status === 'FAIL');
+    syncIssue = failChecks.map(c => `${c.check}${c.reason ? `: ${c.reason}` : ''}`).join('; ');
+  } 
+  // YELLOW: часткові проблеми або warnings
+  else if (failCount > 0 || !chunksMatch || doc.sync_status !== 'synced' || doc.qdrant_status !== 'indexed') {
+    syncHealth = 'yellow';
+    if (doc.sync_status !== 'synced') syncIssue = `sync_status=${doc.sync_status}`;
+    else if (doc.qdrant_status !== 'indexed') syncIssue = `qdrant_status=${doc.qdrant_status}`;
+    else if (!chunksMatch) syncIssue = `chunks mismatch: expected=${doc.expected_chunks}, indexed=${doc.indexed_chunks}`;
+    else syncIssue = 'partial issues';
+  }
+  // UNKNOWN: недостатньо даних
+  else {
+    syncHealth = 'unknown';
+    syncIssue = null;
+  }
+  
+  // Legal status: якщо не можемо визначити надійно — ставимо unknown
+  if (doc.legal_status && ['active', 'inactive'].includes(doc.legal_status)) {
+    legalStatus = doc.legal_status as 'active' | 'inactive';
+  } else {
+    legalStatus = 'unknown';
+  }
+  
+  // Write health if requested
+  if (options?.writeHealth && syncHealth) {
+    const updateData: any = {
+      sync_health: syncHealth,
+      sync_issue: syncIssue,
+      legal_status: legalStatus,
+    };
+    
+    const { data: updateResult, error: updateError } = await supabase
+      .from('legislation_documents')
+      .update(updateData)
+      .eq('rada_nreg', nreg)
+      .select('rada_nreg, sync_health, sync_issue, legal_status')
+      .maybeSingle();
+    
+    if (updateError) {
+      console.log(`  ⚠️  Failed to update health: ${updateError.message}`);
+    } else if (updateResult) {
+      console.log(`  📝 Updated sync_health: ${syncHealth}${syncIssue ? ` (${syncIssue.substring(0, 50)}${syncIssue.length > 50 ? '...' : ''})` : ''}`);
+    }
+  }
+  
+  // Summary
+  const passCount = checks.filter(c => c.status === 'PASS').length;
+  const failCountFinal = checks.filter(c => c.status === 'FAIL').length;
+  const allPass = failCountFinal === 0;
+  
+  console.log(`\n═══════════════════════════════════════════════════════════`);
+  console.log(`Summary`);
+  console.log(`═══════════════════════════════════════════════════════════`);
+  console.log(`PASS: ${passCount} / FAIL: ${failCountFinal}`);
+  
+  if (allPass) {
+    console.log(`✅ All checks passed!`);
+  } else {
+    console.log(`❌ Found ${failCountFinal} FAIL(s):`);
+    checks.filter(c => c.status === 'FAIL').forEach(({ component, check, reason }) => {
+      console.log(`  - [${component}] ${check}${reason ? `: ${reason}` : ''}`);
+    });
+  }
+  
+  return {
+    nreg,
+    pass: allPass,
+    issues: checks.filter(c => c.status === 'FAIL'),
+  };
+}
+
+export async function printEvidenceQueries(): Promise<void> {
+  const supabase = createSupabaseAdminClient();
+  
+  console.log(`\n═══════════════════════════════════════════════════════════`);
+  console.log(`SQL Evidence Queries`);
+  console.log(`═══════════════════════════════════════════════════════════\n`);
+  
+  // A) NULL stats
+  const { data: docs } = await supabase.from('legislation_documents').select('document_type_slug,category,document_number,storage_category');
+  if (docs) {
+    const total = docs.length;
+    const nullDocType = docs.filter(d => !d.document_type_slug).length;
+    const nullCategory = docs.filter(d => !d.category).length;
+    const nullDocNumber = docs.filter(d => !d.document_number).length;
+    const nullStorage = docs.filter(d => !d.storage_category).length;
+    console.log(`A) NULL Stats (total=${total}):`);
+    console.log(`   null_doc_type_slug: ${nullDocType}`);
+    console.log(`   null_category: ${nullCategory}`);
+    console.log(`   null_document_number: ${nullDocNumber}`);
+    console.log(`   null_storage_category: ${nullStorage}`);
+  }
+  
+  // B) act_group sanity
+  const { data: actGroupDocs } = await supabase
+    .from('legislation_documents')
+    .select('act_is_part,act_group_key,act_part_label');
+  
+  if (actGroupDocs) {
+    const invalidActGroup = actGroupDocs.filter(d => 
+      d.act_is_part === false && (d.act_group_key !== null || d.act_part_label !== null)
+    ).length;
+    console.log(`\nB) Act Group Sanity:`);
+    console.log(`   invalid_act_group (single act has group fields): ${invalidActGroup}`);
+  }
+  
+  // C) qdrant/indexing sanity
+  const { data: syncDocs } = await supabase
+    .from('legislation_documents')
+    .select('sync_status,qdrant_status,expected_chunks,indexed_chunks');
+  
+  if (syncDocs) {
+    const notSynced = syncDocs.filter(d => 
+      d.sync_status !== 'synced' || 
+      d.qdrant_status !== 'indexed' || 
+      d.expected_chunks !== d.indexed_chunks
+    ).length;
+    console.log(`\nC) Sync/Indexing Sanity:`);
+    console.log(`   not_synced (sync_status != 'synced' OR qdrant_status != 'indexed' OR chunks mismatch): ${notSynced}`);
+  }
+  
+  // D) Total counts
+  const { count: totalCount } = await supabase
+    .from('legislation_documents')
+    .select('*', { count: 'exact', head: true });
+  
+  console.log(`\nD) Total Documents: ${totalCount || 0}`);
+}
+
+export async function verifyAll(options?: { writeHealth?: boolean; page?: number; pageSize?: number; evidence?: boolean }): Promise<{ total: number; pass: number; fail: number; results: VerifyResult[] }> {
+  const { writeHealth = false, page = 0, pageSize = 100 } = options || {};
+  
+  const supabase = createSupabaseAdminClient();
+  
+  // Get all nregs with pagination
+  const { data: docs, error } = await supabase
+    .from('legislation_documents')
+    .select('rada_nreg')
+    .range(page * pageSize, (page + 1) * pageSize - 1)
+    .order('rada_nreg');
+  
+  if (error) throw new Error(`Supabase query error: ${error.message}`);
+  if (!docs || docs.length === 0) {
+    return { total: 0, pass: 0, fail: 0, results: [] };
+  }
+  
+  console.log(`\n═══════════════════════════════════════════════════════════`);
+  console.log(`Verify All (page ${page + 1}, ${docs.length} documents)`);
+  console.log(`═══════════════════════════════════════════════════════════\n`);
+  
+  const results: VerifyResult[] = [];
+  
+  for (const doc of docs) {
+    try {
+      const result = await verifyDocument(doc.rada_nreg, { writeHealth });
+      results.push(result);
+    } catch (e: any) {
+      results.push({
+        nreg: doc.rada_nreg,
+        pass: false,
+        issues: [{ component: 'System', check: 'verify execution', status: 'FAIL', reason: e.message }],
+      });
+    }
+  }
+  
+  const pass = results.filter(r => r.pass).length;
+  const fail = results.filter(r => !r.pass).length;
+  
+  console.log(`\n═══════════════════════════════════════════════════════════`);
+  console.log(`Batch Summary`);
+  console.log(`═══════════════════════════════════════════════════════════`);
+  console.log(`Total: ${results.length}`);
+  console.log(`PASS: ${pass}`);
+  console.log(`FAIL: ${fail}`);
+  
+  if (fail > 0) {
+    console.log(`\nTop FAIL reasons:`);
+    const failReasons = new Map<string, number>();
+    results.filter(r => !r.pass).forEach(r => {
+      r.issues.forEach(i => {
+        const key = `${i.component}: ${i.check}`;
+        failReasons.set(key, (failReasons.get(key) || 0) + 1);
+      });
+    });
+    Array.from(failReasons.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .forEach(([reason, count]) => {
+        console.log(`  - ${reason}: ${count}`);
+      });
+  }
+  
+  // Evidence mode: SQL queries
+  if (options?.evidence) {
+    await printEvidenceQueries();
+  }
+  
+  return { total: results.length, pass, fail, results };
+}

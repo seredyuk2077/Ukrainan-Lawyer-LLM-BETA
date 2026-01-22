@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "48-2026-п",
+    "title": "Деякі питання здійснення у 2026 році доплати непрацюючим пенсіонерам, які постійно проживають у зоні безумовного (обов'язкового) відселення та в зоні гарантованого добровільного відселення",
+    "content_hash": "8a90ed2ce6fd20894a5b9930eec39285cd337184de10728cb13df94f05bc9fab",
+    "r2_key": "legislation/other/48-2026-%D0%BF.json",
+    "expected_chunks": 9,
+    "qdrant": {
+      "chunks": 9,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__48-2026-%D0%BF__2026-01-22__18-14-06-172Z"
+  }
+}

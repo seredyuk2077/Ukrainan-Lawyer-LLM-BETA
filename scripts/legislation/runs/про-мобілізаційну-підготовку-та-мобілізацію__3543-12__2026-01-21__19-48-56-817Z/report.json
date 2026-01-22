@@ -1,0 +1,62 @@
+{
+  "phase": "E.remove.completed",
+  "preview": {
+    "action": "remove",
+    "confirm": true,
+    "target": {
+      "rada_nreg": "3543-12"
+    },
+    "supabase": {
+      "document_found": true,
+      "document": {
+        "rada_nreg": "3543-12",
+        "title": "Про мобілізаційну підготовку та мобілізацію",
+        "content_hash": "a4cd6601772d94b84acf91d1e0dd6f6d6b47fa6a28e5f17aedb6dda10b3fe8fb",
+        "r2_key": "legislation/other/3543-12.json",
+        "chunks_count": 61,
+        "rada_datred": "2025-12-04"
+      },
+      "chunks_count": 0
+    },
+    "qdrant": {
+      "chunks_count_by_nreg": 61,
+      "acts_count_by_nreg": 1
+    },
+    "r2": {
+      "canonical_key": "legislation/other/3543-12.json",
+      "canonical_is_canonical_key": true,
+      "head": {
+        "exists": true,
+        "size": 717613,
+        "etag": "\"52675324930b52f7080af18efd3a3fb0\"",
+        "lastModified": "2026-01-21T19:32:02.000Z"
+      }
+    },
+    "timestamps": {
+      "preview_at": "2026-01-21T19:48:57.328Z"
+    }
+  },
+  "result": {
+    "action": "remove",
+    "rada_nreg": "3543-12",
+    "before": {
+      "supabase_doc": true,
+      "supabase_chunks": 0,
+      "qdrant_acts": 1,
+      "qdrant_chunks": 61,
+      "r2": {
+        "exists": true,
+        "size": 717613,
+        "etag": "\"52675324930b52f7080af18efd3a3fb0\"",
+        "lastModified": "2026-01-21T19:32:02.000Z"
+      }
+    },
+    "after": {
+      "supabase_docs": 0,
+      "supabase_chunks": 0,
+      "qdrant_acts": 0,
+      "qdrant_chunks": 0
+    },
+    "completed_at": "2026-01-21T19:48:58.926Z"
+  }
+}

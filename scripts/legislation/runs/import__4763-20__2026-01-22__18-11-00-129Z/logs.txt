@@ -1,0 +1,8 @@
+import:start 2026-01-22T18:11:00.131Z mode=add nreg=4763-20 dryRun=false resume=false
+r2:uploaded=true size=6455
+ai:enrichment=generating...
+ai:enrichment=generated category=defense_mobilization
+embeddings:progress=1/1 processed=1/1
+qdrant:upsert_progress=1/1
+job:completed id=956a6125-87d9-4c43-bedc-66a17b71d0e8
+import:done status=completed

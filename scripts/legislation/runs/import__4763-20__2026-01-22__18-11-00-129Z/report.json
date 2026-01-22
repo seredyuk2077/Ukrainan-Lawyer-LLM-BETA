@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "4763-20",
+    "title": "Про направлення на повторне друге читання проекту Закону України про внесення зміни до статті 23 Закону України \"Про мобілізаційну підготовку та мобілізацію\" щодо надання відстрочки від призову на військову службу під час мобілізації деяким категоріям громадян",
+    "content_hash": "edee0d1813f579f03f44e4c0b00919ad9dc528c9bcae07e7762778dcf19b4098",
+    "r2_key": "legislation/other/4763-20.json",
+    "expected_chunks": 1,
+    "qdrant": {
+      "chunks": 1,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__4763-20__2026-01-22__18-11-00-129Z"
+  }
+}

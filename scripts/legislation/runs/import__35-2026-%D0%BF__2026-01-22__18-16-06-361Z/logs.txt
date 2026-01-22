@@ -1,0 +1,9 @@
+import:start 2026-01-22T18:16:06.361Z mode=add nreg=35-2026-п dryRun=false resume=false
+r2:uploaded=true size=20929
+ai:enrichment=generating...
+ai:enrichment=generated category=finance_banking
+embeddings:progress=1/2 processed=3/5
+embeddings:progress=2/2 processed=5/5
+qdrant:upsert_progress=1/1
+job:completed id=42151f68-0c54-49f0-b028-e7a68c4f3c32
+import:done status=completed

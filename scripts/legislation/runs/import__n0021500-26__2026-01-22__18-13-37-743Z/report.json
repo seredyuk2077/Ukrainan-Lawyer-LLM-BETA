@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "n0021500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "content_hash": "73d0a83c3c0d828c7e709ba0a700e1fed39672af542935f2f1eaf87b96644ca9",
+    "r2_key": "legislation/other/n0021500-26.json",
+    "expected_chunks": 1,
+    "qdrant": {
+      "chunks": 1,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/import__n0021500-26__2026-01-22__18-13-37-743Z"
+  }
+}

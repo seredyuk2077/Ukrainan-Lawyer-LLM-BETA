@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "schema_version": "1.0",
+  "metadata": {
+    "rada_nreg": "31-2026-р",
+    "rada_dokid": 551480,
+    "title": "Про звільнення Суярка С.М. з посади державного секретаря Міністерства енергетики України",
+    "document_type": "Документ",
+    "document_type_slug": "regulation",
+    "category": "інше",
+    "law_number": "31-2026-р",
+    "document_number": "31-2026-р",
+    "rada_datred": "2026-01-19",
+    "source_url": "https://data.rada.gov.ua/laws/show/31-2026-р",
+    "imported_at": "2026-01-22T18:04:12.208Z",
+    "updated_at": "2026-01-22T18:04:12.208Z",
+    "content_hash": "acab6c46e414f1bb77df2db7aa7b49f21f769013a0d2baf1eec6f8574fb2c0d5",
+    "previous_hash": null,
+    "r2_key": "legislation/other/31-2026-%D1%80.json"
+  },
+  "content": {
+    "articles": [],
+    "chunks": [],
+    "structure": {
+      "type": "document",
+      "parsing_strategy": "fallback",
+      "parsing_strategy_reason": "no stru",
+      "units_count": 0,
+      "requires_fallback": false
+    }
+  },
+  "raw": {
+    "rada_api_json": {
+      "nreg": "31-2026-р",
+      "dokid": 551480,
+      "nazva": "Про звільнення Суярка С.М. з посади державного секретаря Міністерства енергетики України",
+      "datred": "2026-01-19"
+    },
+    "rada_api_txt": "КАБІНЕТ МІНІСТРІВ УКРАЇНИ\r\nРОЗПОРЯДЖЕННЯ\r\nвід 19 січня 2026 р. № 31-р\r\nКиїв\r\nПро звільнення Суярка С.М. з посади державного секретаря Міністерства енергетики України\r\nЗвільнити Суярка Сергія Миколайовича з посади державного секретаря Міністерства енергетики України за власним бажанням.\r\nПрем'єр-міністр України\r\nЮ. СВИРИДЕНКО\r\nІнд. 19\r\n"
+  }
+}

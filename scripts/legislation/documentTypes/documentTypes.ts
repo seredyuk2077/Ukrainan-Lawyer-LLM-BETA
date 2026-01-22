@@ -1,0 +1,265 @@
+/**
+ * Document Type Taxonomy V1
+ * 
+ * Стандартизовані типи документів для legislation RAG system.
+ * Аналогічно category taxonomy — контрольований перелік, не "вигадування" нових типів.
+ */
+
+export type DocumentTypeSlug =
+  // Основні закони
+  | 'law'
+  | 'code'
+  | 'constitution'
+  
+  // Постанови та рішення
+  | 'cmu_resolution'      // Постанова КМУ
+  | 'vr_resolution'       // Постанова ВРУ
+  | 'presidential_decree' // Указ Президента
+  | 'presidential_order'  // Розпоряження Президента
+  
+  // Адміністративні акти
+  | 'minister_order'      // Наказ міністра
+  | 'regulation'          // Положення
+  | 'rules'               // Правила
+  | 'instruction'         // Інструкція
+  | 'charter'             // Статут
+  
+  // Міжнародні документи
+  | 'international_treaty' // Міжнародний договір
+  | 'convention'          // Конвенція
+  | 'protocol'            // Протокол
+  | 'agreement'           // Угода
+  
+  // Судові документи
+  | 'court_decision'       // Рішення суду
+  | 'court_opinion'        // Окрема думка судді
+  | 'ccu_decision'        // Рішення КСУ
+  | 'ccu_opinion'          // Окрема думка судді КСУ
+  
+  // Інші
+  | 'memorandum'          // Меморандум
+  | 'declaration'         // Декларація
+  | 'other';              // Інше (fallback)
+
+export interface DocumentTypeInfo {
+  slug: DocumentTypeSlug;
+  label_uk: string;
+  label_en: string;
+  description?: string;
+}
+
+export const DOCUMENT_TYPES: Record<DocumentTypeSlug, DocumentTypeInfo> = {
+  law: {
+    slug: 'law',
+    label_uk: 'Закон',
+    label_en: 'Law',
+    description: 'Закон України',
+  },
+  code: {
+    slug: 'code',
+    label_uk: 'Кодекс',
+    label_en: 'Code',
+    description: 'Кодекс України',
+  },
+  constitution: {
+    slug: 'constitution',
+    label_uk: 'Конституція',
+    label_en: 'Constitution',
+    description: 'Конституція України',
+  },
+  cmu_resolution: {
+    slug: 'cmu_resolution',
+    label_uk: 'Постанова КМУ',
+    label_en: 'CMU Resolution',
+    description: 'Постанова Кабінету Міністрів України',
+  },
+  vr_resolution: {
+    slug: 'vr_resolution',
+    label_uk: 'Постанова ВРУ',
+    label_en: 'VRU Resolution',
+    description: 'Постанова Верховної Ради України',
+  },
+  presidential_decree: {
+    slug: 'presidential_decree',
+    label_uk: 'Указ Президента',
+    label_en: 'Presidential Decree',
+    description: 'Указ Президента України',
+  },
+  presidential_order: {
+    slug: 'presidential_order',
+    label_uk: 'Розпоряження Президента',
+    label_en: 'Presidential Order',
+    description: 'Розпоряження Президента України',
+  },
+  minister_order: {
+    slug: 'minister_order',
+    label_uk: 'Наказ',
+    label_en: 'Minister Order',
+    description: 'Наказ міністра/відомства',
+  },
+  regulation: {
+    slug: 'regulation',
+    label_uk: 'Положення',
+    label_en: 'Regulation',
+    description: 'Положення про...',
+  },
+  rules: {
+    slug: 'rules',
+    label_uk: 'Правила',
+    label_en: 'Rules',
+    description: 'Правила...',
+  },
+  instruction: {
+    slug: 'instruction',
+    label_uk: 'Інструкція',
+    label_en: 'Instruction',
+    description: 'Інструкція про...',
+  },
+  charter: {
+    slug: 'charter',
+    label_uk: 'Статут',
+    label_en: 'Charter',
+    description: 'Статут...',
+  },
+  international_treaty: {
+    slug: 'international_treaty',
+    label_uk: 'Міжнародний договір',
+    label_en: 'International Treaty',
+    description: 'Міжнародний договір України',
+  },
+  convention: {
+    slug: 'convention',
+    label_uk: 'Конвенція',
+    label_en: 'Convention',
+    description: 'Міжнародна конвенція',
+  },
+  protocol: {
+    slug: 'protocol',
+    label_uk: 'Протокол',
+    label_en: 'Protocol',
+    description: 'Міжнародний протокол',
+  },
+  agreement: {
+    slug: 'agreement',
+    label_uk: 'Угода',
+    label_en: 'Agreement',
+    description: 'Міжнародна угода',
+  },
+  court_decision: {
+    slug: 'court_decision',
+    label_uk: 'Рішення суду',
+    label_en: 'Court Decision',
+    description: 'Рішення суду',
+  },
+  court_opinion: {
+    slug: 'court_opinion',
+    label_uk: 'Окрема думка судді',
+    label_en: 'Court Opinion',
+    description: 'Окрема думка судді',
+  },
+  ccu_decision: {
+    slug: 'ccu_decision',
+    label_uk: 'Рішення КСУ',
+    label_en: 'CCU Decision',
+    description: 'Рішення Конституційного Суду України',
+  },
+  ccu_opinion: {
+    slug: 'ccu_opinion',
+    label_uk: 'Окрема думка судді КСУ',
+    label_en: 'CCU Opinion',
+    description: 'Окрема думка судді Конституційного Суду України',
+  },
+  memorandum: {
+    slug: 'memorandum',
+    label_uk: 'Меморандум',
+    label_en: 'Memorandum',
+    description: 'Меморандум',
+  },
+  declaration: {
+    slug: 'declaration',
+    label_uk: 'Декларація',
+    label_en: 'Declaration',
+    description: 'Декларація',
+  },
+  other: {
+    slug: 'other',
+    label_uk: 'Інше',
+    label_en: 'Other',
+    description: 'Інший тип документа',
+  },
+};
+
+/**
+ * Нормалізує document type до стандартного slug
+ */
+export function normalizeDocumentType(
+  input: string | null | undefined
+): DocumentTypeSlug {
+  if (!input) return 'other';
+  
+  const normalized = input.toLowerCase().trim();
+  
+  // Прямі мапінги
+  const directMap: Record<string, DocumentTypeSlug> = {
+    'закон': 'law',
+    'закон україни': 'law',
+    'кодекс': 'code',
+    'кодекс україни': 'code',
+    'конституція': 'constitution',
+    'конституція україни': 'constitution',
+    'постанова кму': 'cmu_resolution',
+    'постанова кабінету міністрів': 'cmu_resolution',
+    'постанова вр': 'vr_resolution',
+    'постанова верховної ради': 'vr_resolution',
+    'указ президента': 'presidential_decree',
+    'розпоряження президента': 'presidential_order',
+    'наказ': 'minister_order',
+    'положення': 'regulation',
+    'правила': 'rules',
+    'інструкція': 'instruction',
+    'статут': 'charter',
+    'конвенція': 'convention',
+    'міжнародний договір': 'international_treaty',
+    'протокол': 'protocol',
+    'угода': 'agreement',
+    'рішення суду': 'court_decision',
+    'окрема думка': 'court_opinion',
+    'окрема думка судді': 'court_opinion',
+    'рішення ксу': 'ccu_decision',
+    'окрема думка судді ксу': 'ccu_opinion',
+    'меморандум': 'memorandum',
+    'декларація': 'declaration',
+    'документ': 'other',
+  };
+  
+  if (directMap[normalized]) {
+    return directMap[normalized];
+  }
+  
+  // Часткові матчі
+  if (normalized.includes('кодекс')) return 'code';
+  if (normalized.includes('закон') && !normalized.includes('про')) return 'law';
+  if (normalized.includes('конституція')) return 'constitution';
+  if (normalized.includes('постанова') && normalized.includes('кму')) return 'cmu_resolution';
+  if (normalized.includes('постанова') && (normalized.includes('вр') || normalized.includes('верховної'))) return 'vr_resolution';
+  if (normalized.includes('указ') && normalized.includes('президента')) return 'presidential_decree';
+  if (normalized.includes('розпоряження') && normalized.includes('президента')) return 'presidential_order';
+  if (normalized.includes('наказ')) return 'minister_order';
+  if (normalized.includes('положення')) return 'regulation';
+  if (normalized.includes('правила')) return 'rules';
+  if (normalized.includes('інструкція')) return 'instruction';
+  if (normalized.includes('конвенція')) return 'convention';
+  if (normalized.includes('міжнародний') && (normalized.includes('договір') || normalized.includes('конвенція'))) return 'international_treaty';
+  if (normalized.includes('окрема думка') && normalized.includes('ксу')) return 'ccu_opinion';
+  if (normalized.includes('окрема думка')) return 'court_opinion';
+  if (normalized.includes('рішення') && normalized.includes('ксу')) return 'ccu_decision';
+  
+  return 'other';
+}
+
+/**
+ * Отримує інформацію про document type
+ */
+export function getDocumentTypeInfo(slug: DocumentTypeSlug): DocumentTypeInfo {
+  return DOCUMENT_TYPES[slug] || DOCUMENT_TYPES.other;
+}

@@ -1,0 +1,15 @@
+{
+  "phase": "F.import.completed",
+  "result": {
+    "rada_nreg": "254к/96-вр",
+    "title": "Конституція України",
+    "content_hash": "12ac623a8ad6ea19a3bd76a0cd2e40d307575a0f8fcaadb64d9f0d5b9125a87c",
+    "r2_key": "legislation/constitutional/254%D0%BA%2F96-%D0%B2%D1%80.json",
+    "expected_chunks": 187,
+    "qdrant": {
+      "chunks": 187,
+      "acts": 1
+    },
+    "run_dir": "/Users/andriyseredyuk/Downloads/78e3d871a2f642cd9a3c4c09b023febc (1)/workspace/shadcn-ui/scripts/legislation/runs/конституція-україни__254%D0%BA%2F96-%D0%B2%D1%80__2026-01-22__17-57-00-633Z"
+  }
+}

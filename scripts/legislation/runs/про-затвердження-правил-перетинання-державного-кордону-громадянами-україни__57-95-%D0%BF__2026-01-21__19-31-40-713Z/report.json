@@ -1,0 +1,21 @@
+{
+  "phase": "F.update.skipped",
+  "preview": {
+    "action": "update",
+    "skipped": true,
+    "reason": "content_hash_unchanged",
+    "rada_nreg": "57-95-п",
+    "content_hash": "c25321e32f5f3650a2900c0978bcadc858d56d23f43a34af140e21480b7804c3",
+    "expected_chunks": 0,
+    "r2_key": "legislation/other/57-95-%D0%BF.json",
+    "existing": {
+      "rada_nreg": "57-95-п",
+      "title": "Про затвердження Правил перетинання державного кордону громадянами України",
+      "content_hash": "c25321e32f5f3650a2900c0978bcadc858d56d23f43a34af140e21480b7804c3",
+      "r2_key": "legislation/other/57-95-%D0%BF.json",
+      "rada_datred": "2026-01-01",
+      "qdrant_status": "indexed",
+      "indexed_content_hash": "c25321e32f5f3650a2900c0978bcadc858d56d23f43a34af140e21480b7804c3"
+    }
+  }
+}

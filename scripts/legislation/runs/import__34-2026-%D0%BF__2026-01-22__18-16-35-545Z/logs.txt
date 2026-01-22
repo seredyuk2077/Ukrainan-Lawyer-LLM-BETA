@@ -1,0 +1,15 @@
+import:start 2026-01-22T18:16:35.546Z mode=add nreg=34-2026-п dryRun=false resume=false
+r2:uploaded=true size=82972
+ai:enrichment=generating...
+ai:enrichment=generated category=environment
+embeddings:progress=1/8 processed=3/22
+embeddings:progress=2/8 processed=6/22
+embeddings:progress=3/8 processed=9/22
+embeddings:progress=4/8 processed=12/22
+embeddings:progress=5/8 processed=15/22
+embeddings:progress=6/8 processed=18/22
+embeddings:progress=7/8 processed=21/22
+embeddings:progress=8/8 processed=22/22
+qdrant:upsert_progress=1/1
+job:completed id=3758935f-7419-4635-9fe1-ec31b8703ded
+import:done status=completed

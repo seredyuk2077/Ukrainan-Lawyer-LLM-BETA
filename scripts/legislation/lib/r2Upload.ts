@@ -7,6 +7,7 @@ import { createReadStream, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
+import { assertCanonicalKeyForWrite } from './r2Guardrails.js';
 
 export interface UploadResult {
   r2Key: string;
@@ -32,6 +33,9 @@ export async function uploadFileToR2(
   filePath: string,
   options: UploadOptions = {}
 ): Promise<UploadResult> {
+  // Guardrails: avoid double-prefix + wrong bucket + cache/log mistakes
+  assertCanonicalKeyForWrite(r2Key);
+
   const {
     contentType = 'application/json; charset=utf-8',
     maxRetries = 3,
@@ -64,8 +68,9 @@ export async function uploadFileToR2(
         })
       );
 
-      // Якщо файл існує та розмір співпадає, пропускаємо
-      if (headResult.ContentLength === fileSize) {
+      // Якщо файл існує та розмір співпадає, і metadata file-hash співпадає — пропускаємо
+      const remoteHash = headResult.Metadata?.['file-hash'];
+      if (headResult.ContentLength === fileSize && remoteHash && remoteHash === fileHash) {
         console.log(`   ✅ Файл вже існує в R2 (розмір співпадає)`);
         return {
           r2Key,
@@ -185,6 +190,9 @@ export async function uploadCanonicalJsonToR2(
   canonicalJson: string,
   options: UploadOptions = {}
 ): Promise<UploadResult> {
+  // Guardrails: avoid double-prefix + wrong bucket + cache/log mistakes
+  assertCanonicalKeyForWrite(r2Key);
+
   const {
     contentType = 'application/json; charset=utf-8',
     maxRetries = 3,
@@ -212,7 +220,8 @@ export async function uploadCanonicalJsonToR2(
         })
       );
 
-      if (headResult.ContentLength === fileSize) {
+      const remoteHash = headResult.Metadata?.['file-hash'];
+      if (headResult.ContentLength === fileSize && remoteHash && remoteHash === fileHash) {
         console.log(`   ✅ Файл вже існує в R2`);
         return {
           r2Key,
