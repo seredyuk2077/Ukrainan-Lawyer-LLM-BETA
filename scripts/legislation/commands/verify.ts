@@ -9,12 +9,18 @@ import { getR2AdminClient, headObject } from '../lib/r2Admin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { isValidCategory } from '../taxonomy/taxonomy.js';
 import { DocumentTypeSlug } from '../documentTypes/documentTypes.js';
-import { isCheckApplicable, hasEnoughTextForChunks } from '../lib/verifyApplicability.js';
+import { isCheckApplicable, hasEnoughTextForChunks, VERIFY_APPLICABILITY } from '../lib/verifyApplicability.js';
 
 export interface VerifyResult {
   nreg: string;
   pass: boolean;
-  issues: Array<{ component: string; check: string; status: 'PASS' | 'FAIL'; reason?: string }>;
+  issues: Array<{ 
+    component: string; 
+    check: string; 
+    status: 'PASS' | 'FAIL' | 'WARN' | 'NA'; 
+    reason?: string;
+    reasonCode?: string; // PHASE 3.6.5: standardized reason codes
+  }>;
 }
 
 export async function verifyDocument(nreg: string, options?: { writeHealth?: boolean }): Promise<VerifyResult> {
@@ -131,58 +137,34 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
   
   // chunks==0 для indexable=true ⇒ FAIL (але тільки якщо є текст)
   // PHASE 3.6: перевіряємо txtLength з canonical перед тим як FAIL
-  let txtLength = 0;
-  if (r2Key) {
-    try {
-      const canonical = await getJsonFromR2(r2Key);
-      txtLength = (canonical.raw?.rada_api_txt || '').length;
-    } catch (e) {
-      // Не вдалося прочитати - перевіримо пізніше
-    }
-  }
+  // ВАЖЛИВО: r2Key ще не визначено тут, тому перемістимо цю перевірку після R2 секції
+  // Тимчасово пропускаємо цю перевірку тут
   
-  if (isIndexable && doc.expected_chunks === 0) {
-    // PHASE 3.6: якщо txtLength достатній → FAIL, якщо txtLength=0 → N/A (empty source)
-    if (txtLength > 0 && hasEnoughTextForChunks(txtLength)) {
-      checks.push({ 
-        component: 'Supabase', 
-        check: 'indexable document has chunks > 0', 
-        status: 'FAIL', 
-        reason: `expected_chunks=0 for indexable document with text (txtLength=${txtLength})` 
-      });
-      console.log(`  ❌ Indexable document has 0 chunks but text exists (${txtLength} chars)`);
-    } else if (txtLength === 0) {
-      // N/A: джерело порожнє
-      checks.push({ 
-        component: 'Supabase', 
-        check: 'indexable document has chunks > 0', 
-        status: 'PASS',  // N/A - не застосовне для порожніх джерел
-        reason: 'N/A: empty source (txtLength=0)' 
-      });
-      console.log(`  ⚠️  Indexable document has 0 chunks but source is empty (N/A)`);
-    } else {
-      checks.push({ 
-        component: 'Supabase', 
-        check: 'indexable document has chunks > 0', 
-        status: 'PASS',  // N/A - текст занадто короткий
-        reason: `N/A: text too short (txtLength=${txtLength} < ${hasEnoughTextForChunks.toString()})` 
-      });
-    }
-  } else if (isIndexable) {
-    checks.push({ component: 'Supabase', check: 'indexable document has chunks > 0', status: 'PASS' });
-  }
+  // PHASE 3.6: перевірка chunks=0 для indexable перенесена в R2 секцію (після отримання canonical)
   
   // B) R2 invariants
   const r2Key = doc.r2_key as string;
   if (!r2Key) {
-    checks.push({ component: 'R2', check: 'r2_key exists', status: 'FAIL', reason: 'NULL' });
+    checks.push({ 
+      component: 'R2', 
+      check: 'r2_key exists', 
+      status: 'FAIL', 
+      reason: 'NULL',
+      reasonCode: 'ERROR_R2_KEY_NULL'
+    });
     console.log(`  ❌ R2: r2_key is NULL`);
   } else {
     const { client: r2, bucket } = getR2AdminClient();
     const head = await headObject(r2, bucket, r2Key);
     
     if (!head.exists) {
-      checks.push({ component: 'R2', check: 'r2_key exists in bucket', status: 'FAIL', reason: `Not found: ${r2Key}` });
+      checks.push({ 
+        component: 'R2', 
+        check: 'r2_key exists in bucket', 
+        status: 'FAIL', 
+        reason: `Not found: ${r2Key}`,
+        reasonCode: 'ERROR_R2_MISSING'
+      });
       console.log(`  ❌ R2: Canonical not found: ${r2Key}`);
     } else {
       checks.push({ component: 'R2', check: 'r2_key exists in bucket', status: 'PASS' });
@@ -236,16 +218,56 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
               component: 'R2', 
               check: 'canonical chunks count == expected_chunks', 
               status: 'FAIL', 
-              reason: `canonical=${canonicalChunks}, expected=${doc.expected_chunks}` 
+              reason: `canonical=${canonicalChunks}, expected=${doc.expected_chunks}`,
+              reasonCode: 'ERROR_CANONICAL_CHUNKS_MISMATCH'
             });
             console.log(`  ⚠️  Canonical chunks: ${canonicalChunks} (expected: ${doc.expected_chunks})`);
           } else {
             checks.push({ component: 'R2', check: 'canonical chunks count == expected_chunks', status: 'PASS' });
             console.log(`  ✅ Canonical chunks match: ${canonicalChunks}`);
           }
+          
+          // PHASE 3.6: перевірка chunks=0 для indexable (після отримання canonical)
+          if (isIndexable && doc.expected_chunks === 0) {
+            // PHASE 3.6: якщо txtLength достатній → FAIL, якщо txtLength=0 → N/A (empty source)
+            if (canonicalTxtLength > 0 && hasEnoughTextForChunks(canonicalTxtLength)) {
+              checks.push({ 
+                component: 'Supabase', 
+                check: 'indexable document has chunks > 0', 
+                status: 'FAIL', 
+                reason: `expected_chunks=0 for indexable document with text (txtLength=${canonicalTxtLength})`,
+                reasonCode: 'ERROR_ZERO_CHUNKS_WITH_TEXT'
+              });
+              console.log(`  ❌ Indexable document has 0 chunks but text exists (${canonicalTxtLength} chars)`);
+            } else if (canonicalTxtLength === 0) {
+              // N/A: джерело порожнє
+              checks.push({ 
+                component: 'Supabase', 
+                check: 'indexable document has chunks > 0', 
+                status: 'NA',  // N/A - не застосовне для порожніх джерел
+                reason: 'N/A: empty source (txtLength=0)' 
+              });
+              console.log(`  ⚠️  Indexable document has 0 chunks but source is empty (N/A)`);
+            } else {
+              checks.push({ 
+                component: 'Supabase', 
+                check: 'indexable document has chunks > 0', 
+                status: 'NA',  // N/A - текст занадто короткий
+                reason: `N/A: text too short (txtLength=${canonicalTxtLength} < ${VERIFY_APPLICABILITY.expected_chunks.minTextLength})` 
+              });
+            }
+          } else if (isIndexable && doc.expected_chunks > 0) {
+            checks.push({ component: 'Supabase', check: 'indexable document has chunks > 0', status: 'PASS' });
+          }
         }
       } catch (e: any) {
-        checks.push({ component: 'R2', check: 'canonical JSON readable', status: 'FAIL', reason: e.message });
+        checks.push({ 
+          component: 'R2', 
+          check: 'canonical JSON readable', 
+          status: 'FAIL', 
+          reason: e.message,
+          reasonCode: 'ERROR_CANONICAL_READ_FAILED'
+        });
         console.log(`  ❌ Failed to read canonical: ${e.message}`);
       }
     }
@@ -475,6 +497,9 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
   // Summary
   const passCount = checks.filter(c => c.status === 'PASS').length;
   const failCountFinal = checks.filter(c => c.status === 'FAIL').length;
+  const naCount = checks.filter(c => c.status === 'NA').length;
+  const warnCount = checks.filter(c => c.status === 'WARN').length;
+  // PHASE 3.6.5: allPass = тільки якщо немає FAIL (NA/WARN не вважаються за FAIL)
   const allPass = failCountFinal === 0;
   
   console.log(`\n═══════════════════════════════════════════════════════════`);
