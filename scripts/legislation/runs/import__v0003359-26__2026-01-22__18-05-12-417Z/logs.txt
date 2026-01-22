@@ -1,9 +1,0 @@
-import:start 2026-01-22T18:05:12.418Z mode=add nreg=v0003359-26 dryRun=false resume=false
-r2:uploaded=true size=16445
-ai:enrichment=generating...
-ai:enrichment=generated category=other
-embeddings:progress=1/2 processed=3/5
-embeddings:progress=2/2 processed=5/5
-qdrant:upsert_progress=1/1
-job:completed id=c4616711-d156-4726-a8aa-ea320ec32747
-import:done status=completed

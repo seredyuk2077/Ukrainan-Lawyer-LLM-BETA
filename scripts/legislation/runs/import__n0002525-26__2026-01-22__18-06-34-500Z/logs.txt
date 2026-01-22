@@ -1,9 +1,0 @@
-import:start 2026-01-22T18:06:34.502Z mode=add nreg=n0002525-26 dryRun=false resume=false
-r2:uploaded=true size=12303
-ai:enrichment=generating...
-ai:enrichment=generated category=national_security
-embeddings:progress=1/2 processed=3/4
-embeddings:progress=2/2 processed=4/4
-qdrant:upsert_progress=1/1
-job:completed id=727f7bd5-9ecf-4643-b534-1670a5b45c42
-import:done status=completed

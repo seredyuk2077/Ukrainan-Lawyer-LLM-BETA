@@ -1,6 +1,0 @@
-import:start 2026-01-22T18:04:48.255Z mode=add nreg=29-2026-р dryRun=false resume=false
-r2:uploaded=true size=2658
-ai:enrichment=generating...
-ai:enrichment=generated category=other
-job:completed id=0e98015a-bc23-4be0-9a04-7da6fe7baabf
-import:done status=completed

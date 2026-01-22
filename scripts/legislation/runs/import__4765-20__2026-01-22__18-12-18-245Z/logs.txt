@@ -1,8 +1,0 @@
-import:start 2026-01-22T18:12:18.246Z mode=add nreg=4765-20 dryRun=false resume=false
-r2:uploaded=true size=6139
-ai:enrichment=generating...
-ai:enrichment=generated category=labor_social
-embeddings:progress=1/1 processed=2/2
-qdrant:upsert_progress=1/1
-job:completed id=a90dc993-692a-476f-9b83-52137e6b5968
-import:done status=completed

@@ -1,9 +1,0 @@
-import:start 2026-01-22T18:12:45.611Z mode=add nreg=4764-20 dryRun=false resume=false
-r2:uploaded=true size=29074
-ai:enrichment=generating...
-ai:enrichment=generated category=education_science
-embeddings:progress=1/2 processed=3/4
-embeddings:progress=2/2 processed=4/4
-qdrant:upsert_progress=1/1
-job:completed id=14a63907-c2c2-4a55-8b8f-cd00917f7bca
-import:done status=completed
