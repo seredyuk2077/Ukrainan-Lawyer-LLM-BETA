@@ -24,13 +24,14 @@ export function guessDocumentTypeV2(params: {
   stru?: any[];
   snippet?: string | null;  // Для prefix-sniff
   document_number?: string | null;  // Для nreg suffix check
+  summary?: string | null;  // PHASE 3.4: для перевірки ЦВК/РНБО в summary
 }): DocumentTypeGuessResult {
-  const { title, typ, typn, organs, stru, snippet, document_number } = params;
+  const { title, typ, typn, organs, stru, snippet, document_number, summary } = params;
   
   const lowerTitle = title.toLowerCase();
   
   // 0. PREFIX-SNIFF: Жорсткі правила на основі перших рядків тексту (ВИКОНУЮТЬСЯ ПЕРШИМИ)
-  // Нормалізуємо snippet для перевірки
+  // Нормалізуємо snippet/summary для перевірки
   const normalizePrefix = (text: string | null | undefined): string => {
     if (!text) return '';
     return text
@@ -42,12 +43,15 @@ export function guessDocumentTypeV2(params: {
       .substring(0, 200);  // перші 200 символів
   };
   
-  const normalizedSnippet = normalizePrefix(snippet || title);
+  const normalizedSnippet = normalizePrefix(snippet || summary || title);
+  const normalizedSummary = normalizePrefix(summary);
   
   // Правило 1: Розпорядження Голови ВРУ (prefix-based)
-  if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
-      normalizedSnippet.includes('ГОЛОВИ') && 
-      (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) {
+  // ВАЖЛИВО: "ГОЛОВА" (однина) або "ГОЛОВИ" (множина) - обидва варіанти
+  const hasGolovy = normalizedSnippet.includes('ГОЛОВА') || normalizedSnippet.includes('ГОЛОВИ');
+  const hasVRU = normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ');
+  
+  if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && hasGolovy && hasVRU) {
     return {
       slug: 'vr_speaker_order',
       confidence: 'high',
@@ -57,17 +61,28 @@ export function guessDocumentTypeV2(params: {
   }
   
   // Правило 2: nreg/document_number suffix check (-РГ)
+  // ВАЖЛИВО: -РГ suffix достатній сам по собі (не потребує snippet)
   if (document_number) {
-    const normalizedNreg = document_number.toUpperCase().trim();
-    if (normalizedNreg.endsWith('-РГ') || normalizedNreg.endsWith('-РГ')) {
-      // Додаткова перевірка: чи title/snippet підтверджує
-      if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
-          (normalizedSnippet.includes('ГОЛОВИ') || normalizedSnippet.includes('ВЕРХОВНОЇ'))) {
+    const normalizedNreg = document_number.toUpperCase().trim().replace(/[‐‑‒–—―−]/g, '-');
+    if (normalizedNreg.endsWith('-РГ') || normalizedNreg.match(/-РГ\b$/i)) {
+      // Якщо є snippet/summary - перевіряємо підтвердження, інакше -РГ достатній
+      if (snippet || summary) {
+        if (normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
+            (hasGolovy || normalizedSnippet.includes('ВЕРХОВНОЇ'))) {
+          return {
+            slug: 'vr_speaker_order',
+            confidence: 'high',
+            source: 'heuristics',
+            rationale: 'nreg suffix -РГ + prefix confirmation',
+          };
+        }
+      } else {
+        // Немає snippet/summary, але -РГ suffix достатній
         return {
           slug: 'vr_speaker_order',
           confidence: 'high',
           source: 'heuristics',
-          rationale: 'nreg suffix -РГ + prefix confirmation',
+          rationale: 'nreg suffix -РГ (document_number-based)',
         };
       }
     }
@@ -104,16 +119,20 @@ export function guessDocumentTypeV2(params: {
       };
     }
     
-    // Typ=2: Постанова — потрібно розрізнити КМУ vs ВР vs ЦВК через organs/title
+    // Typ=2: Постанова — потрібно розрізнити КМУ vs ВР vs ЦВК через organs/title/summary
     if (typ === 2) {
       // ВАЖЛИВО: ЦВК має найвищий пріоритет (перевіряємо ПЕРШИМ)
+      // PHASE 3.4: перевіряємо також summary (бо там може бути "Постанова Центральної виборчої комісії")
+      const lowerSummary = (summary || '').toLowerCase();
       if (lowerTitle.includes('цвк') || lowerTitle.includes('центральна виборча') ||
+          lowerSummary.includes('цвк') || lowerSummary.includes('центральна виборча') ||
+          lowerSummary.includes('центральної виборчої') ||
           (organs && JSON.stringify(organs).toLowerCase().includes('цвк'))) {
         return {
           slug: 'cec_resolution',
           confidence: 'high',
           source: 'heuristics',
-          rationale: `typ=2, title/organs indicate CEC`,
+          rationale: `typ=2, title/summary/organs indicate CEC`,
         };
       }
       
@@ -266,15 +285,18 @@ export function guessDocumentTypeV2(params: {
   }
   
   // Постанова ЦВК (ВАЖЛИВО: перевіряємо ПЕРЕД КМУ/ВР)
-  if (lowerTitle.includes('постанова') &&
+  // PHASE 3.4: перевіряємо також summary
+  if ((lowerTitle.includes('постанова') || lowerSummary.includes('постанова')) &&
       (lowerTitle.includes('цвк') || lowerTitle.includes('центральна виборча') ||
        lowerTitle.includes('центральної виборчої') ||
+       lowerSummary.includes('цвк') || lowerSummary.includes('центральна виборча') ||
+       lowerSummary.includes('центральної виборчої') ||
        (organs && JSON.stringify(organs).toLowerCase().includes('цвк')))) {
     return {
       slug: 'cec_resolution',
       confidence: 'high',
       source: 'heuristics',
-      rationale: 'title/organs indicate CEC',
+      rationale: 'title/summary/organs indicate CEC',
     };
   }
   
@@ -367,25 +389,29 @@ export function guessDocumentTypeV2(params: {
   }
   
   // РНБО: Рішення РНБО (ВАЖЛИВО: перевіряти ПЕРЕД загальними правилами)
-  if (lowerTitle.includes('рішення') &&
-      (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки') ||
-       lowerTitle.includes('ради національної безпеки'))) {
+  // PHASE 3.4: перевіряємо також summary (бо там може бути "Рішення Ради національної безпеки")
+  const lowerSummary = (summary || '').toLowerCase();
+  const combinedText = `${lowerTitle} ${lowerSummary}`;
+  
+  if (combinedText.includes('рішення') &&
+      (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
+       combinedText.includes('ради національної безпеки'))) {
     return {
       slug: 'rnbo_decision',
       confidence: 'high',
       source: 'heuristics',
-      rationale: 'title indicates RNBO Decision',
+      rationale: 'title/summary indicates RNBO Decision',
     };
   }
   
   // РНБО: загальна перевірка (якщо не в title, але в summary/snippet)
-  if (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки') ||
-      lowerTitle.includes('ради національної безпеки')) {
+  if (combinedText.includes('рнбо') || combinedText.includes('рада національної безпеки') ||
+      combinedText.includes('ради національної безпеки')) {
     return {
       slug: 'rnbo_decision',
       confidence: 'high',
       source: 'heuristics',
-      rationale: 'title indicates RNBO',
+      rationale: 'title/summary indicates RNBO',
     };
   }
   

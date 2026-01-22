@@ -334,12 +334,14 @@ export function validateDocumentTypeConsistency(
   const normalizedSnippet = normalizePrefix(snippet || title);
   const normalizedTitle = normalizePrefix(title);
   
-  if ((normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && 
-       normalizedSnippet.includes('ГОЛОВИ') && 
-       (normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ'))) ||
-      (normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') && 
-       normalizedTitle.includes('ГОЛОВИ') && 
-       (normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') || normalizedTitle.includes('ВРУ')))) {
+  // ВАЖЛИВО: "ГОЛОВА" (однина) або "ГОЛОВИ" (множина) - обидва варіанти
+  const hasGolovySnippet = normalizedSnippet.includes('ГОЛОВА') || normalizedSnippet.includes('ГОЛОВИ');
+  const hasGolovyTitle = normalizedTitle.includes('ГОЛОВА') || normalizedTitle.includes('ГОЛОВИ');
+  const hasVRUSnippet = normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || normalizedSnippet.includes('ВРУ');
+  const hasVRUTitle = normalizedTitle.includes('ВЕРХОВНОЇ РАДИ') || normalizedTitle.includes('ВРУ');
+  
+  if ((normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') && hasGolovySnippet && hasVRUSnippet) ||
+      (normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') && hasGolovyTitle && hasVRUTitle)) {
     if (slug !== 'vr_speaker_order') {
       issues.push('CRITICAL: Розпорядження Голови ВРУ (prefix-based), але slug != vr_speaker_order');
       suggestedSlug = 'vr_speaker_order';
@@ -459,6 +461,7 @@ export async function enrichDocumentType(params: {
     organs: params.organs,
     snippet: params.snippet,
     document_number: params.document_number,
+    summary: params.summary,  // PHASE 3.4: передаємо summary для перевірки ЦВК/РНБО
   });
   
   if (heuristicsResult.confidence === 'high' || heuristicsResult.confidence === 'medium') {

@@ -296,8 +296,12 @@ export function detectAbsurdities(params: {
   const hasRozporyadzhennia = normalizedSnippet.includes('РОЗПОРЯДЖЕННЯ') || 
                                normalizedTitle.includes('РОЗПОРЯДЖЕННЯ') ||
                                normalizedSummary.includes('РОЗПОРЯДЖЕННЯ');
-  const hasGolovy = normalizedSnippet.includes('ГОЛОВИ') || 
+  // ВАЖЛИВО: "ГОЛОВА" (однина) або "ГОЛОВИ" (множина) - обидва варіанти
+  const hasGolovy = normalizedSnippet.includes('ГОЛОВА') || 
+                    normalizedSnippet.includes('ГОЛОВИ') ||
+                    normalizedTitle.includes('ГОЛОВА') ||
                     normalizedTitle.includes('ГОЛОВИ') ||
+                    normalizedSummary.includes('ГОЛОВА') ||
                     normalizedSummary.includes('ГОЛОВИ');
   const hasVRU = normalizedSnippet.includes('ВЕРХОВНОЇ РАДИ') || 
                  normalizedSnippet.includes('ВРУ') ||
