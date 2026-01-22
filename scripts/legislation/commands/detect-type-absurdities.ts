@@ -28,7 +28,7 @@ export interface AbsurdityFinding {
 /**
  * Ruleset абсурдності (10+ правил)
  */
-function detectAbsurdities(params: {
+export function detectAbsurdities(params: {
   title: string;
   summary?: string | null;
   snippet?: string | null;
