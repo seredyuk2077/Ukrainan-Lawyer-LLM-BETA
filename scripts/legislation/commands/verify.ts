@@ -275,46 +275,57 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
   
   // C) Qdrant invariants
   const qdrant = createQdrantClient();
-  const qActs = await countByNreg(qdrant, QDRANT_COLLECTION_ACTS, nreg);
-  const qChunks = await countByNreg(qdrant, QDRANT_COLLECTION_CHUNKS, nreg);
+  // PHASE 3.6.7: рахуємо тільки CURRENT версію (по content_hash) - використовуємо QdrantRagClient.countDocument
+  const { QdrantRagClient } = await import('../lib/qdrantRagClient.js');
+  const qdrantRag = new QdrantRagClient();
+  const qCounts = await qdrantRag.countDocument(nreg, doc.content_hash);
+  const qActs = qCounts.acts;
+  const qChunks = qCounts.chunks;
   
   console.log(`\n✅ Qdrant: Found`);
   console.log(`  acts: ${qActs}`);
   console.log(`  chunks: ${qChunks}`);
   
   // Acts count MUST be exactly 1 (PHASE 18.1b: BLOCKER)
+  // PHASE 3.6.7: перевіряємо тільки CURRENT версію (по content_hash)
   if (qActs !== 1) {
     checks.push({ 
       component: 'Qdrant', 
-      check: 'Qdrant acts count == 1', 
+      check: 'Qdrant acts count == 1 (CURRENT version)', 
       status: 'FAIL', 
-      reason: `Qdrant=${qActs}, expected=1` 
+      reason: `Qdrant=${qActs}, expected=1 (content_hash=${doc.content_hash?.substring(0, 8)}...)`,
+      reasonCode: qActs > 1 ? 'ERROR_QDRANT_ACTS_DUPLICATE' : 'ERROR_QDRANT_ACT_MISSING'
     });
-    console.log(`  ❌ Acts count mismatch: Qdrant=${qActs}, expected=1`);
+    console.log(`  ❌ Acts count mismatch: Qdrant=${qActs}, expected=1 (CURRENT version)`);
   } else {
-    checks.push({ component: 'Qdrant', check: 'Qdrant acts count == 1', status: 'PASS' });
+    checks.push({ component: 'Qdrant', check: 'Qdrant acts count == 1 (CURRENT version)', status: 'PASS' });
     console.log(`  ✅ Acts count match: ${qActs}`);
   }
   
-  // Qdrant points count == indexed_chunks
+  // Qdrant points count == indexed_chunks (PHASE 3.6.7: тільки CURRENT версія)
   if (qChunks !== doc.indexed_chunks) {
     checks.push({ 
       component: 'Qdrant', 
-      check: 'Qdrant chunks count == indexed_chunks', 
+      check: 'Qdrant chunks count == indexed_chunks (CURRENT version)', 
       status: 'FAIL', 
-      reason: `Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks}` 
+      reason: `Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks} (content_hash=${doc.content_hash?.substring(0, 8)}...)`,
+      reasonCode: 'ERROR_QDRANT_CHUNKS_COUNT_MISMATCH'
     });
-    console.log(`  ❌ Chunks count mismatch: Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks}`);
+    console.log(`  ❌ Chunks count mismatch: Qdrant=${qChunks}, indexed_chunks=${doc.indexed_chunks} (CURRENT version)`);
   } else {
-    checks.push({ component: 'Qdrant', check: 'Qdrant chunks count == indexed_chunks', status: 'PASS' });
+    checks.push({ component: 'Qdrant', check: 'Qdrant chunks count == indexed_chunks (CURRENT version)', status: 'PASS' });
     console.log(`  ✅ Chunks count match: ${qChunks}`);
   }
   
-  // Check payloads
+  // Check payloads (PHASE 3.6.7: перевіряємо тільки CURRENT версію)
   if (qChunks > 0) {
+    // PHASE 3.6.7: фільтруємо по content_hash щоб перевірити тільки CURRENT версію
     const chunks = await qdrant.scroll(QDRANT_COLLECTION_CHUNKS, {
       filter: {
-        must: [{ key: 'rada_nreg', match: { value: nreg } }],
+        must: [
+          { key: 'rada_nreg', match: { value: nreg } },
+          { key: 'content_hash', match: { value: doc.content_hash } } // Тільки CURRENT версія
+        ],
       },
       limit: 1,
       with_payload: true,
@@ -327,7 +338,13 @@ export async function verifyDocument(nreg: string, options?: { writeHealth?: boo
       const requiredFields = ['rada_nreg', 'r2_key', 'json_path', 'chunk_index', 'content_hash'];
       for (const field of requiredFields) {
         if (!payload[field]) {
-          checks.push({ component: 'Qdrant', check: `payload has ${field}`, status: 'FAIL', reason: `Missing ${field}` });
+          checks.push({ 
+            component: 'Qdrant', 
+            check: `payload has ${field}`, 
+            status: 'FAIL', 
+            reason: `Missing ${field}`,
+            reasonCode: `ERROR_QDRANT_PAYLOAD_FIELD_MISSING`
+          });
         } else {
           checks.push({ component: 'Qdrant', check: `payload has ${field}`, status: 'PASS' });
         }
