@@ -8,6 +8,7 @@ import { createQdrantClient, QDRANT_COLLECTION_ACTS, QDRANT_COLLECTION_CHUNKS } 
 import { getR2AdminClient, headObject } from '../lib/r2Admin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { normalizeCategory } from '../taxonomy/taxonomy.js';
+import { getDocumentTypeInfo } from '../documentTypes/documentTypes.js';
 
 export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }): Promise<void> {
   console.log(`\n═══════════════════════════════════════════════════════════`);
@@ -77,6 +78,10 @@ export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }
       // Update Qdrant payloads to match Supabase
       const normalizedCategory = normalizeCategory(doc.category);
       const documentTypeSlug = doc.document_type_slug;
+      const documentType = doc.document_type; // UA label
+      
+      // Отримуємо правильний UA label з taxonomy якщо потрібно
+      const correctDocumentType = documentTypeSlug ? getDocumentTypeInfo(documentTypeSlug as any).label_uk : documentType;
       
       // Update chunks payloads
       const chunks = await qdrant.scroll(QDRANT_COLLECTION_CHUNKS, {
@@ -84,6 +89,7 @@ export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }
           must: [{ key: 'rada_nreg', match: { value: nreg } }],
         },
         limit: 1000,
+        with_payload: true,
       });
       
       if (chunks.points && chunks.points.length > 0) {
@@ -100,18 +106,27 @@ export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }
             needsUpdate = true;
             updatePayload.document_type_slug = documentTypeSlug;
           }
+          if (correctDocumentType && payload.document_type !== correctDocumentType) {
+            needsUpdate = true;
+            updatePayload.document_type = correctDocumentType;
+          }
         }
         
         if (needsUpdate && !opts.dryRun) {
-          for (const point of chunks.points) {
-            await qdrant.setPayload(QDRANT_COLLECTION_CHUNKS, {
-              payload: updatePayload,
-              points: [point.id as string],
-            });
-          }
+          // Batch update через setPayload
+          const pointIds = chunks.points.map(p => p.id as string);
+          await qdrant.setPayload(QDRANT_COLLECTION_CHUNKS, {
+            payload: updatePayload,
+            points: pointIds,
+          });
           fixes.push({ 
             component: 'Qdrant', 
             fix: `Updated ${chunks.points.length} chunks payloads (${Object.keys(updatePayload).join(', ')})` 
+          });
+        } else if (needsUpdate && opts.dryRun) {
+          fixes.push({ 
+            component: 'Qdrant', 
+            fix: `[DRY RUN] Would update ${chunks.points.length} chunks payloads (${Object.keys(updatePayload).join(', ')})` 
           });
         }
       }
@@ -122,6 +137,7 @@ export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }
           must: [{ key: 'rada_nreg', match: { value: nreg } }],
         },
         limit: 100,
+        with_payload: true,
       });
       
       if (acts.points && acts.points.length > 0) {
@@ -138,18 +154,27 @@ export async function repairConsistency(nreg: string, opts: { dryRun?: boolean }
             needsUpdate = true;
             updatePayload.document_type_slug = documentTypeSlug;
           }
+          if (correctDocumentType && payload.document_type !== correctDocumentType) {
+            needsUpdate = true;
+            updatePayload.document_type = correctDocumentType;
+          }
         }
         
         if (needsUpdate && !opts.dryRun) {
-          for (const point of acts.points) {
-            await qdrant.setPayload(QDRANT_COLLECTION_ACTS, {
-              payload: updatePayload,
-              points: [point.id as string],
-            });
-          }
+          // Batch update через setPayload
+          const pointIds = acts.points.map(p => p.id as string);
+          await qdrant.setPayload(QDRANT_COLLECTION_ACTS, {
+            payload: updatePayload,
+            points: pointIds,
+          });
           fixes.push({ 
             component: 'Qdrant', 
             fix: `Updated ${acts.points.length} acts payloads (${Object.keys(updatePayload).join(', ')})` 
+          });
+        } else if (needsUpdate && opts.dryRun) {
+          fixes.push({ 
+            component: 'Qdrant', 
+            fix: `[DRY RUN] Would update ${acts.points.length} acts payloads (${Object.keys(updatePayload).join(', ')})` 
           });
         }
       }

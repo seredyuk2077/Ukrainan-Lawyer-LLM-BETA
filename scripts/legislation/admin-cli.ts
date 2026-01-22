@@ -29,6 +29,8 @@ import { repairConsistency } from './commands/repair-consistency.js';
 import { repairDocTypes } from './commands/repair-doc-types.js';
 import { repairNumbers } from './commands/repair-numbers.js';
 import { repairDocumentTypeConsistency } from './commands/repair-document-type-consistency.js';
+import { backfillDocumentTypes } from './commands/backfill-document-types.js';
+import { repairConsistencyAll } from './commands/repair-consistency-all.js';
 
 const program = new Command();
 
@@ -158,6 +160,19 @@ jobsCommand
     await resumeJob(options.jobId);
   });
 
+jobsCommand
+  .command('reconcile')
+  .description('Помітити stuck running jobs як failed (TTL-based)')
+  .option('--dry-run', 'Тільки preview, без змін')
+  .option('--ttl-hours <n>', 'TTL в годинах (default: 24)', '24')
+  .action(async (options) => {
+    const { reconcileJobs } = await import('./commands/jobs-reconcile.js');
+    await reconcileJobs({
+      dryRun: Boolean(options.dryRun),
+      ttlHours: options.ttlHours ? Number(options.ttlHours) : 24,
+    });
+  });
+
 program
   .command('test-kku')
   .description('End-to-end test для ККУ (2341-14) з resume evidence')
@@ -238,12 +253,24 @@ repairCommand
 repairCommand
   .command('consistency')
   .description('Виправити невідповідності між Supabase/Qdrant/R2')
-  .requiredOption('--nreg <nreg>', 'NREG документа')
+  .option('--nreg <nreg>', 'NREG документа')
+  .option('--all', 'Всі документи')
   .option('--dry-run', 'Тільки preview, без змін')
+  .option('--limit <n>', 'Обмежити кількість документів (для --all)', parseInt)
   .action(async (options) => {
-    await repairConsistency(options.nreg, {
-      dryRun: Boolean(options.dryRun),
-    });
+    if (options.all) {
+      await repairConsistencyAll({
+        dryRun: Boolean(options.dryRun),
+        limit: options.limit ? Number(options.limit) : undefined,
+      });
+    } else if (options.nreg) {
+      await repairConsistency(options.nreg, {
+        dryRun: Boolean(options.dryRun),
+      });
+    } else {
+      console.error('❌ Потрібно вказати --nreg або --all');
+      process.exit(1);
+    }
   });
 
 repairCommand
@@ -321,11 +348,31 @@ program
   });
 
 program
+  .command('backfill-document-types')
+  .description('Backfill document_type_slug та document_type для всіх документів (PHASE 21)')
+  .option('--dry-run', 'Тільки preview, без змін')
+  .option('--limit <n>', 'Обмежити кількість документів', parseInt)
+  .action(async (options) => {
+    await backfillDocumentTypes({
+      dryRun: Boolean(options.dryRun),
+      limit: options.limit ? Number(options.limit) : undefined,
+    });
+  });
+
+program
   .command('collect-soak-nregs')
   .description('Зібрати різноманітні nreg для soak test (PHASE 20B)')
   .action(async () => {
     const { collectSoakNregs } = await import('./test/collect_soak_nregs.js');
     await collectSoakNregs();
+  });
+
+program
+  .command('test-doc-types-regression')
+  .description('Регресійний тест document_type_slug для різних типів (PHASE 21)')
+  .action(async () => {
+    const { testDocumentTypesRegression } = await import('./commands/test-document-types-regression.js');
+    await testDocumentTypesRegression();
   });
 
 program

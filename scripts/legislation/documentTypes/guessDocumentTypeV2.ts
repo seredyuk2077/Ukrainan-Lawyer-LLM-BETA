@@ -30,18 +30,118 @@ export function guessDocumentTypeV2(params: {
   // 1. Typ-based heuristics (найнадійніші)
   if (typ !== null && typ !== undefined) {
     // Typ mapping з Rada API
+    // Важливо: typ=2 може бути як КМУ так і ВР, потрібно перевіряти organs
+    if (typ === 216) {
+      return {
+        slug: 'constitution',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: `typ=216 (Конституція)`,
+      };
+    }
+    
+    if (typ === 21 || typ === 5) {
+      return {
+        slug: 'code',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: `typ=${typ} (Кодекс)`,
+      };
+    }
+    
+    if (typ === 1) {
+      return {
+        slug: 'law',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: `typ=1 (Закон)`,
+      };
+    }
+    
+    // Typ=2: Постанова — потрібно розрізнити КМУ vs ВР через organs
+    if (typ === 2) {
+      // Organs формат: "2:19950127:57" де перше число - орган (2 = КМУ, 1 = ВР)
+      if (organs && typeof organs === 'string') {
+        const organMatch = organs.match(/^(\d+):/);
+        if (organMatch && organMatch[1] === '2') {
+          return {
+            slug: 'cmu_resolution',
+            confidence: 'high',
+            source: 'heuristics',
+            rationale: `typ=2, organs=${organs} (КМУ)`,
+          };
+        }
+        if (organMatch && organMatch[1] === '1') {
+          return {
+            slug: 'vr_resolution',
+            confidence: 'high',
+            source: 'heuristics',
+            rationale: `typ=2, organs=${organs} (ВР)`,
+          };
+        }
+      }
+      // Fallback: перевіряємо title
+      if (lowerTitle.includes('кабінет') || lowerTitle.includes('кму') || lowerTitle.includes('км ')) {
+        return {
+          slug: 'cmu_resolution',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: `typ=2, title indicates CMU`,
+        };
+      }
+      if (lowerTitle.includes('верховна') || lowerTitle.includes('вр ') || lowerTitle.includes('верховної ради')) {
+        return {
+          slug: 'vr_resolution',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: `typ=2, title indicates VRU`,
+        };
+      }
+      // Якщо не вдалося визначити — ставимо cmu_resolution як default (частіше)
+      return {
+        slug: 'cmu_resolution',
+        confidence: 'medium',
+        source: 'heuristics',
+        rationale: `typ=2, default to CMU`,
+      };
+    }
+    
+    if (typ === 3) {
+      // Розпоряження — потрібно перевірити чи це Президента
+      if (lowerTitle.includes('президент') || 
+          (organs && JSON.stringify(organs).toLowerCase().includes('президент'))) {
+        return {
+          slug: 'presidential_order',
+          confidence: 'high',
+          source: 'heuristics',
+          rationale: `typ=3, indicates Presidential Order`,
+        };
+      }
+      return {
+        slug: 'regulation',
+        confidence: 'medium',
+        source: 'heuristics',
+        rationale: `typ=3 (Розпоряження/Положення)`,
+      };
+    }
+    
+    if (typ === 4) {
+      return {
+        slug: 'presidential_decree',
+        confidence: 'high',
+        source: 'heuristics',
+        rationale: `typ=4 (Указ Президента)`,
+      };
+    }
+    
+    // Інші typ значення
     const typMap: Record<number, DocumentTypeSlug> = {
-      1: 'law',           // Закон
-      2: 'cmu_resolution', // Постанова КМУ
-      21: 'code',         // Кодекс
-      3: 'presidential_decree', // Указ Президента
-      4: 'presidential_order', // Розпоряження Президента
-      5: 'minister_order', // Наказ
-      6: 'regulation',    // Положення
-      7: 'rules',         // Правила
-      8: 'instruction',   // Інструкція
-      9: 'vr_resolution',  // Постанова ВР
-      10: 'charter',      // Статут
+      5: 'minister_order',
+      6: 'regulation',
+      7: 'rules',
+      8: 'instruction',
+      9: 'vr_resolution',
+      10: 'charter',
     };
     
     if (typMap[typ]) {
@@ -178,14 +278,27 @@ export function guessDocumentTypeV2(params: {
     };
   }
   
-  // Окрема думка судді КСУ
+  // Окрема думка судді КСУ (ВАЖЛИВО: перевіряти ПЕРШИМ, перед загальним court_opinion)
   if (lowerTitle.includes('окрема думка') && 
-      (lowerTitle.includes('ксу') || lowerTitle.includes('конституційний суд'))) {
+      (lowerTitle.includes('ксу') || lowerTitle.includes('конституційний суд') || 
+       lowerTitle.includes('конституційного суду'))) {
     return {
       slug: 'ccu_opinion',
       confidence: 'high',
       source: 'heuristics',
       rationale: 'title indicates CCU opinion',
+    };
+  }
+  
+  // Рішення КСУ (перевіряти перед загальним court_decision)
+  if (lowerTitle.includes('рішення') && 
+      (lowerTitle.includes('ксу') || lowerTitle.includes('конституційний суд') || 
+       lowerTitle.includes('конституційного суду'))) {
+    return {
+      slug: 'ccu_decision',
+      confidence: 'high',
+      source: 'heuristics',
+      rationale: 'title indicates CCU decision',
     };
   }
   
@@ -199,14 +312,16 @@ export function guessDocumentTypeV2(params: {
     };
   }
   
-  // Рішення КСУ
+  // Рішення РНБО (мапимо на presidential_decree або regulation залежно від контексту)
   if (lowerTitle.includes('рішення') && 
-      (lowerTitle.includes('ксу') || lowerTitle.includes('конституційний суд'))) {
+      (lowerTitle.includes('рнбо') || lowerTitle.includes('рада національної безпеки'))) {
+    // РНБО рішення часто оформлюються як укази або постанови
+    // Мапимо на regulation як найближчий тип
     return {
-      slug: 'ccu_decision',
+      slug: 'regulation',
       confidence: 'high',
       source: 'heuristics',
-      rationale: 'title indicates CCU decision',
+      rationale: 'title indicates RNBO decision, mapped to regulation',
     };
   }
   

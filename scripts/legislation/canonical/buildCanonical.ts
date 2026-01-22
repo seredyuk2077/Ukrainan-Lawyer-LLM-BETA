@@ -161,20 +161,20 @@ export async function buildCanonical(options: BuildCanonicalOptions): Promise<Ca
     }
   }
 
-  // Визначаємо тип документа та категорію (простий rule-based підхід)
-  const documentType = guessDocumentType(nazva, jsonData);
-  const category = guessCategory(nazva, documentType);
-  
-  // PHASE 14: Document Type System V1 — стандартизований slug
-  const { guessDocumentTypeV2 } = await import('../documentTypes/guessDocumentTypeV2.js');
-  const docTypeGuess = guessDocumentTypeV2({
+  // PHASE 21: Document Type System V2 — Heuristics + AI Fallback + Caching
+  const { enrichDocumentType } = await import('../lib/documentTypeEnrichment.js');
+  const docTypeEnrichment = await enrichDocumentType({
     title: nazva,
     typ: jsonData?.typ,
     typn: jsonData?.typn,
     organs: jsonData?.organs,
     stru: jsonData?.stru,
   });
-  const documentTypeSlug = docTypeGuess.slug;
+  const documentTypeSlug = docTypeEnrichment.slug;
+  const documentType = docTypeEnrichment.label_uk; // UA label з taxonomy
+  
+  // Визначаємо категорію (простий rule-based підхід, буде перезаписано AI)
+  const category = guessCategory(nazva, documentType);
 
   // Генеруємо R2 key path
   const r2Key = generateR2Key(category, nreg);
