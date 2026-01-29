@@ -60,21 +60,45 @@ scripts/legislation/
 
 ---
 
-## 6. Evidence E2E 580-VIII («Про Національну поліцію»)
+## 6. Remove fix (Qdrant → R2 → Supabase, без `legislation_chunks`)
 
-| Крок | Результат |
-|------|-----------|
-| **add** `--nreg "580-VIII"` | ✅ Успішно. rada_nreg 580-19, title «Про Національну поліцію», R2 `legislation/other/580-19.json`, 134 chunks, Qdrant acts=1 chunks=134. |
-| **verify** `--nreg "580-19"` `--write-health` | ✅ PASS, sync_health green. |
-| **inspect** `--nreg "580-19"` | ✅ Supabase + Qdrant + R2 (до remove). |
-| **remove** `--nreg "580-19"` `--confirm` | ❌ Помилка: `Could not find the table 'public.legislation_chunks' in the schema cache`. Remove очікує таблицю `legislation_chunks`; її немає (чанки в Qdrant). |
-| **Повторний verify** після failed remove | R2 key `legislation/other/580-19.json` not found (remove міг видалити R2 до падіння на Supabase chunks). |
+**Зміни:** `commands/remove.ts` — прибрано звернення до `legislation_chunks`; порядок видалення: Qdrant (chunks → acts) → R2 → Supabase. Ідемпотентність: повторний `remove --confirm` при відсутньому документі завершується OK (best-effort Qdrant delete-by-nreg, без падіння).
 
-**Висновок:** add → verify → inspect пройшли успішно. Remove падає через відсутність `legislation_chunks`; це обмеження інфра/схеми, не реорганізації. «Remove → add again → GREEN» не виконано через неможливість коректного remove.
+**Як запускати:** `pnpm exec tsx scripts/legislation/admin-cli.ts remove --nreg "<rada_nreg>" [--confirm]`. Без `--confirm` — тільки preview. Двічі `--confirm` на вже видаленому документі — OK.
 
 ---
 
-## 7. Артефакти аудиту
+## 7. Evidence E2E 580-VIII («Про Національну поліцію»)
+
+| Крок | Результат |
+|------|-----------|
+| **add** `--nreg "580-VIII"` | ✅ rada_nreg 580-19, R2 `legislation/other/580-19.json`, 134 chunks. |
+| **verify** `--nreg "580-19"` `--write-health` | ✅ PASS, sync_health green. |
+| **remove** `--nreg "580-19"` `--confirm` | ✅ Qdrant + R2 + Supabase видалено. |
+| **inspect** `--nreg "580-19"` | ✅ document_found false, qdrant 0. |
+| **remove** `--nreg "580-19"` `--confirm` (ідемпотент) | ✅ OK, «No document in Supabase…». |
+| **add** `--nreg "580-VIII"` → **verify** `--nreg "580-19"` | ✅ PASS. |
+
+**Висновок:** повний цикл add → verify → remove → remove → add → verify = PASS.
+
+---
+
+## 8. Evidence E2E «Про прокуратуру» (1697-VII / 1697-18)
+
+| Крок | Результат |
+|------|-----------|
+| **add** `--nreg "1697-VII"` | ✅ rada_nreg 1697-18, R2 `legislation/other/1697-18.json`, 524 chunks. |
+| **verify** `--nreg "1697-18"` `--write-health` | ✅ PASS, sync_health green. |
+| **remove** `--nreg "1697-18"` `--confirm` | ✅ Qdrant + R2 + Supabase видалено. |
+| **inspect** `--nreg "1697-18"` | ✅ document_found false, qdrant 0. |
+| **remove** `--nreg "1697-18"` `--confirm` (ідемпотент) | ✅ OK. |
+| **add** `--nreg "1697-VII"` → **verify** `--nreg "1697-18"` | ✅ PASS. |
+
+**Висновок:** E2E на «Про прокуратуру» пройдено. Для verify/remove/inspect використовувати `1697-18`.
+
+---
+
+## 9. Артефакти аудиту
 
 - `docs/_audit/AUDIT_PLAN.md`
 - `docs/_audit/COMMITS_LAST_7_DAYS.md`
@@ -86,4 +110,4 @@ scripts/legislation/
 
 ---
 
-*Working process audit — 2025-01-29*
+*Working process audit — 2025-01-29 · оновлено 2026-01-29 (remove fix, E2E 580-19, Prokuratura 1697-VII/1697-18)*
