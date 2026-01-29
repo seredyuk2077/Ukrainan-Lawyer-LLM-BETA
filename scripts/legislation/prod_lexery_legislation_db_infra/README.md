@@ -1,10 +1,10 @@
 # Prod — Lexery Legislation DB Infrastructure
 
-**Призначення:** прод-ядро (core, commands, adapters, sql, utils).  
-**Статус:** структура створена; код поки лишається в корені `scripts/legislation` (admin-cli, commands/, lib/, canonical/, …). Переміщення та compat stubs — у Phase 4.
+**Призначення:** канонічне місце прод-коду (commands, lib, canonical, documentTypes, taxonomy, utils).  
+**Статус:** код перенесено сюди; compat stubs у корені `scripts/legislation` (commands/, lib/, config, radaClient). Entrypoint без змін: `scripts/legislation/admin-cli.ts`.
 
-**Як запускати:** `pnpm tsx scripts/legislation/admin-cli.ts --help` (поки entrypoint у корені).
+**Як запускати:** `pnpm exec tsx scripts/legislation/admin-cli.ts --help` | `add` | `verify` | `remove` | `soak-test` тощо.
 
 ---
 
-*Working process audit — 2025-01-29*
+*Working process audit — 2025-01-29; final restructure — 2026-01-30*
