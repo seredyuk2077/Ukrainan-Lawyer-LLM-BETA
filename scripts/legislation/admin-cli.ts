@@ -10,6 +10,7 @@
  */
 
 import { Command } from 'commander';
+import { resolve } from 'path';
 import { checkReadiness } from './commands/status.js';
 import { addDocument } from './commands/add.js';
 import { removeDocument } from './commands/remove.js';
@@ -31,6 +32,35 @@ import { repairNumbers } from './commands/repair-numbers.js';
 import { repairDocumentTypeConsistency } from './commands/repair-document-type-consistency.js';
 import { backfillDocumentTypes } from './commands/backfill-document-types.js';
 import { repairConsistencyAll } from './commands/repair-consistency-all.js';
+import { collectGoldenDiversitySet } from './commands/collect-diverse-candidates.js';
+import { collectGoldenDiversitySetFast } from './commands/collect-diverse-candidates-fast.js';
+import { formGoldenDiversitySetFromList } from './commands/form_diverse_batch.js';
+import { importDiverseBatch } from './commands/import_diverse_batch.js';
+import { collectDiverseCandidatesV2 } from './commands/collect-diverse-candidates-v2.js';
+import { collectDiverseCandidatesV3 } from './commands/collect-diverse-candidates-v3.js';
+import { showGoldenSetPreview } from './commands/show-golden-set-preview.js';
+import { prodGateUserSet } from './commands/prod-gate-user-set.js';
+import { auditAllDocuments } from './commands/audit-documents.js';
+import { auditAllDocumentsV2 } from './commands/audit-documents-v2.js';
+import { createSupabaseAdminClient } from './lib/supabaseAdmin.js';
+import { auditParserIntegrity } from './commands/audit-parser-integrity.js';
+import { mreParserIntegrity } from './commands/mre-parser-integrity.js';
+import { auditParserIntegrityV2 } from './commands/audit-parser-integrity-v2.js';
+import { ragSanityArticleCLI } from './commands/rag-sanity-article.js';
+import { comprehensiveRAGSanityTest } from './commands/rag-sanity-comprehensive.js';
+import { ragDebugArticle } from './commands/rag-debug-article.js';
+import { targetedDocTypeBackfill } from './commands/targeted-doc-type-backfill.js';
+import { docTypeRegression } from './commands/doc-type-regression.js';
+import { collectCriticalEvidence } from './commands/collect-critical-evidence.js';
+import { analyzeDokidBatchCLI } from './commands/analyze-dokid-batch.js';
+import { auditResolutionsCLI } from './commands/audit-resolutions.js';
+import { findExplanationsCLI } from './commands/find-explanations.js';
+import { printDocCard } from './commands/print-doc-card.js';
+import { manualAuditCLI } from './commands/manual-audit.js';
+import { analyzeManualAudit } from './commands/analyze-manual-audit.js';
+import { backfillValidity } from './commands/backfill-validity.js';
+import { runValidityRegressionTests } from './commands/regression-validity.js';
+import { testLatestValidity } from './commands/test-latest-validity.js';
 
 const program = new Command();
 
@@ -394,6 +424,45 @@ program
   });
 
 program
+  .command('collect-diverse-candidates')
+  .description('Збір різноманітних кандидатів з diversity scoring (PHASE 2)')
+  .option('--min-candidates <n>', 'Мінімальна кількість кандидатів', '30')
+  .option('--output <path>', 'Шлях до вихідного JSON файлу')
+  .option('--input <path>', 'Шлях до вхідного файлу з nregs (за замовчуванням: hard_stream_200_candidates.txt)')
+  .option('--fast', 'Швидка версія (використовує існуючий список, без завантаження feed)')
+  .option('--instant', 'Миттєва версія (тільки nreg patterns, без API calls)')
+  .option('--v2', 'V2 версія (keyword mining + 3 джерела, PHASE 2 REWORK)')
+  .option('--v3', 'V3 версія (Stage A/B модель, PHASE 2.1 REWORK)')
+  .action(async (options) => {
+    if (options.v3) {
+      await collectDiverseCandidatesV3({
+        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/runs/diverse/golden_diversity_set.json'),
+      });
+    } else if (options.v2) {
+      await collectDiverseCandidatesV2({
+        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json'),
+      });
+    } else if (options.instant) {
+      await formGoldenDiversitySetFromList({
+        inputFile: options.input,
+        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json'),
+        minCandidates: Number(options.minCandidates) || 30,
+      });
+    } else if (options.fast) {
+      await collectGoldenDiversitySetFast({
+        minCandidates: Number(options.minCandidates) || 30,
+        inputFile: options.input,
+        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json'),
+      });
+    } else {
+      await collectGoldenDiversitySet({
+        minCandidates: Number(options.minCandidates) || 30,
+        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json'),
+      });
+    }
+  });
+
+program
   .command('import-hard-soak')
   .description('Імпорт hard soak документів пачками по 10 з циклами контролю (PHASE 3.3)')
   .option('--batch-size <n>', 'Розмір пачки', '10')
@@ -444,6 +513,58 @@ program
   });
 
 program
+  .command('propose-import')
+  .description('Створити proposal на імпорт акта (AI-controlled importer stub)')
+  .requiredOption('--nreg <nreg>', 'rada_nreg документа')
+  .option('--proposed-by <source>', 'manual/system/ai', 'manual')
+  .action(async (options) => {
+    const supabase = createSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from('legislation_import_proposals')
+      .insert({
+        rada_nreg: options.nreg,
+        proposed_by: options.proposedBy || options['proposed-by'] || 'manual',
+      })
+      .select('id,rada_nreg,proposed_by,decision,created_at')
+      .maybeSingle();
+    if (error) {
+      console.error(`❌ Failed to create proposal: ${error.message}`);
+      process.exit(1);
+    }
+    console.log('✅ Proposal created:', data);
+  });
+
+program
+  .command('approve-proposal')
+  .description('Позначити proposal як approved/rejected (без запуску імпорту, тільки stub)')
+  .requiredOption('--id <id>', 'ID proposal')
+  .option('--decision <decision>', 'approved/rejected', 'approved')
+  .option('--reason <reason>', 'Коротке пояснення рішення')
+  .action(async (options) => {
+    const supabase = createSupabaseAdminClient();
+    const decision = options.decision === 'rejected' ? 'rejected' : 'approved';
+    const { data, error } = await supabase
+      .from('legislation_import_proposals')
+      .update({
+        decision,
+        decision_reason: options.reason || null,
+        decided_at: new Date().toISOString(),
+      })
+      .eq('id', options.id)
+      .select('id,rada_nreg,decision,decision_reason,decided_at')
+      .maybeSingle();
+    if (error) {
+      console.error(`❌ Failed to update proposal: ${error.message}`);
+      process.exit(1);
+    }
+    if (!data) {
+      console.error('❌ Proposal not found');
+      process.exit(1);
+    }
+    console.log('✅ Proposal updated:', data);
+  });
+
+program
   .command('soak-test')
   .description('Soak test на різноманітних документах (PHASE 20)')
   .option('--file <file>', 'Файл з nregs (default: test/soak_nregs.txt)', 'test/soak_nregs.txt')
@@ -456,6 +577,252 @@ program
       dryRun: Boolean(options.dryRun),
       repairOnFail: !Boolean(options.noRepair),
     });
+  });
+
+program
+  .command('import-diverse-batch')
+  .description('Імпорт batch з diversity policy + Gate checks (PHASE 3.1)')
+  .option('--batch-size <n>', 'Розмір batch', '10')
+  .option('--start-from <n>', 'Почати з індексу', '0')
+  .option('--input <path>', 'Шлях до golden_diversity_set.json')
+  .action(async (options) => {
+    await importDiverseBatch({
+      batchSize: Number(options.batchSize) || 10,
+      startFrom: Number(options.startFrom) || 0,
+      inputFile: options.input,
+    });
+  });
+
+program
+  .command('show-golden-set-preview')
+  .description('Показати preview-evidence таблицю з golden_diversity_set.json (PHASE 2.5)')
+  .option('--input <path>', 'Шлях до golden_diversity_set.json')
+  .action(async (options) => {
+    await showGoldenSetPreview(options.input);
+  });
+
+program
+  .command('prod-gate-user-set')
+  .description('Prod Gate для вручну підібраного списку NREG (PHASE 6.3)')
+  .option('--input <path>', 'Шлях до файлу з NREG (за замовчуванням: test/prod_gate_user_gold_set.txt)')
+  .option('--batch-size <n>', 'Розмір batch', '8')
+  .action(async (options) => {
+    await prodGateUserSet({
+      inputFile: options.input,
+      batchSize: Number(options.batchSize) || 8,
+    });
+  });
+
+program
+  .command('audit-documents')
+  .description('Генерація audit records для ручної перевірки документів (рефакторинг)')
+  .option('--limit <n>', 'Обмежити кількість документів', '190')
+  .option('--output <path>', 'Шлях до вихідного файлу', 'scripts/legislation/runs/audit_records.json')
+  .action(async (options) => {
+    await auditAllDocuments({
+      limit: Number(options.limit) || undefined,
+      outputFile: options.output,
+    });
+  });
+
+program
+  .command('audit-documents-v2')
+  .description('Повний аудит документів з evidence (Supabase + canonical + Qdrant + signals)')
+  .option('--limit <n>', 'Обмежити кількість документів')
+  .option('--nregs <nregs>', 'Список nreg через кому (для аудиту конкретних документів)')
+  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/AUDIT_FLAGS_190.json')
+  .option('--output-markdown <path>', 'Шлях до Markdown таблиці', 'scripts/legislation/runs/audit/AUDIT_TABLE_190.md')
+  .action(async (options) => {
+    const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
+    await auditAllDocumentsV2({
+      limit: options.limit ? Number(options.limit) : undefined,
+      nregs,
+      outputFile: options.output,
+      outputMarkdown: options.outputMarkdown,
+    });
+  });
+
+program
+  .command('audit-parser-integrity')
+  .description('Перевірка зсуву статей/пунктів (parser integrity audit)')
+  .option('--file <path>', 'Файл з nregs (по одному на рядок)')
+  .option('--limit <n>', 'Обмежити кількість документів (якщо не вказано --file)')
+  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/PARSER_INTEGRITY_REPORT.json')
+  .action(async (options) => {
+    await auditParserIntegrity({
+      file: options.file,
+      limit: options.limit ? Number(options.limit) : undefined,
+      outputFile: options.output,
+    });
+  });
+
+program
+  .command('mre-parser-integrity')
+  .description('MRE для parser integrity (ККУ та КУпАП, 5 статей)')
+  .action(async () => {
+    await mreParserIntegrity();
+  });
+
+program
+  .command('audit-parser-integrity-v2')
+  .description('Перевірка structural consistency (canonical ↔ Qdrant payload)')
+  .option('--file <path>', 'Файл з nregs (по одному на рядок)')
+  .option('--limit <n>', 'Обмежити кількість документів (якщо не вказано --file)')
+  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/PARSER_INTEGRITY_V2_REPORT.json')
+  .action(async (options) => {
+    await auditParserIntegrityV2({
+      file: options.file,
+      limit: options.limit ? Number(options.limit) : undefined,
+      outputFile: options.output,
+    });
+  });
+
+program
+  .command('rag-sanity-article')
+  .description('RAG retrieval sanity test для конкретної статті')
+  .requiredOption('--nreg <nreg>', 'NREG документа')
+  .requiredOption('--article <article>', 'Номер статті')
+  .option('--query <query>', 'Пошуковий запит (за замовчуванням: "ККУ стаття N умисне вбивство")')
+  .option('--topk <n>', 'Кількість результатів', '5')
+  .action(async (options) => {
+    await ragSanityArticleCLI({
+      nreg: options.nreg,
+      article: options.article,
+      query: options.query,
+      topK: options.topk ? Number(options.topk) : 5,
+    });
+  });
+
+program
+  .command('rag-sanity-comprehensive')
+  .description('Комплексний RAG sanity test для ККУ (6 тестів)')
+  .action(async () => {
+    await comprehensiveRAGSanityTest();
+  });
+
+program
+  .command('rag-debug-article')
+  .description('Детальна перевірка конкретної статті (debug)')
+  .requiredOption('--nreg <nreg>', 'NREG документа')
+  .requiredOption('--article <article>', 'Номер статті')
+  .action(async (options) => {
+    await ragDebugArticle(options.nreg, options.article);
+  });
+
+program
+  .command('targeted-doc-type-backfill')
+  .description('Targeted backfill для відомих проблемних кейсів (декрети, EU law, НКРЕКП)')
+  .option('--dry-run', 'Dry run (не оновлювати БД)')
+  .option('--nregs <nregs>', 'Список nreg через кому (за замовчуванням: відомі кейси)')
+  .action(async (options) => {
+    const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
+    await targetedDocTypeBackfill({
+      dryRun: Boolean(options.dryRun),
+      nregs,
+    });
+  });
+
+program
+  .command('doc-type-regression')
+  .description('Regression test для golden set (перевірка правильності doc types)')
+  .action(async () => {
+    await docTypeRegression();
+  });
+
+program
+  .command('collect-critical-evidence')
+  .description('Збір evidence для CRITICAL документів (Supabase + R2 + Qdrant)')
+  .action(async () => {
+    await collectCriticalEvidence();
+  });
+
+program
+  .command('analyze-dokid-batch')
+  .description('Аналіз документів за dokid для виявлення проблем з класифікацією')
+  .requiredOption('--dokids <dokids>', 'Список dokid через кому')
+  .action(async (options) => {
+    const dokids = options.dokids
+      .split(',')
+      .map((s: string) => parseInt(s.trim(), 10))
+      .filter((n: number) => !isNaN(n));
+    await analyzeDokidBatchCLI(dokids);
+  });
+
+program
+  .command('audit-resolutions')
+  .description('Аудит всіх постанов (cmu_resolution, vr_resolution) для виявлення проблем')
+  .action(async () => {
+    await auditResolutionsCLI();
+  });
+
+program
+  .command('find-explanations')
+  .description('Знайти всі документи з роз\'ясненнями (typ=12 або містить "РОЗ\'ЯСНЕННЯ")')
+  .action(async () => {
+    await findExplanationsCLI();
+  });
+
+program
+  .command('print-doc-card')
+  .description('Компактна картка документа для ручного аудиту')
+  .requiredOption('--nreg <nreg>', 'NREG документа')
+  .action(async (options) => {
+    await printDocCard(options.nreg);
+  });
+
+program
+  .command('manual-audit')
+  .description('Ручний аудит документів один за одним')
+  .option('--nregs <nregs>', 'Список nreg через кому')
+  .option('--non-cmu', 'Всі non-CMU документи')
+  .option('--type <slug>', 'Документи конкретного типу')
+  .action(async (options) => {
+    await manualAuditCLI({
+      nregs: options.nregs,
+      nonCmu: Boolean(options.nonCmu),
+      type: options.type,
+    });
+  });
+
+program
+  .command('analyze-manual-audit')
+  .description('Автоматичний аналіз semantic correctness для non-CMU документів')
+  .option('--non-cmu', 'Всі non-CMU документи')
+  .action(async (options) => {
+    await analyzeManualAudit({
+      nonCmu: Boolean(options.nonCmu),
+    });
+  });
+
+program
+  .command('backfill-validity')
+  .description('Backfill validity_status для існуючих документів (PROD PIPELINE)')
+  .option('--dry-run', 'Тільки preview, без змін')
+  .option('--limit <n>', 'Обмежити кількість документів', parseInt)
+  .option('--only-null', 'Тільки документи з NULL validity_status')
+  .option('--nreg <nreg>', 'Конкретний документ')
+  .action(async (options) => {
+    await backfillValidity({
+      dryRun: Boolean(options.dryRun),
+      limit: options.limit ? Number(options.limit) : undefined,
+      onlyNull: Boolean(options.onlyNull),
+      nreg: options.nreg,
+    });
+  });
+
+program
+  .command('regression-validity')
+  .description('Regression тести для validity pipeline')
+  .action(async () => {
+    await runValidityRegressionTests();
+  });
+
+program
+  .command('test-latest-validity')
+  .description('Тест validity на останніх документах')
+  .option('--limit <n>', 'Кількість документів для тесту', '50')
+  .action(async (options) => {
+    await testLatestValidity(Number(options.limit) || 50);
   });
 
 program.parse();

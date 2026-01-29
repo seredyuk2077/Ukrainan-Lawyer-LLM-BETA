@@ -19,13 +19,16 @@
 
 **Залишено в корені (current):** `README.md`, `OPERATIONAL_GUIDE.md`, `CONTEXT_RESTORE_NOTES.md`, `SECURITY_RLS_NOTES.md`, `SCHEMA_MAP.md`, `VERSIONING_POLICY.md`.
 
-**Не переміщували:** `runs/`, `test/`, `taxonomy/`, `Documentation List DB/`. Код (commands, lib, canonical, …) лишається в корені.
+**Після реструктуризації:** код у `prod_.../`; на старих шляхах — stubs. `runs/`, `test/`, `Documentation List DB/` лишаються в корені.
 
 ---
 
-## 2. Compat stubs
+## 2. Compat stubs (фінальна реструктуризація)
 
-Створено **ні** — переміщували лише .md. Код не переміщували, тому stub’и не потрібні.
+Створено stubs на старих шляхах після перенесення коду в `prod_lexery_legislation_db_infra/`:
+- `commands/*.ts` → `export * from '../prod_lexery_legislation_db_infra/commands/<name>.js'`
+- `lib/supabaseAdmin.ts` → реекспорт з `prod_.../lib/supabaseAdmin.js`
+- `config.ts`, `radaClient.ts` → реекспорт з `prod_.../lib/`
 
 ---
 
@@ -35,17 +38,23 @@
 
 ---
 
-## 4. Нова структура
+## 4. Нова структура (після фінальної реструктуризації)
+
+**Канонічне місце коду:** `prod_lexery_legislation_db_infra/`
 
 ```
 scripts/legislation/
-  prod_lexery_legislation_db_infra/   { core, commands, adapters, sql, utils } + README
-  tests_lexery_legislation_db_infra/  { stage_01..05_*, helpers, data } + README
-  docs_lexery_legislation_db_infra/   { current, history_by_commit, investigations } + README
-  trash_oneoff_lexery_legislation_db_infra/  { tmp, oneoff_migrations, dead_reports, notes_unreliable } + README
+  admin-cli.ts                        # entrypoint (без змін шляху)
+  commands/*.ts                       # compat stubs → prod_.../commands
+  lib/supabaseAdmin.ts                # compat stub → prod_.../lib
+  config.ts, radaClient.ts            # compat stubs → prod_.../lib
+  prod_lexery_legislation_db_infra/
+    commands/   lib/   canonical/   documentTypes/   taxonomy/   utils/
+  tests_lexery_legislation_db_infra/   docs_lexery_legislation_db_infra/
+  trash_oneoff_lexery_legislation_db_infra/   test/   runs/
 ```
 
-Код і тести поки в корені; у нових папках лише README + `history_by_commit` з історичними .md.
+**Compat stubs** на старих шляхах — реекспорти з `prod_lexery_legislation_db_infra/...`. Запуск: `pnpm exec tsx scripts/legislation/admin-cli.ts ...`.
 
 ---
 
@@ -94,7 +103,7 @@ scripts/legislation/
 | **remove** `--nreg "1697-18"` `--confirm` (ідемпотент) | ✅ OK. |
 | **add** `--nreg "1697-VII"` → **verify** `--nreg "1697-18"` | ✅ PASS. |
 
-**Висновок:** E2E на «Про прокуратуру» пройдено. Для verify/remove/inspect використовувати `1697-18`.
+**Висновок:** E2E на «Про прокуратуру» пройдено. Для verify/remove/inspect використовувати `1697-18`. Після реструктуризації (код у `prod_.../`, stubs): remove → add → verify 1697-18 — PASS.
 
 ---
 
