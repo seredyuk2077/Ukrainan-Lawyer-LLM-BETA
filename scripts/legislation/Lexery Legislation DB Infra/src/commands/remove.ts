@@ -6,7 +6,7 @@
  * Не використовує legislation_chunks (чанки в Qdrant).
  */
 import { createSupabaseAdminClient, nowIso } from '../lib/supabaseAdmin.js';
-import { createRunContext, logLine, writeJson } from '../lib/runs.js';
+import { createRunContext, logLine, writeJson, uploadRunToR2 } from '../lib/runs.js';
 import { getR2AdminClient, headObject, copyObject, deleteObject } from '../lib/r2Admin.js';
 import { isCanonicalKey } from '../lib/r2Guardrails.js';
 import { createQdrantClient, countByNreg, deleteByNreg, QDRANT_COLLECTION_ACTS, QDRANT_COLLECTION_CHUNKS } from '../lib/qdrantAdmin.js';
@@ -79,11 +79,12 @@ export async function removeDocument(radaNreg: string, opts: RemoveOptions): Pro
     console.log(`- r2.canonical.size: ${String(r2Head.size)}`);
     console.log(`- r2.canonical.lastModified: ${String(r2Head.lastModified)}`);
   }
-  console.log(`- run_dir: ${run.runDir}`);
+  console.log(`- run_dir: ${run.r2RunPrefix} (R2)`);
 
   if (!opts.confirm) {
     await logLine(run, 'remove:dry-run (no changes applied)');
     console.log('\nDry-run only. Re-run with `--confirm` to apply removal.');
+    await uploadRunToR2(run);
     return;
   }
 
@@ -98,6 +99,7 @@ export async function removeDocument(radaNreg: string, opts: RemoveOptions): Pro
       await logLine(run, `qdrant:delete best-effort error ${e?.message ?? String(e)}`);
     }
     console.log('\nNo document in Supabase. Qdrant delete-by-nreg attempted (best-effort). Nothing else to remove.');
+    await uploadRunToR2(run);
     return;
   }
 
@@ -288,5 +290,7 @@ export async function removeDocument(radaNreg: string, opts: RemoveOptions): Pro
       })
       .eq('id', jobId);
     throw e;
+  } finally {
+    await uploadRunToR2(run);
   }
 }

@@ -4,7 +4,9 @@
  * PHASE 7: Corpus Tests + Batch Report Generator
  */
 import { readFile } from 'fs/promises';
+import { resolve } from 'path';
 import { importOne } from '../lib/importer.js';
+import { workspaceRoot } from '../lib/config.js';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { createQdrantClient, countByNreg, QDRANT_COLLECTION_ACTS, QDRANT_COLLECTION_CHUNKS } from '../lib/qdrantAdmin.js';
 
@@ -172,7 +174,7 @@ export async function testCorpus(opts: {
   
   // Save JSON report
   if (opts.report) {
-    const reportPath = `scripts/legislation/runs/corpus_report_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+    const reportPath = resolve(workspaceRoot(), 'runs', `corpus_report_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
     await import('fs/promises').then(fs => fs.writeFile(reportPath, JSON.stringify(report, null, 2)));
     console.log(`\nJSON report saved: ${reportPath}`);
   }
@@ -218,7 +220,7 @@ export async function testCorpus(opts: {
   // Save Markdown report
   if (opts.report) {
     const mdReport = generateMarkdownReport(report);
-    const mdPath = `scripts/legislation/runs/corpus_report_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.md`;
+    const mdPath = resolve(workspaceRoot(), 'runs', `corpus_report_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.md`);
     await import('fs/promises').then(fs => fs.writeFile(mdPath, mdReport));
     console.log(`\nMarkdown report saved: ${mdPath}`);
   }

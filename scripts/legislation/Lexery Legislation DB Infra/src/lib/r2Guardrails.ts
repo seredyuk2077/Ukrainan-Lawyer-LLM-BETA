@@ -14,11 +14,17 @@ export const R2_PREFIX_CANONICAL_ROOT = 'legislation/';
 export const R2_PREFIX_CACHE = 'legislation/ActCatalogResolver/cache/';
 export const R2_PREFIX_LOGS = 'legislation/DocListDB rada gov updater log/';
 export const R2_PREFIX_ARCHIVE = 'legislation/archive/';
+/** Run artifacts (import/remove logs, report, rada_raw, canonical.preview) — тільки в R2, не локально */
+export const R2_PREFIX_RUNS = 'legislation/tech/runs/';
 
 const SUPREME_COURT_BUCKETS = new Set(['legal-court-decisions', 'legal-cases']);
 
 export function isCacheOrLogKey(key: string): boolean {
   return key.startsWith(R2_PREFIX_CACHE) || key.startsWith(R2_PREFIX_LOGS);
+}
+
+export function isRunsKey(key: string): boolean {
+  return key.startsWith(R2_PREFIX_RUNS);
 }
 
 export function isCanonicalKey(key: string): boolean {
@@ -43,6 +49,7 @@ export function isCanonicalKey(key: string): boolean {
   if (category === 'ActCatalogResolver') return false;
   if (category === 'DocListDB rada gov updater log') return false;
   if (category === 'archive') return false;
+  if (category === 'tech') return false;
 
   return true;
 }

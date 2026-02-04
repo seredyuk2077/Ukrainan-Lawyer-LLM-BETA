@@ -3,7 +3,7 @@
  */
 import { readFile } from 'fs/promises';
 import { importOne } from '../lib/importer.js';
-import { createRunContext, logLine, writeJson } from '../lib/runs.js';
+import { createRunContext, logLine, writeJson, uploadRunToR2 } from '../lib/runs.js';
 import { nowIso } from '../lib/supabaseAdmin.js';
 
 export interface BatchOptions {
@@ -85,5 +85,6 @@ export async function addBatch(opts: BatchOptions): Promise<void> {
   console.log(`- success: ${summary.success}`);
   console.log(`- skipped: ${summary.skipped}`);
   console.log(`- errors: ${summary.errors}`);
-  console.log(`- batch_run_dir: ${batchRun.runDir}`);
+  console.log(`- batch_run_dir: ${batchRun.r2RunPrefix} (R2)`);
+  await uploadRunToR2(batchRun);
 }

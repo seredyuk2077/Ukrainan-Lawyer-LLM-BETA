@@ -81,7 +81,7 @@ export async function collectGoldenDiversitySetFast(options?: {
   console.log(`📋 Виключено ${existingNregs.size} існуючих документів\n`);
   
   // Читаємо список кандидатів
-  const inputPath = inputFile || resolve(process.cwd(), 'scripts/legislation/test/hard_stream_200_candidates.txt');
+  const inputPath = inputFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'hard_stream_200_candidates.txt');
   console.log(`📥 Читаємо список кандидатів з ${inputPath}...`);
   const content = await readFile(inputPath, 'utf-8');
   const allNregs = content.split('\n')
@@ -211,7 +211,7 @@ export async function collectGoldenDiversitySetFast(options?: {
   }
   
   // Зберігаємо у файл
-  const finalOutputPath = outputPath || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json');
+  const finalOutputPath = outputPath || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'golden_diversity_set.json');
   const output = {
     candidates: goldenSet.map(c => ({
       nreg: c.nreg,

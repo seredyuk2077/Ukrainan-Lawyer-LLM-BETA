@@ -508,16 +508,16 @@ export async function collectDiverseCandidatesV3(options?: {
   }
   
   // Stage B
-  const cacheDir = runsDir || resolve(process.cwd(), 'scripts/legislation/runs/diverse_cache');
+  const cacheDir = runsDir || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse_cache');
   const { candidates: stageBCandidates, metrics: stageBMetrics } = await stageB_EnrichShortlist(stageACandidates, rada, cacheDir);
   
   // Quota solver
   const { goldenSet, metrics: goldenMetrics } = solveQuotas(stageBCandidates);
   
   // Зберігаємо
-  const finalOutputPath = outputPath || resolve(process.cwd(), 'scripts/legislation/runs/diverse/golden_diversity_set.json');
-  const metricsPath = resolve(process.cwd(), 'scripts/legislation/runs/diverse/metrics.json');
-  const runsDiverseDir = resolve(process.cwd(), 'scripts/legislation/runs/diverse');
+  const finalOutputPath = outputPath || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse', 'golden_diversity_set.json');
+  const metricsPath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse', 'metrics.json');
+  const runsDiverseDir = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse');
   
   await mkdir(runsDiverseDir, { recursive: true });
   

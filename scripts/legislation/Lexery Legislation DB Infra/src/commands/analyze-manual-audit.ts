@@ -22,11 +22,9 @@ function normalizeText(text: string): string {
 }
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPORT_PATH = path.join(__dirname, '../../runs/manual_audit_analysis.md');
+import { workspaceRoot } from '../lib/config.js';
+const REPORT_PATH = path.join(workspaceRoot(), 'runs', 'manual_audit_analysis.md');
 
 interface Mismatch {
   nreg: string;

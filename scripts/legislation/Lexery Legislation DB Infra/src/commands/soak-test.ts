@@ -29,7 +29,7 @@ export async function runSoakTest(opts: {
   console.log('═══════════════════════════════════════════════════════════\n');
   
   // Read nregs from file
-  const filePath = resolve(process.cwd(), 'scripts/legislation', file);
+  const filePath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), file);
   console.log(`📄 Reading from: ${filePath}`);
   const content = await readFile(filePath, 'utf-8');
   const nregs = content

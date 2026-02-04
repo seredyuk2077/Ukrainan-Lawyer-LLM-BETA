@@ -12,11 +12,9 @@ import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { printDocCard } from './print-doc-card.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const AUDIT_LOG_PATH = path.join(__dirname, '../../runs/manual_audit_log.md');
+import { workspaceRoot } from '../lib/config.js';
+const AUDIT_LOG_PATH = path.join(workspaceRoot(), 'runs', 'manual_audit_log.md');
 
 interface AuditLogEntry {
   nreg: string;

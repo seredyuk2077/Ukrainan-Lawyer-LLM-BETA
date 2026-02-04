@@ -7,6 +7,8 @@
  * - Qdrant (1 act payload + 2 chunks payload)
  */
 
+import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { createQdrantClient, QDRANT_COLLECTION_CHUNKS, QDRANT_COLLECTION_ACTS } from '../lib/qdrantAdmin.js';
@@ -157,7 +159,7 @@ export async function collectCriticalEvidence(): Promise<void> {
   // Читаємо CRITICAL список з audit
   const fs = await import('fs/promises');
   const auditData = JSON.parse(
-    await fs.readFile('scripts/legislation/runs/audit/DOC_TYPE_AUDIT_190.json', 'utf-8')
+    await fs.readFile(resolve(workspaceRoot(), 'runs', 'audit', 'DOC_TYPE_AUDIT_190.json'), 'utf-8')
   );
   
   const criticalNregs = auditData
@@ -210,14 +212,14 @@ export async function collectCriticalEvidence(): Promise<void> {
     md += `---\n\n`;
   }
   
-  await fs.writeFile('scripts/legislation/runs/audit/CRITICAL_12_EVIDENCE.md', md, 'utf-8');
-  console.log(`\n✅ Evidence збережено: scripts/legislation/runs/audit/CRITICAL_12_EVIDENCE.md`);
+  await fs.writeFile(resolve(workspaceRoot(), 'runs', 'audit', 'CRITICAL_12_EVIDENCE.md'), md, 'utf-8');
+  console.log(`\n✅ Evidence збережено: runs/audit/CRITICAL_12_EVIDENCE.md`);
   
   // Також зберігаємо JSON
   await fs.writeFile(
-    'scripts/legislation/runs/audit/CRITICAL_12_EVIDENCE.json',
+    resolve(workspaceRoot(), 'runs', 'audit', 'CRITICAL_12_EVIDENCE.json'),
     JSON.stringify(evidence, null, 2),
     'utf-8'
   );
-  console.log(`✅ Evidence JSON збережено: scripts/legislation/runs/audit/CRITICAL_12_EVIDENCE.json`);
+  console.log(`✅ Evidence JSON збережено: runs/audit/CRITICAL_12_EVIDENCE.json`);
 }

@@ -179,7 +179,5 @@ tmp/rada-open-data/
 backend/.npmrc
 
 # Legislation runs (generated artifacts from imports)
-scripts/legislation/runs/**/*.json
-scripts/legislation/runs/**/*.txt
-scripts/legislation/runs/**/logs.txt
-!scripts/legislation/runs/.gitkeep
+# Run artifacts go to R2 (legislation/tech/runs/), not locally; ignore if any local runs appear
+scripts/legislation/runs/

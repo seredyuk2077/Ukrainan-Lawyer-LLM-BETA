@@ -4,6 +4,7 @@
  * Генерує структурований звіт для ручної перевірки документів
  */
 
+import { resolve } from 'path';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { createR2Client, getLegislationBucket } from '../lib/r2Client.js';
 import { RadaClient } from '../lib/radaClient.js';
@@ -240,7 +241,7 @@ export async function auditAllDocuments(options?: {
   }
   
   // Зберігаємо результати
-  const outputPath = outputFile || 'scripts/legislation/runs/audit_records.json';
+  const outputPath = outputFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'audit_records.json');
   const fs = await import('fs/promises');
   await fs.writeFile(outputPath, JSON.stringify(records, null, 2), 'utf-8');
   

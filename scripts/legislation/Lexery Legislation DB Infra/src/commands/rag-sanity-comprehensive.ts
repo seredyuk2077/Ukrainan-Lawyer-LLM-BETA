@@ -9,6 +9,8 @@
  * - "шахрайство" → має повертати ст.190
  */
 
+import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 import { ragSanityArticle } from './rag-sanity-article.js';
 
 interface ComprehensiveTestResult {
@@ -171,12 +173,12 @@ export async function comprehensiveRAGSanityTest(): Promise<void> {
   
   // Зберігаємо результати
   const fs = await import('fs/promises');
-  const outputPath = 'scripts/legislation/runs/audit/RAG_SANITY_COMPREHENSIVE.json';
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'RAG_SANITY_COMPREHENSIVE.json');
   await fs.writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
   console.log(`\n✅ Comprehensive test results збережено: ${outputPath}`);
   
   // Генеруємо Markdown звіт
-  const markdownFile = 'scripts/legislation/runs/audit/RAG_SANITY_COMPREHENSIVE.md';
+  const markdownFile = resolve(workspaceRoot(), 'runs', 'audit', 'RAG_SANITY_COMPREHENSIVE.md');
   const markdown = generateMarkdownReport(results);
   await fs.writeFile(markdownFile, markdown, 'utf-8');
   console.log(`✅ Comprehensive test report (Markdown) збережено: ${markdownFile}`);

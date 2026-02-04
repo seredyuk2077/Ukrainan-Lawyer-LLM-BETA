@@ -180,7 +180,7 @@ export async function collectSoakNregs(): Promise<void> {
   }
   
   // Формуємо файл
-  const filePath = resolve(process.cwd(), 'scripts/legislation/test/soak_nregs.txt');
+  const filePath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'soak_nregs.txt');
   const content = `# Soak Test Documents — PHASE 20
 # Зібрано програмно: відомі різноманітні + feed з Rada API
 # Стратифікація: Закони, Кодекси, Постанови (КМУ/ВРУ), Укази, Накази, Договори, Рішення

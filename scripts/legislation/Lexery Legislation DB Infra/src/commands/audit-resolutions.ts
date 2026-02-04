@@ -9,6 +9,7 @@ import { enrichDocumentType } from '../lib/documentTypeEnrichment.js';
 import { extractIssuerSignals } from '../lib/signalExtractor.js';
 import { writeFile } from 'fs/promises';
 import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 
 interface ResolutionAudit {
   nreg: string;
@@ -134,7 +135,7 @@ export async function auditResolutionsCLI(): Promise<void> {
   const results = await auditResolutions();
 
   // Зберігаємо результати
-  const outputPath = resolve(process.cwd(), 'scripts/legislation/runs/audit/RESOLUTIONS_AUDIT.json');
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'RESOLUTIONS_AUDIT.json');
   await writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
 
   // Статистика

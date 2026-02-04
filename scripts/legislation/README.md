@@ -17,25 +17,17 @@
 - ✅ PHASE 7: Corpus Tests + Batch Report Generator
 
 Детальна архітектура: [docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md](../../docs/legislation-rag/ARCHITECTURE_AS_IS_TO_BE.md)  
-Operational Guide: [OPERATIONAL_GUIDE.md](./OPERATIONAL_GUIDE.md)
+Operational Guide: [OPERATIONAL_GUIDE.md](../../docs/legislation-rag/legislation_audit/OPERATIONAL_GUIDE.md)
 
 ## 📁 Структура
 
 ```
 scripts/legislation/
-├── README.md              # Цей файл
-├── PHASE2.md              # Документація Phase 2
-├── config.ts              # Конфігурація та завантаження env
-├── radaClient.ts          # Клієнт для роботи з rada.gov.ua API (ТІЛЬКИ API)
-├── openDataPortalClient.ts # Клієнт для Open Data Portal (datasets, passports)
-├── radaDocIndex.ts        # Швидкий lookup індекс документів (Open Data Portal)
-├── docIndex.ts            # Legacy discovery (deprecated, використовується radaDocIndex)
-├── pilot_fetch.ts         # CLI для тестування завантаження одного документа
-├── find_nreg.ts           # CLI для пошуку nreg за назвою (legacy)
-├── cli_lookup.ts          # CLI для швидкого lookup документів (РЕКОМЕНДОВАНО)
-└── utils/
-    ├── nreg.ts            # Canonical nreg helpers
-    └── rawFetch.ts        # Детермінований RAW fetch результат
+├── README.md                    # Цей файл
+├── admin-cli.ts                 # Єдиний CLI: add, update, remove, verify, search, jobs, …
+├── Lexery Legislation DB Infra/ # Продакшн-пакет: canonical, R2, Qdrant, Supabase
+├── Documentation List DB/       # Окремий мікросервіс (каталог актів, UpdaterDB, Full Import)
+└── other/                       # Додаткові скрипти (pilot, r2, lookup, тести)
 ```
 
 ## 🚀 Як запускати скрипти
@@ -75,10 +67,10 @@ pnpm tsx scripts/legislation/admin-cli.ts search --query "кримінальна
 
 # Тестування
 pnpm tsx scripts/legislation/admin-cli.ts test-kku
-pnpm tsx scripts/legislation/admin-cli.ts test-corpus --file test/corpus_nregs.txt --report
+pnpm tsx scripts/legislation/admin-cli.ts test-corpus --file <path-to-nregs.txt> --report
 ```
 
-**Детальніше:** [OPERATIONAL_GUIDE.md](./OPERATIONAL_GUIDE.md)
+**Детальніше:** [OPERATIONAL_GUIDE.md](../../docs/legislation-rag/legislation_audit/OPERATIONAL_GUIDE.md)
 
 ### Legacy CLI (deprecated)
 
@@ -109,7 +101,7 @@ pnpm tsx scripts/legislation/admin-cli.ts search --query "право власн�
 pnpm tsx scripts/legislation/admin-cli.ts purge-all --i-know-what-im-doing
 ```
 
-**Runs directory:** Кожна операція створює папку `scripts/legislation/runs/...` з report, enrichment, logs.
+**Runs:** Операції add/update пишуть артефакти в `Lexery Legislation DB Infra` (див. PIPELINE.md).
 
 ### Legacy команди
 
@@ -117,13 +109,13 @@ pnpm tsx scripts/legislation/admin-cli.ts purge-all --i-know-what-im-doing
 
 ```bash
 # Пошук за назвою
-pnpm tsx scripts/legislation/cli_lookup.ts --query="Конституція України" --limit=5
+pnpm tsx scripts/legislation/other/cli_lookup.ts --query="Конституція України" --limit=5
 
 # Пошук за nreg
-pnpm tsx scripts/legislation/cli_lookup.ts --nreg="254к/96-вр"
+pnpm tsx scripts/legislation/other/cli_lookup.ts --nreg="254к/96-вр"
 
 # Примусове оновлення індексу
-pnpm tsx scripts/legislation/cli_lookup.ts --query="Конституція" --refresh
+pnpm tsx scripts/legislation/other/cli_lookup.ts --query="Конституція" --refresh
 ```
 
 **Що робить:**
@@ -135,23 +127,23 @@ pnpm tsx scripts/legislation/cli_lookup.ts --query="Конституція" --re
 **Приклади:**
 ```bash
 # Конституція України
-pnpm tsx scripts/legislation/cli_lookup.ts --query="Конституція України"
+pnpm tsx scripts/legislation/other/cli_lookup.ts --query="Конституція України"
 
 # Кримінальний кодекс
-pnpm tsx scripts/legislation/cli_lookup.ts --query="Кримінальний кодекс України"
+pnpm tsx scripts/legislation/other/cli_lookup.ts --query="Кримінальний кодекс України"
 
 # Податковий кодекс
-pnpm tsx scripts/legislation/cli_lookup.ts --query="Податковий кодекс України"
+pnpm tsx scripts/legislation/other/cli_lookup.ts --query="Податковий кодекс України"
 ```
 
 #### Тестовий завантаження документа (pilot)
 
 ```bash
 # Завантажити документ за nreg
-pnpm tsx scripts/legislation/pilot_fetch.ts --nreg=<nreg>
+pnpm tsx scripts/legislation/other/pilot_fetch.ts --nreg=<nreg>
 
 # Приклад (використовуйте nreg з cli_lookup):
-pnpm tsx scripts/legislation/pilot_fetch.ts --nreg=254к/96-вр
+pnpm tsx scripts/legislation/other/pilot_fetch.ts --nreg=254к/96-вр
 ```
 
 **Що робить:**
@@ -163,7 +155,8 @@ pnpm tsx scripts/legislation/pilot_fetch.ts --nreg=254к/96-вр
 #### Парсинг в canonical формат (майбутнє)
 
 ```bash
-pnpm tsx scripts/legislation/parser.ts --nreg=<nreg>
+# Парсер — частина admin-cli add (Lexery Legislation DB Infra).
+pnpm tsx scripts/legislation/admin-cli.ts add --nreg=<nreg>
 ```
 
 ## 📂 Структура вихідних файлів

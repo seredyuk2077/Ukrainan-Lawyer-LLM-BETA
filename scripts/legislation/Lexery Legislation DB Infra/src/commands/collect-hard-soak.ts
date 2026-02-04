@@ -169,7 +169,7 @@ export async function collectHardSoak(options?: {
   }
   
   // Читаємо статичний список як основу
-  const existingSoakPath = resolve(process.cwd(), 'scripts/legislation/test/soak_nregs.txt');
+  const existingSoakPath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'soak_nregs.txt');
   let feedNregs: string[] = [];
   try {
     const { readFile } = await import('fs/promises');
@@ -443,7 +443,7 @@ export async function collectHardSoak(options?: {
   });
   
   // Зберігаємо у файл
-  const output = outputPath || resolve(process.cwd(), 'scripts/legislation/test/hard_soak_nregs.txt');
+  const output = outputPath || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'hard_soak_nregs.txt');
   const content = `# Hard Soak Test Documents (${finalSelected.length} documents)
 # Generated: ${new Date().toISOString()}
 # Hardness score range: ${Math.min(...finalSelected.map(c => c.hardness_score))} - ${Math.max(...finalSelected.map(c => c.hardness_score))}

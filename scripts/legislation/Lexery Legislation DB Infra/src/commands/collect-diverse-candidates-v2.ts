@@ -554,7 +554,7 @@ export async function collectDiverseCandidatesV2(options?: {
   const goldenSet = formGoldenSetWithQuotas(allCandidates);
   
   // Зберігаємо
-  const finalOutputPath = outputPath || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json');
+  const finalOutputPath = outputPath || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'golden_diversity_set.json');
   const output = {
     candidates: goldenSet.map(c => ({
       nreg: c.nreg,

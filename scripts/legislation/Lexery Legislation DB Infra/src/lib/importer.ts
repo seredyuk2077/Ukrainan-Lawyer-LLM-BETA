@@ -18,7 +18,7 @@ import { generateEnrichment } from './aiEnrichment.js';
 import { generateEmbedding, generateEmbeddingsBatch } from '../canonical/embeddings.js';
 import { QdrantRagClient } from './qdrantRagClient.js';
 import { createSupabaseAdminClient, nowIso } from './supabaseAdmin.js';
-import { createRunContext, logLine, writeJson } from './runs.js';
+import { createRunContext, logLine, writeJson, uploadRunToR2 } from './runs.js';
 import { updateJobProgress, completeJob, failJob, findResumeJob, ImportStage } from './jobProgress.js';
 import { normalizeCategory, TaxonomySlug } from '../taxonomy/taxonomy.js';
 
@@ -69,8 +69,9 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
   const run = await createRunContext({ title: existingDoc?.title || 'import', radaNreg: opts.radaNreg });
   await logLine(run, `import:start ${nowIso()} mode=${opts.mode} nreg=${opts.radaNreg} dryRun=${String(Boolean(opts.dryRun))} resume=${String(Boolean(opts.resume))}`);
 
-  // Resume check: якщо resume=true, шукаємо існуючий job
   let actualJobId: string | undefined = undefined;
+  try {
+  // Resume check: якщо resume=true, шукаємо існуючий job
   if (opts.resume && !opts.dryRun) {
     const resumeJob = await findResumeJob(supabase, opts.radaNreg);
     if (resumeJob) {
@@ -149,7 +150,7 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       expected_chunks: expectedChunks,
       qdrant: { acts: 0, chunks: 0 },
       skipped: true,
-      run_dir: run.runDir,
+      run_dir: run.r2RunPrefix,
     };
   }
 
@@ -197,7 +198,7 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       expected_chunks: expectedChunks,
       qdrant: { acts: 0, chunks: 0 },
       skipped: true,
-      run_dir: run.runDir,
+      run_dir: run.r2RunPrefix,
     };
   }
 
@@ -642,7 +643,7 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       r2_key: r2Key,
       expected_chunks: expectedChunks,
       qdrant: qCounts,
-      run_dir: run.runDir,
+      run_dir: run.r2RunPrefix,
     };
 
     await writeJson(run.reportPath, { phase: 'F.import.completed', result });
@@ -673,6 +674,9 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
       .eq('rada_nreg', opts.radaNreg);
 
     throw e;
+  }
+  } finally {
+    await uploadRunToR2(run);
   }
 }
 

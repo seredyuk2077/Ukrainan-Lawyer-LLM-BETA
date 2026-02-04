@@ -21,7 +21,7 @@ export async function importHardSoakBatch(options?: {
 }): Promise<void> {
   const { batchSize = 10, nregsFile } = options || {};
   
-  const filePath = nregsFile || resolve(process.cwd(), 'scripts/legislation/test/hard_soak_nregs.txt');
+  const filePath = nregsFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'hard_soak_nregs.txt');
   
   console.log(`\n═══════════════════════════════════════════════════════════`);
   console.log(`Import Hard Soak Batch — пачками по ${batchSize}`);

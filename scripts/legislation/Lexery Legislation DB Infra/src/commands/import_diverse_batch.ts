@@ -27,7 +27,7 @@ export async function importDiverseBatch(options?: {
   console.log(`═══════════════════════════════════════════════════════════\n`);
   
   // Читаємо golden diversity set
-  const inputPath = inputFile || resolve(process.cwd(), 'scripts/legislation/test/golden_diversity_set.json');
+  const inputPath = inputFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'golden_diversity_set.json');
   console.log(`📥 Читаємо golden diversity set з ${inputPath}...`);
   const content = await readFile(inputPath, 'utf-8');
   const data = JSON.parse(content);

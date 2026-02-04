@@ -11,6 +11,8 @@ import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { enrichDocumentType } from '../lib/documentTypeEnrichment.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { extractIssuerSignals } from '../lib/signalExtractor.js';
+import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 import { getDocumentTypeInfo } from '../documentTypes/documentTypes.js';
 
 interface GoldenTestResult {
@@ -154,7 +156,7 @@ export async function docTypeRegression(): Promise<void> {
   
   // Читаємо golden set
   const fs = await import('fs/promises');
-  const goldenSetPath = 'scripts/legislation/test/doc_type_golden_set.json';
+  const goldenSetPath = resolve(workspaceRoot(), 'data', 'doc_type_golden_set.json');
   const goldenSetContent = await fs.readFile(goldenSetPath, 'utf-8');
   const goldenSet = JSON.parse(goldenSetContent);
   
@@ -236,12 +238,12 @@ export async function docTypeRegression(): Promise<void> {
   }
   
   // Зберігаємо результати
-  const outputPath = 'scripts/legislation/runs/audit/DOC_TYPE_REGRESSION_RESULTS.json';
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'DOC_TYPE_REGRESSION_RESULTS.json');
   await fs.writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
   console.log(`\n✅ Regression test results збережено: ${outputPath}`);
   
   // Генеруємо Markdown звіт
-  const markdownFile = 'scripts/legislation/runs/audit/DOC_TYPE_REGRESSION_RESULTS.md';
+  const markdownFile = resolve(workspaceRoot(), 'runs', 'audit', 'DOC_TYPE_REGRESSION_RESULTS.md');
   let md = `# Document Type Regression Test Results\n\n`;
   md += `**Дата:** ${new Date().toISOString()}\n\n`;
   md += `| NREG | Expected | DB | Predicted | Issuer | Status |\n`;

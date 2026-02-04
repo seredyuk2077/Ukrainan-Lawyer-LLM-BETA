@@ -8,7 +8,7 @@
 import { createInterface } from 'readline';
 import { createSupabaseAdminClient, nowIso } from '../lib/supabaseAdmin.js';
 import { createQdrantClient, deleteByNreg, QDRANT_COLLECTION_ACTS, QDRANT_COLLECTION_CHUNKS } from '../lib/qdrantAdmin.js';
-import { createRunContext, logLine, writeJson } from '../lib/runs.js';
+import { createRunContext, logLine, writeJson, uploadRunToR2 } from '../lib/runs.js';
 
 export interface PurgeOptions {
   iKnowWhatImDoing: boolean;
@@ -117,5 +117,6 @@ export async function purgeAll(opts: PurgeOptions): Promise<void> {
   console.log('\n## Purge result');
   console.log(`- before: ${JSON.stringify(result.before)}`);
   console.log(`- after: ${JSON.stringify(result.after)}`);
-  console.log(`- run_dir: ${run.runDir}`);
+  console.log(`- run_dir: ${run.r2RunPrefix} (R2)`);
+  await uploadRunToR2(run);
 }

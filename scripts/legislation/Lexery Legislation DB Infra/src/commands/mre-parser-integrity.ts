@@ -8,6 +8,8 @@
  * - Звіряє чи немає зсуву
  */
 
+import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 import { createQdrantClient, QDRANT_COLLECTION_CHUNKS } from '../lib/qdrantAdmin.js';
@@ -190,7 +192,7 @@ export async function mreParserIntegrity(): Promise<void> {
   
   // Зберігаємо результати
   const fs = await import('fs/promises');
-  const outputPath = 'scripts/legislation/runs/audit/MRE_PARSER_INTEGRITY.json';
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'MRE_PARSER_INTEGRITY.json');
   await fs.writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
   console.log(`\n✅ MRE results збережено: ${outputPath}`);
   

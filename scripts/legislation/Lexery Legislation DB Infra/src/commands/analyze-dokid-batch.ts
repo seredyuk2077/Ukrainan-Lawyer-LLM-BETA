@@ -9,6 +9,7 @@ import { enrichDocumentType } from '../lib/documentTypeEnrichment.js';
 import { extractIssuerSignals } from '../lib/signalExtractor.js';
 import { writeFile } from 'fs/promises';
 import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 
 interface DokidAnalysis {
   dokid: number;
@@ -191,7 +192,7 @@ export async function analyzeDokidBatchCLI(dokids: number[]): Promise<void> {
   const results = await analyzeDokidBatch(dokids);
   
   // Зберігаємо результати
-  const outputPath = resolve(process.cwd(), 'scripts/legislation/runs/audit/DOKID_BATCH_ANALYSIS.json');
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'DOKID_BATCH_ANALYSIS.json');
   await writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
   
   // Виводимо таблицю

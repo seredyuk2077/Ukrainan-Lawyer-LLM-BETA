@@ -393,7 +393,7 @@ program
   .command('collect-soak-nregs')
   .description('Зібрати різноманітні nreg для soak test (PHASE 20B)')
   .action(async () => {
-    const { collectSoakNregs } = await import('./test/collect_soak_nregs.js');
+    const { collectSoakNregs } = await import('./Lexery Legislation DB Infra/src/commands/collect-soak-nregs.js');
     await collectSoakNregs();
   });
 
@@ -436,7 +436,7 @@ program
   .action(async (options) => {
     if (options.v3) {
       await collectDiverseCandidatesV3({
-        outputPath: options.output || resolve(process.cwd(), 'scripts/legislation/runs/diverse/golden_diversity_set.json'),
+        outputPath: options.output || resolve(process.cwd(), 'runs', 'diverse', 'golden_diversity_set.json'),
       });
     } else if (options.v2) {
       await collectDiverseCandidatesV2({
@@ -617,7 +617,7 @@ program
   .command('audit-documents')
   .description('Генерація audit records для ручної перевірки документів (рефакторинг)')
   .option('--limit <n>', 'Обмежити кількість документів', '190')
-  .option('--output <path>', 'Шлях до вихідного файлу', 'scripts/legislation/runs/audit_records.json')
+  .option('--output <path>', 'Шлях до вихідного файлу', 'runs/audit_records.json')
   .action(async (options) => {
     await auditAllDocuments({
       limit: Number(options.limit) || undefined,
@@ -630,8 +630,8 @@ program
   .description('Повний аудит документів з evidence (Supabase + canonical + Qdrant + signals)')
   .option('--limit <n>', 'Обмежити кількість документів')
   .option('--nregs <nregs>', 'Список nreg через кому (для аудиту конкретних документів)')
-  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/AUDIT_FLAGS_190.json')
-  .option('--output-markdown <path>', 'Шлях до Markdown таблиці', 'scripts/legislation/runs/audit/AUDIT_TABLE_190.md')
+  .option('--output <path>', 'Шлях до JSON файлу', 'runs/audit/AUDIT_FLAGS_190.json')
+  .option('--output-markdown <path>', 'Шлях до Markdown таблиці', 'runs/audit/AUDIT_TABLE_190.md')
   .action(async (options) => {
     const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
     await auditAllDocumentsV2({
@@ -647,7 +647,7 @@ program
   .description('Перевірка зсуву статей/пунктів (parser integrity audit)')
   .option('--file <path>', 'Файл з nregs (по одному на рядок)')
   .option('--limit <n>', 'Обмежити кількість документів (якщо не вказано --file)')
-  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/PARSER_INTEGRITY_REPORT.json')
+  .option('--output <path>', 'Шлях до JSON файлу', 'runs/audit/PARSER_INTEGRITY_REPORT.json')
   .action(async (options) => {
     await auditParserIntegrity({
       file: options.file,
@@ -668,7 +668,7 @@ program
   .description('Перевірка structural consistency (canonical ↔ Qdrant payload)')
   .option('--file <path>', 'Файл з nregs (по одному на рядок)')
   .option('--limit <n>', 'Обмежити кількість документів (якщо не вказано --file)')
-  .option('--output <path>', 'Шлях до JSON файлу', 'scripts/legislation/runs/audit/PARSER_INTEGRITY_V2_REPORT.json')
+  .option('--output <path>', 'Шлях до JSON файлу', 'runs/audit/PARSER_INTEGRITY_V2_REPORT.json')
   .action(async (options) => {
     await auditParserIntegrityV2({
       file: options.file,

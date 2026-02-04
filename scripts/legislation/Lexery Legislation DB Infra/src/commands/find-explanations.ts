@@ -109,7 +109,7 @@ export async function findExplanationsCLI(): Promise<void> {
   const results = await findExplanations();
 
   // Зберігаємо результати
-  const outputPath = resolve(process.cwd(), 'scripts/legislation/runs/audit/EXPLANATIONS_FOUND.json');
+  const outputPath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'audit', 'EXPLANATIONS_FOUND.json');
   await writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
 
   const mismatches = results.filter(r => r.mismatch);

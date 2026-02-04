@@ -3,7 +3,9 @@
  * 
  * PHASE 6: Real World Large Doc Test
  */
+import { resolve } from 'path';
 import { importOne } from '../lib/importer.js';
+import { workspaceRoot } from '../lib/config.js';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { createQdrantClient, countByNreg } from '../lib/qdrantAdmin.js';
 import { getR2AdminClient, headObject } from '../lib/r2Admin.js';
@@ -201,7 +203,7 @@ export async function testKkuImport(opts: {
     }
     
     // Save report
-    const reportPath = `scripts/legislation/runs/kku_${KKU_NREG.replace(/-/g, '_')}_run_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+    const reportPath = resolve(workspaceRoot(), 'runs', `kku_${KKU_NREG.replace(/-/g, '_')}_run_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
     const report = {
       nreg: KKU_NREG,
       timestamp: new Date().toISOString(),

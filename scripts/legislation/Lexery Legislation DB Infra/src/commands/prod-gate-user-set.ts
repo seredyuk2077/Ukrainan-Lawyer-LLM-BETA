@@ -355,7 +355,7 @@ export async function prodGateUserSet(options?: {
   console.log(`Prod Gate User Gold Set — PHASE 6.3`);
   console.log(`═══════════════════════════════════════════════════════════\n`);
   
-  const inputPath = inputFile || resolve(process.cwd(), 'scripts/legislation/test/prod_gate_user_gold_set.txt');
+  const inputPath = inputFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'data', 'prod_gate_user_gold_set.txt');
   
   // Читаємо список
   console.log(`📥 Читаємо список з ${inputPath}...`);
@@ -513,8 +513,8 @@ export async function prodGateUserSet(options?: {
   console.log('');
   
   // Зберігаємо звіт
-  const reportPath = resolve(process.cwd(), 'scripts/legislation/runs/prod_gate_user_gold_set_report.md');
-  await mkdir(resolve(process.cwd(), 'scripts/legislation/runs'), { recursive: true });
+  const reportPath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'prod_gate_user_gold_set_report.md');
+  await mkdir(resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs'), { recursive: true });
   
   const reportContent = `# Prod Gate User Gold Set Report
 

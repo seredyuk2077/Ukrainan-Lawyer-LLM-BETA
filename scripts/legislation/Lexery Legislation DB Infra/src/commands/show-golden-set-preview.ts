@@ -8,7 +8,7 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 
 export async function showGoldenSetPreview(inputFile?: string): Promise<void> {
-  const inputPath = inputFile || resolve(process.cwd(), 'scripts/legislation/runs/diverse/golden_diversity_set.json');
+  const inputPath = inputFile || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse', 'golden_diversity_set.json');
   
   console.log(`\n═══════════════════════════════════════════════════════════`);
   console.log(`Golden Set Preview — PHASE 2.5`);
@@ -44,7 +44,7 @@ export async function showGoldenSetPreview(inputFile?: string): Promise<void> {
   }
   
   // Генеруємо golden_preview.md
-  const previewPath = resolve(process.cwd(), 'scripts/legislation/runs/diverse/golden_preview.md');
+  const previewPath = resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'diverse', 'golden_preview.md');
   const previewContent = `# Golden Diversity Set Preview
 
 **Дата:** ${new Date().toISOString()}  

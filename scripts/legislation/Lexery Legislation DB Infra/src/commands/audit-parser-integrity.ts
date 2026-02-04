@@ -7,6 +7,7 @@
  * - Перевірка монотонності номерів (без off-by-one)
  */
 
+import { resolve } from 'path';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
 
@@ -345,7 +346,7 @@ export async function auditParserIntegrity(options?: {
   }
   
   // Генеруємо Markdown звіт
-  const markdownFile = outputFile?.replace('.json', '.md') || 'scripts/legislation/runs/audit/PARSER_INTEGRITY_REPORT.md';
+  const markdownFile = outputFile?.replace('.json', '.md') || resolve(process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd(), 'runs', 'audit', 'PARSER_INTEGRITY_REPORT.md');
   const fs = await import('fs/promises');
   const markdown = generateMarkdownReport(records);
   await fs.writeFile(markdownFile, markdown, 'utf-8');

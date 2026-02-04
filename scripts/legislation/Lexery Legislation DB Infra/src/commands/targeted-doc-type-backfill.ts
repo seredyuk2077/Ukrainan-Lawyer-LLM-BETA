@@ -7,6 +7,8 @@
  * - НКРЕКП (v0310874-18)
  */
 
+import { resolve } from 'path';
+import { workspaceRoot } from '../lib/config.js';
 import { createSupabaseAdminClient } from '../lib/supabaseAdmin.js';
 import { enrichDocumentType } from '../lib/documentTypeEnrichment.js';
 import { getJsonFromR2 } from '../lib/r2Json.js';
@@ -219,7 +221,7 @@ export async function targetedDocTypeBackfill(options?: {
   
   // Зберігаємо результати
   const fs = await import('fs/promises');
-  const outputPath = 'scripts/legislation/runs/audit/TARGETED_BACKFILL_RESULTS.json';
+  const outputPath = resolve(workspaceRoot(), 'runs', 'audit', 'TARGETED_BACKFILL_RESULTS.json');
   await fs.writeFile(outputPath, JSON.stringify(results, null, 2), 'utf-8');
   console.log(`✅ Targeted backfill results збережено: ${outputPath}`);
 }

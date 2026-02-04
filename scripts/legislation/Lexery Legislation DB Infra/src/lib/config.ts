@@ -8,8 +8,13 @@
 import dotenv from 'dotenv';
 import { resolve } from 'path';
 
-// Завантажуємо .env з кореня проєкту
-dotenv.config({ path: resolve(process.cwd(), '.env') });
+/** Корінь робочої директорії (cwd або LEXERY_LEGISLATION_WORKSPACE_ROOT). Для ізольованого запуску — однаковий у монорепо та при переносі. */
+export function workspaceRoot(): string {
+  return process.env.LEXERY_LEGISLATION_WORKSPACE_ROOT || process.cwd();
+}
+
+// Завантажуємо .env з кореня робочої директорії
+dotenv.config({ path: resolve(workspaceRoot(), '.env') });
 
 /**
  * Базові налаштування API
@@ -37,9 +42,11 @@ export const RADA_API_CONFIG = {
  * Налаштування шляхів для збереження файлів
  */
 export const PATHS = {
-  tmp: resolve(process.cwd(), 'tmp'),
-  radaRaw: resolve(process.cwd(), 'tmp', 'rada_raw'),
-  canonical: resolve(process.cwd(), 'tmp', 'canonical'),
+  tmp: resolve(workspaceRoot(), 'tmp'),
+  radaRaw: resolve(workspaceRoot(), 'tmp', 'rada_raw'),
+  canonical: resolve(workspaceRoot(), 'tmp', 'canonical'),
+  runs: resolve(workspaceRoot(), 'runs'),
+  data: resolve(workspaceRoot(), 'data'),
 } as const;
 
 /**
