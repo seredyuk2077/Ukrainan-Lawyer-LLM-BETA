@@ -11,56 +11,56 @@
 
 import { Command } from 'commander';
 import { resolve } from 'path';
-import { checkReadiness } from './commands/status.js';
-import { addDocument } from './commands/add.js';
-import { removeDocument } from './commands/remove.js';
-import { inspectDocument } from './commands/inspect.js';
-import { updateDocument } from './commands/update.js';
-import { addBatch } from './commands/add-batch.js';
-import { purgeAll } from './commands/purge-all.js';
-import { searchDocuments } from './commands/search.js';
-import { listJobs, inspectJob, resumeJob } from './commands/jobs.js';
-import { testKkuImport } from './commands/test-kku.js';
-import { testCorpus } from './commands/test-corpus.js';
-import { repairCategories } from './commands/repair-categories.js';
-import { testKupap } from './commands/test-kupap.js';
-import { repairActGroups } from './commands/repair-act-groups.js';
-import { verifyDocument } from './commands/verify.js';
-import { repairConsistency } from './commands/repair-consistency.js';
-import { repairDocTypes } from './commands/repair-doc-types.js';
-import { repairNumbers } from './commands/repair-numbers.js';
-import { repairDocumentTypeConsistency } from './commands/repair-document-type-consistency.js';
-import { backfillDocumentTypes } from './commands/backfill-document-types.js';
-import { repairConsistencyAll } from './commands/repair-consistency-all.js';
-import { collectGoldenDiversitySet } from './commands/collect-diverse-candidates.js';
-import { collectGoldenDiversitySetFast } from './commands/collect-diverse-candidates-fast.js';
-import { formGoldenDiversitySetFromList } from './commands/form_diverse_batch.js';
-import { importDiverseBatch } from './commands/import_diverse_batch.js';
-import { collectDiverseCandidatesV2 } from './commands/collect-diverse-candidates-v2.js';
-import { collectDiverseCandidatesV3 } from './commands/collect-diverse-candidates-v3.js';
-import { showGoldenSetPreview } from './commands/show-golden-set-preview.js';
-import { prodGateUserSet } from './commands/prod-gate-user-set.js';
-import { auditAllDocuments } from './commands/audit-documents.js';
-import { auditAllDocumentsV2 } from './commands/audit-documents-v2.js';
-import { createSupabaseAdminClient } from './lib/supabaseAdmin.js';
-import { auditParserIntegrity } from './commands/audit-parser-integrity.js';
-import { mreParserIntegrity } from './commands/mre-parser-integrity.js';
-import { auditParserIntegrityV2 } from './commands/audit-parser-integrity-v2.js';
-import { ragSanityArticleCLI } from './commands/rag-sanity-article.js';
-import { comprehensiveRAGSanityTest } from './commands/rag-sanity-comprehensive.js';
-import { ragDebugArticle } from './commands/rag-debug-article.js';
-import { targetedDocTypeBackfill } from './commands/targeted-doc-type-backfill.js';
-import { docTypeRegression } from './commands/doc-type-regression.js';
-import { collectCriticalEvidence } from './commands/collect-critical-evidence.js';
-import { analyzeDokidBatchCLI } from './commands/analyze-dokid-batch.js';
-import { auditResolutionsCLI } from './commands/audit-resolutions.js';
-import { findExplanationsCLI } from './commands/find-explanations.js';
-import { printDocCard } from './commands/print-doc-card.js';
-import { manualAuditCLI } from './commands/manual-audit.js';
-import { analyzeManualAudit } from './commands/analyze-manual-audit.js';
-import { backfillValidity } from './commands/backfill-validity.js';
-import { runValidityRegressionTests } from './commands/regression-validity.js';
-import { testLatestValidity } from './commands/test-latest-validity.js';
+import { checkReadiness } from './Lexery Legislation DB Infra/src/commands/status.js';
+import { addDocument } from './Lexery Legislation DB Infra/src/commands/add.js';
+import { removeDocument } from './Lexery Legislation DB Infra/src/commands/remove.js';
+import { inspectDocument } from './Lexery Legislation DB Infra/src/commands/inspect.js';
+import { updateDocument } from './Lexery Legislation DB Infra/src/commands/update.js';
+import { addBatch } from './Lexery Legislation DB Infra/src/commands/add-batch.js';
+import { purgeAll } from './Lexery Legislation DB Infra/src/commands/purge-all.js';
+import { searchDocuments } from './Lexery Legislation DB Infra/src/commands/search.js';
+import { listJobs, inspectJob, resumeJob } from './Lexery Legislation DB Infra/src/commands/jobs.js';
+import { testKkuImport } from './Lexery Legislation DB Infra/src/commands/test-kku.js';
+import { testCorpus } from './Lexery Legislation DB Infra/src/commands/test-corpus.js';
+import { repairCategories } from './Lexery Legislation DB Infra/src/commands/repair-categories.js';
+import { testKupap } from './Lexery Legislation DB Infra/src/commands/test-kupap.js';
+import { repairActGroups } from './Lexery Legislation DB Infra/src/commands/repair-act-groups.js';
+import { verifyDocument } from './Lexery Legislation DB Infra/src/commands/verify.js';
+import { repairConsistency } from './Lexery Legislation DB Infra/src/commands/repair-consistency.js';
+import { repairDocTypes } from './Lexery Legislation DB Infra/src/commands/repair-doc-types.js';
+import { repairNumbers } from './Lexery Legislation DB Infra/src/commands/repair-numbers.js';
+import { repairDocumentTypeConsistency } from './Lexery Legislation DB Infra/src/commands/repair-document-type-consistency.js';
+import { backfillDocumentTypes } from './Lexery Legislation DB Infra/src/commands/backfill-document-types.js';
+import { repairConsistencyAll } from './Lexery Legislation DB Infra/src/commands/repair-consistency-all.js';
+import { collectGoldenDiversitySet } from './Lexery Legislation DB Infra/src/commands/collect-diverse-candidates.js';
+import { collectGoldenDiversitySetFast } from './Lexery Legislation DB Infra/src/commands/collect-diverse-candidates-fast.js';
+import { formGoldenDiversitySetFromList } from './Lexery Legislation DB Infra/src/commands/form_diverse_batch.js';
+import { importDiverseBatch } from './Lexery Legislation DB Infra/src/commands/import_diverse_batch.js';
+import { collectDiverseCandidatesV2 } from './Lexery Legislation DB Infra/src/commands/collect-diverse-candidates-v2.js';
+import { collectDiverseCandidatesV3 } from './Lexery Legislation DB Infra/src/commands/collect-diverse-candidates-v3.js';
+import { showGoldenSetPreview } from './Lexery Legislation DB Infra/src/commands/show-golden-set-preview.js';
+import { prodGateUserSet } from './Lexery Legislation DB Infra/src/commands/prod-gate-user-set.js';
+import { auditAllDocuments } from './Lexery Legislation DB Infra/src/commands/audit-documents.js';
+import { auditAllDocumentsV2 } from './Lexery Legislation DB Infra/src/commands/audit-documents-v2.js';
+import { createSupabaseAdminClient } from './Lexery Legislation DB Infra/src/lib/supabaseAdmin.js';
+import { auditParserIntegrity } from './Lexery Legislation DB Infra/src/commands/audit-parser-integrity.js';
+import { mreParserIntegrity } from './Lexery Legislation DB Infra/src/commands/mre-parser-integrity.js';
+import { auditParserIntegrityV2 } from './Lexery Legislation DB Infra/src/commands/audit-parser-integrity-v2.js';
+import { ragSanityArticleCLI } from './Lexery Legislation DB Infra/src/commands/rag-sanity-article.js';
+import { comprehensiveRAGSanityTest } from './Lexery Legislation DB Infra/src/commands/rag-sanity-comprehensive.js';
+import { ragDebugArticle } from './Lexery Legislation DB Infra/src/commands/rag-debug-article.js';
+import { targetedDocTypeBackfill } from './Lexery Legislation DB Infra/src/commands/targeted-doc-type-backfill.js';
+import { docTypeRegression } from './Lexery Legislation DB Infra/src/commands/doc-type-regression.js';
+import { collectCriticalEvidence } from './Lexery Legislation DB Infra/src/commands/collect-critical-evidence.js';
+import { analyzeDokidBatchCLI } from './Lexery Legislation DB Infra/src/commands/analyze-dokid-batch.js';
+import { auditResolutionsCLI } from './Lexery Legislation DB Infra/src/commands/audit-resolutions.js';
+import { findExplanationsCLI } from './Lexery Legislation DB Infra/src/commands/find-explanations.js';
+import { printDocCard } from './Lexery Legislation DB Infra/src/commands/print-doc-card.js';
+import { manualAuditCLI } from './Lexery Legislation DB Infra/src/commands/manual-audit.js';
+import { analyzeManualAudit } from './Lexery Legislation DB Infra/src/commands/analyze-manual-audit.js';
+import { backfillValidity } from './Lexery Legislation DB Infra/src/commands/backfill-validity.js';
+import { runValidityRegressionTests } from './Lexery Legislation DB Infra/src/commands/regression-validity.js';
+import { testLatestValidity } from './Lexery Legislation DB Infra/src/commands/test-latest-validity.js';
 
 const program = new Command();
 
@@ -196,7 +196,7 @@ jobsCommand
   .option('--dry-run', 'Тільки preview, без змін')
   .option('--ttl-hours <n>', 'TTL в годинах (default: 24)', '24')
   .action(async (options) => {
-    const { reconcileJobs } = await import('./commands/jobs-reconcile.js');
+    const { reconcileJobs } = await import('./Lexery Legislation DB Infra/src/commands/jobs-reconcile.js');
     await reconcileJobs({
       dryRun: Boolean(options.dryRun),
       ttlHours: options.ttlHours ? Number(options.ttlHours) : 24,
@@ -226,7 +226,7 @@ program
   .command('test-weird-docs')
   .description('Test для "weird docs" — окрема думка КСУ + міжнародна конвенція')
   .action(async () => {
-    const { testWeirdDocs } = await import('./commands/test-weird-docs.js');
+    const { testWeirdDocs } = await import('./Lexery Legislation DB Infra/src/commands/test-weird-docs.js');
     await testWeirdDocs();
   });
 
@@ -357,7 +357,7 @@ program
   .option('--page <page>', 'Номер сторінки (для --all)', '0')
   .option('--page-size <size>', 'Розмір сторінки (для --all)', '100')
   .action(async (options) => {
-    const { verifyDocument, verifyAll } = await import('./commands/verify.js');
+    const { verifyDocument, verifyAll } = await import('./Lexery Legislation DB Infra/src/commands/verify.js');
     if (options.all) {
       await verifyAll({
         writeHealth: Boolean(options.writeHealth),
@@ -368,7 +368,7 @@ program
     } else if (options.nreg) {
       await verifyDocument(options.nreg, { writeHealth: Boolean(options.writeHealth) });
       if (options.evidence) {
-        const { printEvidenceQueries } = await import('./commands/verify.js');
+        const { printEvidenceQueries } = await import('./Lexery Legislation DB Infra/src/commands/verify.js');
         await (printEvidenceQueries as any)();
       }
     } else {
@@ -403,7 +403,7 @@ program
   .option('--limit <n>', 'Кількість документів для перевірки')
   .option('--only-red', 'Тільки CRITICAL findings')
   .action(async (options) => {
-    const { detectTypeAbsurdities } = await import('./commands/detect-type-absurdities.js');
+    const { detectTypeAbsurdities } = await import('./Lexery Legislation DB Infra/src/commands/detect-type-absurdities.js');
     await detectTypeAbsurdities({
       limit: options.limit ? Number(options.limit) : undefined,
       onlyRed: Boolean(options.onlyRed),
@@ -416,7 +416,7 @@ program
   .option('--limit <n>', 'Кількість документів', '50')
   .option('--output <path>', 'Шлях до вихідного файлу')
   .action(async (options) => {
-    const { collectHardSoak } = await import('./commands/collect-hard-soak.js');
+    const { collectHardSoak } = await import('./Lexery Legislation DB Infra/src/commands/collect-hard-soak.js');
     await collectHardSoak({
       limit: Number(options.limit) || 50,
       outputPath: options.output,
@@ -468,7 +468,7 @@ program
   .option('--batch-size <n>', 'Розмір пачки', '10')
   .option('--file <path>', 'Шлях до файлу з nreg', 'scripts/legislation/test/hard_soak_nregs.txt')
   .action(async (options) => {
-    const { importHardSoakBatch } = await import('./commands/import-hard-soak-batch.js');
+    const { importHardSoakBatch } = await import('./Lexery Legislation DB Infra/src/commands/import-hard-soak-batch.js');
     await importHardSoakBatch({
       batchSize: Number(options.batchSize) || 10,
       nregsFile: options.file,
@@ -480,7 +480,7 @@ program
   .description('Збір "golden mismatch list" для валідації типів (PHASE 22)')
   .option('--limit <n>', 'Кількість документів для перевірки', '20')
   .action(async (options) => {
-    const { collectMismatchEvidence } = await import('./commands/collect-mismatch-evidence.js');
+    const { collectMismatchEvidence } = await import('./Lexery Legislation DB Infra/src/commands/collect-mismatch-evidence.js');
     const mismatches = await collectMismatchEvidence(Number(options.limit) || 20);
     
     // Виводимо таблицю
@@ -500,7 +500,7 @@ program
   .command('test-validation-mismatches')
   .description('Тестування валідації на знайдених місматчах (PHASE 22)')
   .action(async () => {
-    const { testValidationOnMismatches } = await import('./commands/test-validation-on-mismatches.js');
+    const { testValidationOnMismatches } = await import('./Lexery Legislation DB Infra/src/commands/test-validation-on-mismatches.js');
     await testValidationOnMismatches();
   });
 
@@ -508,7 +508,7 @@ program
   .command('test-doc-types-regression')
   .description('Регресійний тест document_type_slug для різних типів (PHASE 21)')
   .action(async () => {
-    const { testDocumentTypesRegression } = await import('./commands/test-document-types-regression.js');
+    const { testDocumentTypesRegression } = await import('./Lexery Legislation DB Infra/src/commands/test-document-types-regression.js');
     await testDocumentTypesRegression();
   });
 
@@ -571,7 +571,7 @@ program
   .option('--dry-run', 'Тільки preview, без імпорту')
   .option('--no-repair', 'Не виконувати repair при FAIL')
   .action(async (options) => {
-    const { runSoakTest } = await import('./commands/soak-test.js');
+    const { runSoakTest } = await import('./Lexery Legislation DB Infra/src/commands/soak-test.js');
     await runSoakTest({
       file: options.file,
       dryRun: Boolean(options.dryRun),
