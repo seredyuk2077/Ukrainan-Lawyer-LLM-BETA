@@ -77,14 +77,14 @@ node "scripts/legislation/Documentation List DB/Full Import Script/dist/cli.js" 
 ### 3.2) Updater (rada.gov incremental)
 
 **Папка:** `UpdaterDB/`  
-**Що робить:** щодня бере дельти з Rada feeds → тягне card JSON → нормалізує → порівнює з Qdrant payload → для змін робить embeddings → batch upsert у Qdrant.
+**Що робить:** щодня бере дельти з Rada feeds → тягне card JSON → нормалізує → **порівнює з Qdrant payload** → для змін робить embeddings 768d → batch upsert у Qdrant. **НЕ зберігає** canonical у R2, **НЕ пише** у Supabase — тільки Qdrant (legislation-catalog-index) і R2 (state, lock, run report).
 
 - **Джерела**:
   - `https://data.rada.gov.ua/laws/main/r.txt` (updated)
-  - `https://data.rada.gov.ua/laws/main/nn` (new)
-  - (опц.) `https://data.rada.gov.ua/laws/main/n` (backstop)
+  - `https://data.rada.gov.ua/laws/main/nn` (new today)
+  - `https://data.rada.gov.ua/laws/main/n` (backstop 30d)
   - `https://data.rada.gov.ua/laws/card/<nreg>.json`
-- **State/lock/logs**: Cloudflare R2 (S3 API)
+- **State/lock/logs**: R2 prefix `legislation/DocListDB rada gov updater log/` (state.json, locks/daily.lock TTL 3h, runs/<run_id>.json)
 
 **Як запускати (локально):**
 
