@@ -17,6 +17,12 @@
 
 **Головний індекс:** [`legislation-rag/README.md`](./legislation-rag/README.md)
 
+### 🧠 Lexery Legal Agent (Brain)
+**Папка:** [`architecture/app/`](./architecture/app/)
+
+Реалізація архітектури Agent Brain по етапах:
+- [U1 Gateway/Intake](./architecture/app/u1/) — вхідні двері, POST /v1/runs, R2 overflow
+
 ### ⚖️ Supreme Court RAG
 **Файли:**
 - [`supreme_court_rag.md`](./supreme_court_rag.md) — Архітектура Supreme Court RAG

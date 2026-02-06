@@ -1,0 +1,131 @@
+openapi: 3.0.3
+info:
+  title: Lexery Brain U1 Gateway
+  version: 1.0.0
+
+paths:
+  /v1/runs:
+    post:
+      summary: Create run
+      operationId: createRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  minLength: 1
+                  maxLength: 50000
+                tenant_id:
+                  type: string
+                  format: uuid
+                user_id:
+                  type: string
+                  format: uuid
+                locale:
+                  type: string
+                  maxLength: 16
+                client_context:
+                  type: object
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      contentType: { type: string }
+                      contentBase64: { type: string }
+                dry_run:
+                  type: boolean
+                  default: false
+                debug:
+                  type: boolean
+                  default: false
+                idempotency_key:
+                  type: string
+                  maxLength: 128
+      parameters:
+        - name: X-Dev-API-Key
+          in: header
+          schema: { type: string }
+        - name: X-Request-Id
+          in: header
+          schema: { type: string }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+                  status: { enum: [accepted] }
+                  accepted_at: { type: string, format: date-time }
+                  warnings: { type: array, items: { type: string } }
+        '200':
+          description: Dry-run accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+                  status: { enum: [dry_run_accepted] }
+                  accepted_at: { type: string }
+                  warnings: { type: array }
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { enum: [VALIDATION_ERROR] }
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { enum: [UNAUTHORIZED] }
+        '429':
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { enum: [ERR_BUDGET_EXHAUSTED] }
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { enum: [DB_DOWN, QUEUE_FAIL] }
+
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { enum: [healthy, degraded] }
+                  timestamp: { type: string }
+                  database: { type: string }
