@@ -18,6 +18,7 @@ export interface RunRecord {
   user_id: string;
   status: string;
   query: string | null;
+  query_profile?: unknown;
   snapshot: RunSnapshot;
   created_at: string;
 }
@@ -81,6 +82,20 @@ export class RunRepository {
     return data as RunRecord;
   }
 
+  async findByRunId(runId: string): Promise<RunRecord | null> {
+    const sb = getSupabaseClient();
+    const { data, error } = await sb
+      .from('runs')
+      .select('*')
+      .eq('run_id', runId)
+      .limit(1)
+      .single();
+
+    if (error && error.code === 'PGRST116') return null;
+    if (error) throw new StorageError('DB_READ_FAIL', error.message);
+    return data as RunRecord;
+  }
+
   async findByIdempotencyKey(tenantId: string, key: string): Promise<RunRecord | null> {
     const sb = getSupabaseClient();
     const { data, error } = await sb
@@ -93,6 +108,26 @@ export class RunRepository {
 
     if (error && error.code !== 'PGRST116') return null;
     return data as RunRecord | null;
+  }
+
+  async updateQueryProfile(
+    runId: string,
+    queryProfile: object,
+    status: string = 'Profiling'
+  ): Promise<void> {
+    const sb = getSupabaseClient();
+    const { error } = await sb
+      .from('runs')
+      .update({
+        query_profile: queryProfile as object,
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('run_id', runId);
+
+    if (error) {
+      throw new StorageError('DB_UPDATE_FAIL', error.message);
+    }
   }
 
   async markFailed(runId: string, errorCode: string): Promise<void> {

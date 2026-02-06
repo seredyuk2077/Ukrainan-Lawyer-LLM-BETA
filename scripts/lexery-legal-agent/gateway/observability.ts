@@ -1,5 +1,6 @@
 /**
  * U1 Observability (LEX-74) — Metrics stub
+ * U2 Observability (LEX-90) — u2_* counters, queue/inflight/rate_limited
  */
 const metrics: Record<string, number> = {
   runs_started_total: 0,
@@ -7,7 +8,20 @@ const metrics: Record<string, number> = {
   runs_failed_total: 0,
   enqueue_latency_ms: 0,
   db_write_latency_ms: 0,
+  u2_processed_total: 0,
+  u2_failed_total: 0,
+  u2_ambiguous_total: 0,
+  u2_queue_depth: 0,
+  u2_inflight_total: 0,
+  u2_llm_inflight_total: 0,
+  u2_llm_rate_limited_total: 0,
+  u2_gating_llm_skipped_total: 0,
+  u2_gating_llm_called_total: 0,
 };
+
+const u2IntentCounts: Record<string, number> = {};
+const u2DomainCounts: Record<string, number> = {};
+const u2GatingReasonCounts: Record<string, number> = {};
 
 export function incrementRunsStarted() {
   metrics.runs_started_total += 1;
@@ -30,5 +44,57 @@ export function recordDbWriteLatency(ms: number) {
 }
 
 export function getMetrics() {
-  return { ...metrics };
+  return {
+    ...metrics,
+    u2_intent: { ...u2IntentCounts },
+    u2_domain: { ...u2DomainCounts },
+    u2_gating_reason: { ...u2GatingReasonCounts },
+  };
+}
+
+// U2 (LEX-90)
+export function incrementU2Processed() {
+  metrics.u2_processed_total += 1;
+}
+export function incrementU2Failed() {
+  metrics.u2_failed_total += 1;
+}
+export function incrementU2Ambiguous() {
+  metrics.u2_ambiguous_total += 1;
+}
+export function incrementU2Intent(intent: string) {
+  u2IntentCounts[intent] = (u2IntentCounts[intent] || 0) + 1;
+}
+export function incrementU2Domain(domain: string) {
+  u2DomainCounts[domain] = (u2DomainCounts[domain] || 0) + 1;
+}
+
+export function setU2QueueDepth(n: number) {
+  metrics.u2_queue_depth = n;
+}
+export function incrementU2Inflight() {
+  metrics.u2_inflight_total += 1;
+}
+export function decrementU2Inflight() {
+  metrics.u2_inflight_total = Math.max(0, metrics.u2_inflight_total - 1);
+}
+export function incrementU2LlmInflight() {
+  metrics.u2_llm_inflight_total += 1;
+}
+export function decrementU2LlmInflight() {
+  metrics.u2_llm_inflight_total = Math.max(0, metrics.u2_llm_inflight_total - 1);
+}
+export function incrementU2LlmRateLimited() {
+  metrics.u2_llm_rate_limited_total += 1;
+}
+
+export function incrementU2GatingLlmSkipped() {
+  metrics.u2_gating_llm_skipped_total += 1;
+}
+export function incrementU2GatingLlmCalled() {
+  metrics.u2_gating_llm_called_total += 1;
+}
+export function incrementU2GatingReason(reason: string) {
+  const key = reason.replace(/\s+/g, '_').slice(0, 64);
+  u2GatingReasonCounts[key] = (u2GatingReasonCounts[key] || 0) + 1;
 }

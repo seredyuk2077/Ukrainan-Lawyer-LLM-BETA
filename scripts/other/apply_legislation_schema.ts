@@ -5,7 +5,7 @@
  * from .env.local to apply the schema migration SQL.
  * 
  * Usage:
- *   pnpm tsx scripts/apply_legislation_schema.ts
+ *   pnpm tsx scripts/other/apply_legislation_schema.ts
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -37,7 +37,7 @@ const legislationProjectId = getProjectId(LEGISLATION_URL);
 console.log(`🔍 Applying schema to legislation project: ${legislationProjectId}`);
 
 // Read the migration SQL file
-const migrationPath = join(__dirname, '../supabase/migrations/20250110000000_migrate_legislation_schema.sql');
+const migrationPath = join(__dirname, '../../supabase/migrations/20250110000000_migrate_legislation_schema.sql');
 const migrationSQL = readFileSync(migrationPath, 'utf-8');
 
 // Note: Supabase JS client doesn't support executing raw SQL directly

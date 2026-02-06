@@ -9,9 +9,11 @@ import { checkRateLimit, checkConcurrentRuns, decrementActiveRuns } from './limi
 import { RunRepository } from './storage.js';
 import { InMemoryQueue } from './queue.js';
 import { processAttachments, estimateRequestSize } from './attachments.js';
+import { putQueryOverflow } from './query-overflow.js';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
 import { incrementRunsStarted, incrementRunsRejected } from './observability.js';
+import type { SnapshotInput } from './types.js';
 
 const auth = new DevAuthProvider();
 const runRepo = new RunRepository();
@@ -19,6 +21,35 @@ const taskQueue = new InMemoryQueue();
 
 export function getTaskQueue() {
   return taskQueue;
+}
+
+export async function handleGetRun(req: Request, res: Response): Promise<void> {
+  const runId = req.params.id;
+  if (!runId) {
+    res.status(400).json({ error: 'Missing run id', code: 'VALIDATION_ERROR' });
+    return;
+  }
+  try {
+    const auth = new DevAuthProvider();
+    await auth.authenticate(req, { query: 'x' });
+  } catch {
+    res.status(401).json({ error: 'Invalid or missing X-Dev-API-Key', code: 'UNAUTHORIZED' });
+    return;
+  }
+  const runRepoGet = new RunRepository();
+  const run = await runRepoGet.findByRunId(runId);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
+    return;
+  }
+  res.json({
+    run_id: run.run_id,
+    status: run.status,
+    query: run.query,
+    query_profile: run.query_profile,
+    created_at: run.created_at,
+    updated_at: (run as { updated_at?: string }).updated_at,
+  });
 }
 
 export async function handleCreateRun(req: Request, res: Response): Promise<void> {
@@ -62,10 +93,33 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
 
     const runId = randomUUID();
     const now = new Date().toISOString();
+    const warnings: string[] = [];
+
+    let queryForDb: string = body.query;
+    let snapshotInput: SnapshotInput | undefined;
+
+    const queryBytes = Buffer.byteLength(body.query, 'utf8');
+    if (queryBytes > config.queryR2ThresholdBytes) {
+      const overflowResult = await putQueryOverflow(body.query, authContext.tenant_id, runId);
+      const prev = overflowResult.query_preview;
+      queryForDb =
+        prev.head +
+        '\n...[overflow]...\n' +
+        prev.tail;
+      snapshotInput = {
+        query_overflow: true,
+        query_ref: overflowResult.success ? overflowResult.query_ref ?? null : undefined,
+        query_preview: prev,
+        input_overflow_store_failed: !overflowResult.success,
+      };
+      if (!overflowResult.success) {
+        warnings.push('input_overflow_store_failed');
+      }
+    }
 
     const snapshot = {
       request: {
-        query: body.query,
+        query: queryForDb,
         locale: body.locale,
         dry_run: body.dry_run,
         debug: body.debug,
@@ -73,6 +127,7 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       auth: authContext,
       flags: { dry_run: body.dry_run, debug: body.debug },
       version: { api_version: config.apiVersion },
+      ...(snapshotInput && { input: snapshotInput }),
     };
 
     if (body.dry_run) {
@@ -95,7 +150,6 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
     }
 
     let attachmentsManifest: { name: string; size: number; sha256?: string; storage: 'inline' | 'r2'; r2_key?: string }[] = [];
-    const warnings: string[] = [];
 
     if (body.attachments && body.attachments.length > 0) {
       const result = await processAttachments(body.attachments, authContext.tenant_id, runId);
@@ -125,7 +179,7 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       runId: recordRunId,
       tenantId: authContext.tenant_id,
       userId: authContext.user_id,
-      query: body.query,
+      query: queryForDb,
       snapshot,
       attachmentsManifest: attachmentsManifest.length ? attachmentsManifest : undefined,
       idempotencyKey: body.idempotency_key,

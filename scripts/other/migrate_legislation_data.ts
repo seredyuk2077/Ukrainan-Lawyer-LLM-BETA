@@ -2,7 +2,7 @@
  * Скрипт міграції законодавчих даних з supabase-core в supabase-legislation
  * 
  * Використання:
- *   pnpm tsx scripts/migrate_legislation_data.ts
+ *   pnpm tsx scripts/other/migrate_legislation_data.ts
  * 
  * Потрібні змінні середовища:
  *   SUPABASE_CORE_URL - URL проекту core

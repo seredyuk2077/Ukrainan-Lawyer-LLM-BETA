@@ -53,11 +53,34 @@ export interface RunEvent {
 }
 
 // --- RunRecord / Snapshot ---
+export interface QueryOverflowRef {
+  storage: 'r2';
+  r2_bucket: string;
+  r2_key: string;
+  content_type: string;
+  original_length: number;
+}
+
+export interface QueryPreview {
+  head: string;
+  tail: string;
+  original_length: number;
+  effective_length_hint: number;
+}
+
+export interface SnapshotInput {
+  query_overflow: boolean;
+  query_ref?: QueryOverflowRef | null;
+  query_preview?: QueryPreview;
+  input_overflow_store_failed?: boolean;
+}
+
 export interface RunSnapshot {
   request?: Partial<CreateRunRequest>;
   auth?: AuthContext;
   flags?: { dry_run: boolean; debug: boolean };
   version?: { api_version: string; service?: string };
+  input?: SnapshotInput;
 }
 
 export interface AttachmentManifestItem {
