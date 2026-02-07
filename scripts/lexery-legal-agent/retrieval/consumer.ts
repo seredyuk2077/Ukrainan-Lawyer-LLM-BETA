@@ -12,6 +12,8 @@ import {
   recordU4QdrantLatency,
   recordU4Hits,
   incrementU4DegradedLldbi,
+  incrementU4FilteredSearch,
+  incrementU4LowConfidence,
 } from '../gateway/observability.js';
 import { runCacheRag } from './cache-rag.js';
 import type { SearchPlan, SearchStep } from '../plan/types.js';
@@ -51,14 +53,26 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     }
 
     const query = run.query ?? (run.snapshot?.request as { query?: string } | undefined)?.query ?? '';
+    const queryProfile = run.query_profile as {
+      domain?: string;
+      entities?: { act_abbrev?: string; article_ref?: string }[];
+    } | null | undefined;
     const { rawHits, retrievalTrace } = await runCacheRag({
       query,
       searchPlan: plan,
       steps,
+      domainHint: queryProfile?.domain,
+      entities: queryProfile?.entities,
     });
 
     if (retrievalTrace.degraded_sources?.lldbi) {
       incrementU4DegradedLldbi();
+    }
+    if (retrievalTrace.meta?.used_filtered_chunks_search) {
+      incrementU4FilteredSearch();
+    }
+    if (retrievalTrace.meta?.low_confidence) {
+      incrementU4LowConfidence();
     }
     recordU4QdrantLatency(retrievalTrace.latency_ms ?? 0);
     recordU4Hits(rawHits.length);

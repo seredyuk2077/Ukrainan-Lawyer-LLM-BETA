@@ -11,6 +11,8 @@
     "brain:verify:u3": "tsx scripts/lexery-legal-agent/tools/verify_u3.ts",
     "brain:verify:u4": "tsx scripts/lexery-legal-agent/tools/verify_u4.ts",
     "brain:verify:u5": "tsx scripts/lexery-legal-agent/tools/verify_u5.ts",
+    "brain:verify:lldbi-kku115": "tsx scripts/lexery-legal-agent/tools/verify_lldbi_kku115.ts",
+    "brain:verify:retrieval": "tsx scripts/lexery-legal-agent/tools/verify_retrieval_suite.ts",
     "brain:u2:stress": "tsx scripts/lexery-legal-agent/tools/u2_stress_queries.ts",
     "brain:u2:bench-models": "tsx scripts/lexery-legal-agent/tools/u2_bench_models.ts",
     "brain:u2:loadtest": "tsx scripts/lexery-legal-agent/tools/u2_loadtest.ts",

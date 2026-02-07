@@ -28,6 +28,11 @@ const metrics: Record<string, number> = {
   u4_qdrant_latency_ms: 0,
   u4_hits_total: 0,
   u4_degraded_lldbi_total: 0,
+  u4_filtered_search_total: 0,
+  u4_low_confidence_total: 0,
+  taxonomy_refresh_success_total: 0,
+  taxonomy_refresh_failed_total: 0,
+  taxonomy_snapshot_age_seconds: 0,
   u5_processed_total: 0,
   u5_failed_total: 0,
   u5_expand_total: 0,
@@ -149,6 +154,23 @@ export function recordU4Hits(n: number) {
 }
 export function incrementU4DegradedLldbi() {
   metrics.u4_degraded_lldbi_total += 1;
+}
+export function incrementU4FilteredSearch() {
+  metrics.u4_filtered_search_total += 1;
+}
+export function incrementU4LowConfidence() {
+  metrics.u4_low_confidence_total += 1;
+}
+
+// U4 ActTaxonomyStore (LEX-114, LEX-117)
+export function incrementTaxonomyRefreshSuccess() {
+  metrics.taxonomy_refresh_success_total += 1;
+}
+export function incrementTaxonomyRefreshFailed() {
+  metrics.taxonomy_refresh_failed_total += 1;
+}
+export function setTaxonomySnapshotAgeSeconds(seconds: number) {
+  metrics.taxonomy_snapshot_age_seconds = Math.max(0, seconds);
 }
 
 // U5 Gate (LEX-118)

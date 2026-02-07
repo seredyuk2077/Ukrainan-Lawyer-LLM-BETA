@@ -22,12 +22,30 @@ export const config = {
   supabaseUrl: process.env.SUPABASE_LEXERY_LEGAL_AGENT_DB_URL || '',
   supabaseServiceKey: process.env.SUPABASE_LEXERY_LEGAL_AGENT_DB_SERVICE_ROLE_KEY || '',
 
+  // Supabase Legislation (metadata for ActTaxonomyStore; optional — graceful no-taxonomy if missing)
+  supabaseLegislationUrl:
+    process.env.SUPABASE_LEGISLATION_URL ||
+    process.env.SUPABASE_LEGISLATION_RAG_URL ||
+    '',
+  supabaseLegislationServiceKey:
+    process.env.SUPABASE_LEGISLATION_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_LEGISLATION_RAG_SERVICE_ROLE_KEY ||
+    '',
+  actTaxonomyTtlSec: Math.max(60, parseInt(process.env.ACT_TAXONOMY_TTL_SEC || '3600', 10)),
+
   // R2 (for attachments overflow)
   r2Endpoint: process.env.R2_ENDPOINT || '',
   r2AccessKey: process.env.R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY || '',
   r2SecretKey: process.env.R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_KEY || '',
   r2BucketRuns: process.env.R2_RUNS_BUCKET || process.env.R2_BUCKET_RUNS || 'lexery-legal-agent',
-  r2BucketLegislation: process.env.R2_LEGISLATION_BUCKET || 'legislation',
+  /** LLDBI canonical JSON bucket. Aliases: R2_LEGISLATION_BUCKET, R2_BUCKET_LEGISLATION. */
+  r2BucketLegislation:
+    process.env.LLDBI_R2_BUCKET ||
+    process.env.R2_LEGISLATION_BUCKET ||
+    process.env.R2_BUCKET_LEGISLATION ||
+    'legislation',
+  /** Optional prefix for LLDBI keys (e.g. "legislation/"). Keys may already include it. */
+  lldbiR2Prefix: process.env.LLDBI_R2_PREFIX || '',
   r2Region: process.env.R2_REGION || 'auto',
 
   // Limits (LEX-70)
@@ -105,6 +123,10 @@ export const config = {
   doclistEnabled: process.env.DOCLIST_ENABLED !== 'false',
   forceExpand: process.env.FORCE_EXPAND === 'true',
   gateDecisionVersion: Math.max(1, parseInt(process.env.GATE_DECISION_VERSION || '1', 10)),
+
+  // U4 optional rerank (LLM): only when enabled; strict timeout; fallback to hybrid re-score
+  u4RerankEnabled: process.env.U4_RERANK_ENABLED === 'true',
+  u4RerankTimeoutSec: Math.max(1, Math.min(5, parseInt(process.env.U4_RERANK_TIMEOUT_SEC || '3', 10))),
 } as const;
 
 export function requireEnv(name: string): string {
