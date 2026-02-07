@@ -45,7 +45,7 @@ export interface AuthContext {
 }
 
 // --- Queue ---
-export type RunEventStep = 'U2' | 'U3' | 'U3a' | 'U4' | 'U5' | 'U9';
+export type RunEventStep = 'U2' | 'U3' | 'U3a' | 'U4' | 'U5' | 'U6' | 'U9';
 
 export interface RunEvent {
   run_id: string;

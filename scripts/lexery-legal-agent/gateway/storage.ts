@@ -19,6 +19,9 @@ export interface RunRecord {
   status: string;
   query: string | null;
   query_profile?: unknown;
+  search_plan?: unknown;
+  retrieval_trace?: unknown;
+  gate_decision?: unknown;
   snapshot: RunSnapshot;
   created_at: string;
 }
@@ -137,6 +140,62 @@ export class RunRepository {
       .update({
         status: 'failed',
         error_code: errorCode,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('run_id', runId);
+
+    if (error) {
+      throw new StorageError('DB_UPDATE_FAIL', error.message);
+    }
+  }
+
+  /** U3: persist SearchPlan + optional steps (LEX-105). Status → Planning. */
+  async updateSearchPlan(
+    runId: string,
+    searchPlan: object,
+    status: string = 'Planning'
+  ): Promise<void> {
+    const sb = getSupabaseClient();
+    const { error } = await sb
+      .from('runs')
+      .update({
+        search_plan: searchPlan as object,
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('run_id', runId);
+
+    if (error) {
+      throw new StorageError('DB_UPDATE_FAIL', error.message);
+    }
+  }
+
+  /** U4: persist RetrievalTrace (LEX-106). Optional status update. */
+  async updateRetrievalTrace(
+    runId: string,
+    retrievalTrace: object,
+    status?: string
+  ): Promise<void> {
+    const sb = getSupabaseClient();
+    const update: Record<string, unknown> = {
+      retrieval_trace: retrievalTrace as object,
+      updated_at: new Date().toISOString(),
+    };
+    if (status) update.status = status;
+    const { error } = await sb.from('runs').update(update).eq('run_id', runId);
+
+    if (error) {
+      throw new StorageError('DB_UPDATE_FAIL', error.message);
+    }
+  }
+
+  /** U5: persist GateDecision (LEX-118). */
+  async updateGateDecision(runId: string, gateDecision: object): Promise<void> {
+    const sb = getSupabaseClient();
+    const { error } = await sb
+      .from('runs')
+      .update({
+        gate_decision: gateDecision as object,
         updated_at: new Date().toISOString(),
       })
       .eq('run_id', runId);

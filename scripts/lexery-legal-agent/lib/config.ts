@@ -98,6 +98,13 @@ export const config = {
     process.env.OPENROUTER_API_KEY_ONLINE ||
     process.env.OPENROUTER_API_KEY ||
     '',
+
+  // U5 Gate (LEX-118)
+  gateMinHitsThreshold: Math.max(0, parseInt(process.env.GATE_MIN_HITS_THRESHOLD || '3', 10)),
+  gateMinAvgScore: Math.min(1, Math.max(0, parseFloat(process.env.GATE_MIN_AVG_SCORE || '0.18'))),
+  doclistEnabled: process.env.DOCLIST_ENABLED !== 'false',
+  forceExpand: process.env.FORCE_EXPAND === 'true',
+  gateDecisionVersion: Math.max(1, parseInt(process.env.GATE_DECISION_VERSION || '1', 10)),
 } as const;
 
 export function requireEnv(name: string): string {

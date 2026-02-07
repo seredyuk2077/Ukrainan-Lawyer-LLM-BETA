@@ -28,6 +28,10 @@ const metrics: Record<string, number> = {
   u4_qdrant_latency_ms: 0,
   u4_hits_total: 0,
   u4_degraded_lldbi_total: 0,
+  u5_processed_total: 0,
+  u5_failed_total: 0,
+  u5_expand_total: 0,
+  u5_no_expand_total: 0,
 };
 
 const u2IntentCounts: Record<string, number> = {};
@@ -145,4 +149,18 @@ export function recordU4Hits(n: number) {
 }
 export function incrementU4DegradedLldbi() {
   metrics.u4_degraded_lldbi_total += 1;
+}
+
+// U5 Gate (LEX-118)
+export function incrementU5Processed() {
+  metrics.u5_processed_total += 1;
+}
+export function incrementU5Failed() {
+  metrics.u5_failed_total += 1;
+}
+export function incrementU5Expand() {
+  metrics.u5_expand_total += 1;
+}
+export function incrementU5NoExpand() {
+  metrics.u5_no_expand_total += 1;
 }

@@ -46,7 +46,10 @@ export async function handleGetRun(req: Request, res: Response): Promise<void> {
     run_id: run.run_id,
     status: run.status,
     query: run.query,
-    query_profile: run.query_profile,
+    query_profile: run.query_profile ?? null,
+    search_plan: run.search_plan ?? null,
+    retrieval_trace: run.retrieval_trace ?? null,
+    gate_decision: run.gate_decision ?? null,
     created_at: run.created_at,
     updated_at: (run as { updated_at?: string }).updated_at,
   });

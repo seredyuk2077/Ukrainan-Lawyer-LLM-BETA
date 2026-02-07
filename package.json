@@ -10,6 +10,7 @@
     "brain:u3:test": "tsx scripts/lexery-legal-agent/tools/u3_plan_test.ts",
     "brain:verify:u3": "tsx scripts/lexery-legal-agent/tools/verify_u3.ts",
     "brain:verify:u4": "tsx scripts/lexery-legal-agent/tools/verify_u4.ts",
+    "brain:verify:u5": "tsx scripts/lexery-legal-agent/tools/verify_u5.ts",
     "brain:u2:stress": "tsx scripts/lexery-legal-agent/tools/u2_stress_queries.ts",
     "brain:u2:bench-models": "tsx scripts/lexery-legal-agent/tools/u2_bench_models.ts",
     "brain:u2:loadtest": "tsx scripts/lexery-legal-agent/tools/u2_loadtest.ts",

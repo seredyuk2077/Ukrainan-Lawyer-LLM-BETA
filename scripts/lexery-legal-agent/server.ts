@@ -15,6 +15,7 @@ import { handleU2Event } from './classify/consumer.js';
 import { handleU3Event, handleU3aEvent } from './plan/consumer.js';
 import { handleU4Event } from './retrieval/consumer.js';
 import { handleU5Event } from './gate/consumer.js';
+import { handleU6Event } from './expand/consumer.js';
 import { setRunContextStore } from './lib/run-context.js';
 import { createRedisRunContextStore } from './lib/run-context-redis.js';
 
@@ -70,6 +71,10 @@ if (config.u2DisableConsumer) {
     } else if (event.step === 'U5') {
       handleU5Event(event).catch((err) => {
         logger.error('U5 consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U6') {
+      handleU6Event(event).catch((err) => {
+        logger.error('U6 consumer unhandled', { run_id: event.run_id, error: String(err) });
       });
     } else if (event.step === 'U9') {
       logger.info('U9 event received (assemble handoff stub)', {
