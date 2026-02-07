@@ -17,6 +17,17 @@ const metrics: Record<string, number> = {
   u2_llm_rate_limited_total: 0,
   u2_gating_llm_skipped_total: 0,
   u2_gating_llm_called_total: 0,
+  u3_processed_total: 0,
+  u3_failed_total: 0,
+  u3_duration_ms: 0,
+  u3a_processed_total: 0,
+  u3a_failed_total: 0,
+  u3a_steps_count: 0,
+  u4_processed_total: 0,
+  u4_failed_total: 0,
+  u4_qdrant_latency_ms: 0,
+  u4_hits_total: 0,
+  u4_degraded_lldbi_total: 0,
 };
 
 const u2IntentCounts: Record<string, number> = {};
@@ -97,4 +108,41 @@ export function incrementU2GatingLlmCalled() {
 export function incrementU2GatingReason(reason: string) {
   const key = reason.replace(/\s+/g, '_').slice(0, 64);
   u2GatingReasonCounts[key] = (u2GatingReasonCounts[key] || 0) + 1;
+}
+
+// U3 / U3a (LEX-112, LEX-113)
+export function incrementU3Processed() {
+  metrics.u3_processed_total += 1;
+}
+export function incrementU3Failed() {
+  metrics.u3_failed_total += 1;
+}
+export function recordU3Duration(ms: number) {
+  metrics.u3_duration_ms = ms;
+}
+export function incrementU3aProcessed() {
+  metrics.u3a_processed_total += 1;
+}
+export function incrementU3aFailed() {
+  metrics.u3a_failed_total += 1;
+}
+export function recordU3aStepsCount(n: number) {
+  metrics.u3a_steps_count = n;
+}
+
+// U4 CacheRAG (LEX-114, LEX-117)
+export function incrementU4Processed() {
+  metrics.u4_processed_total += 1;
+}
+export function incrementU4Failed() {
+  metrics.u4_failed_total += 1;
+}
+export function recordU4QdrantLatency(ms: number) {
+  metrics.u4_qdrant_latency_ms = ms;
+}
+export function recordU4Hits(n: number) {
+  metrics.u4_hits_total = n;
+}
+export function incrementU4DegradedLldbi() {
+  metrics.u4_degraded_lldbi_total += 1;
 }

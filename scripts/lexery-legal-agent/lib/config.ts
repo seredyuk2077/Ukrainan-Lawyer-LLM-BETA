@@ -72,6 +72,32 @@ export const config = {
   // Smart gating: skip LLM when rules confidence >= threshold and input not complex
   u2GatingConfidenceThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U2_GATING_CONFIDENCE_THRESHOLD || '0.75'))),
   u2GatingEnabled: process.env.U2_GATING_ENABLED !== 'false',
+
+  // U4 CacheRAG (LEX-114, LEX-117): Qdrant + embeddings
+  qdrantUrl:
+    process.env.QDRANT_URL ||
+    process.env.qdrant_clusterENDPOINT_LEXERY_LEGISLATION_DB ||
+    '',
+  qdrantApiKey:
+    process.env.QDRANT_API_KEY ||
+    process.env.qdrant_clusterAPI_LEXERY_LEGISLATION_DB ||
+    '',
+  qdrantTimeoutSec: Math.max(1, parseInt(process.env.QDRANT_TIMEOUT_SEC || '5', 10)),
+  qdrantRetryOnce: process.env.QDRANT_RETRY_ONCE !== 'false',
+  lldbiCollectionChunks: process.env.LLDBI_COLLECTION_CHUNKS || 'lexery_legislation_chunks',
+  lldbiCollectionActs: process.env.LLDBI_COLLECTION_ACTS || 'lexery_legislation_acts',
+  lldbiTopK: Math.max(1, Math.min(200, parseInt(process.env.LLDBI_TOP_K || '50', 10))),
+  minScoreThreshold: Math.min(1, Math.max(0, parseFloat(process.env.MIN_SCORE_THRESHOLD || '0.1'))),
+  u4QdrantConcurrency: Math.max(1, parseInt(process.env.U4_QDRANT_CONCURRENCY || '20', 10)),
+
+  // U4 Embeddings (aligned with LLDBI index: 1536d, openai/text-embedding-3-small)
+  lldbiEmbedModelId: process.env.LLDBI_EMBED_MODEL_ID || 'openai/text-embedding-3-small',
+  lldbiEmbedTimeoutSec: Math.max(1, parseInt(process.env.LLDBI_EMBED_TIMEOUT_SEC || '5', 10)),
+  openRouterApiKeyRag:
+    process.env.OPEN_ROUTER_API_RAG ||
+    process.env.OPENROUTER_API_KEY_ONLINE ||
+    process.env.OPENROUTER_API_KEY ||
+    '',
 } as const;
 
 export function requireEnv(name: string): string {

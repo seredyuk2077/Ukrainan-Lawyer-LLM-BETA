@@ -12,6 +12,9 @@ import { logger } from './lib/logger.js';
 import { getTaskQueue } from './gateway/handler.js';
 import { setU2QueueDepth } from './gateway/observability.js';
 import { handleU2Event } from './classify/consumer.js';
+import { handleU3Event, handleU3aEvent } from './plan/consumer.js';
+import { handleU4Event } from './retrieval/consumer.js';
+import { handleU5Event } from './gate/consumer.js';
 import { setRunContextStore } from './lib/run-context.js';
 import { createRedisRunContextStore } from './lib/run-context-redis.js';
 
@@ -48,9 +51,32 @@ if (config.u2DisableConsumer) {
   });
 } else {
   queue.onEvent((event) => {
-    handleU2Event(event).catch((err) => {
-      logger.error('U2 consumer unhandled', { run_id: event.run_id, error: String(err) });
-    });
+    if (event.step === 'U2') {
+      handleU2Event(event).catch((err) => {
+        logger.error('U2 consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U3') {
+      handleU3Event(event).catch((err) => {
+        logger.error('U3 consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U3a') {
+      handleU3aEvent(event).catch((err) => {
+        logger.error('U3a consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U4') {
+      handleU4Event(event).catch((err) => {
+        logger.error('U4 consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U5') {
+      handleU5Event(event).catch((err) => {
+        logger.error('U5 consumer unhandled', { run_id: event.run_id, error: String(err) });
+      });
+    } else if (event.step === 'U9') {
+      logger.info('U9 event received (assemble handoff stub)', {
+        run_id: event.run_id,
+        trace_id: event.trace_id,
+      });
+    }
   });
 }
 
