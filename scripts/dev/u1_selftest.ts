@@ -2,10 +2,11 @@
 /**
  * U1 Gateway Self-test (LEX-75)
  * Run: pnpm brain:selftest
- * Requires: Brain server running on port 3081
+ * Requires: Brain server running (use BRAIN_BASE_URL/BRAIN_URL for port).
+ * Or: pnpm brain:verify:u3 for full autonomous run.
  */
-const BASE = process.env.BRAIN_URL || 'http://localhost:3081';
-const DEV_KEY = process.env.DEV_API_KEY || 'dev-key-change-me';
+const BASE = process.env.BRAIN_BASE_URL ?? process.env.BRAIN_URL ?? 'http://localhost:3081';
+const DEV_KEY = process.env.DEV_API_KEY ?? 'dev-key-change-me';
 
 async function fetch(url: string, opts: RequestInit = {}) {
   return globalThis.fetch(url, {

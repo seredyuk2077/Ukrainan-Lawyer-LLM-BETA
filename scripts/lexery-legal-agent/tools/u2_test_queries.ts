@@ -12,8 +12,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(process.cwd(), '.env') });
 loadEnv({ path: resolve(__dirname, '../.env') });
 
-const BASE = process.env.BRAIN_URL || 'http://localhost:3081';
-const DEV_KEY = process.env.DEV_API_KEY || 'dev-key-change-me';
+const BASE = process.env.BRAIN_BASE_URL ?? process.env.BRAIN_URL ?? 'http://localhost:3081';
+const DEV_KEY = process.env.DEV_API_KEY ?? 'dev-key-change-me';
 
 const POLL_INTERVAL_MS = 150;
 const POLL_MAX_INTERVAL_MS = 600;
