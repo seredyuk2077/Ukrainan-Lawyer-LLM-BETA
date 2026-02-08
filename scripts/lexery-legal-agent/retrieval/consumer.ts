@@ -14,6 +14,14 @@ import {
   incrementU4DegradedLldbi,
   incrementU4FilteredSearch,
   incrementU4LowConfidence,
+  incrementU4QdrantCalls,
+  incrementU4PlannerTierSelected,
+  incrementU4PlannerCalls,
+  incrementU4GoalsCount,
+  incrementU4CoverageEnforced,
+  incrementU4NoisePenalty,
+  incrementU4HitsCapApplied,
+  recordU4HitsBeforeCapBucket,
 } from '../gateway/observability.js';
 import { runCacheRag } from './cache-rag.js';
 import type { SearchPlan, SearchStep } from '../plan/types.js';
@@ -56,6 +64,7 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     const queryProfile = run.query_profile as {
       domain?: string;
       entities?: { act_abbrev?: string; article_ref?: string }[];
+      routing_flags?: import('../classify/types.js').RoutingFlags;
     } | null | undefined;
     const { rawHits, retrievalTrace } = await runCacheRag({
       query,
@@ -63,6 +72,8 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
       steps,
       domainHint: queryProfile?.domain,
       entities: queryProfile?.entities,
+      routing_flags: queryProfile?.routing_flags,
+      run_id,
     });
 
     if (retrievalTrace.degraded_sources?.lldbi) {
@@ -74,6 +85,25 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     if (retrievalTrace.meta?.low_confidence) {
       incrementU4LowConfidence();
     }
+    const plannerMeta = retrievalTrace.meta?.planner as { tier_selected?: 0 | 1 | 2; tier?: 0 | 1 | 2; called?: boolean } | undefined;
+    const tierSelected = plannerMeta?.tier_selected ?? plannerMeta?.tier ?? 0;
+    incrementU4PlannerTierSelected(tierSelected as 0 | 1 | 2);
+    if (plannerMeta?.called && (tierSelected === 1 || tierSelected === 2)) {
+      incrementU4PlannerCalls(tierSelected as 1 | 2);
+    }
+    const goalsCount = retrievalTrace.meta?.goals_summary?.length ?? 1;
+    incrementU4GoalsCount(Math.min(3, Math.max(1, goalsCount)));
+    if (retrievalTrace.meta?.fusion?.coverage_enforced) {
+      incrementU4CoverageEnforced();
+    }
+    const noiseCount = (retrievalTrace.meta?.distribution as { noise_penalty_applied_count?: number } | undefined)?.noise_penalty_applied_count ?? 0;
+    if (noiseCount > 0) incrementU4NoisePenalty();
+    const qdrantCallsTotal = (retrievalTrace.meta as { qdrant_calls_count_total?: number } | undefined)?.qdrant_calls_count_total;
+    incrementU4QdrantCalls(typeof qdrantCallsTotal === 'number' ? qdrantCallsTotal : Math.max(1, (retrievalTrace.meta?.steps_executed ?? []).length));
+    const metaCap = retrievalTrace.meta as { hits_cap_applied?: boolean; hits_total_before_cap?: number } | undefined;
+    if (metaCap?.hits_cap_applied) incrementU4HitsCapApplied();
+    const beforeCap = metaCap?.hits_total_before_cap;
+    if (typeof beforeCap === 'number') recordU4HitsBeforeCapBucket(beforeCap);
     recordU4QdrantLatency(retrievalTrace.latency_ms ?? 0);
     recordU4Hits(rawHits.length);
 

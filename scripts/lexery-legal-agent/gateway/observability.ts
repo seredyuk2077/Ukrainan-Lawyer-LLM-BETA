@@ -26,10 +26,25 @@ const metrics: Record<string, number> = {
   u4_processed_total: 0,
   u4_failed_total: 0,
   u4_qdrant_latency_ms: 0,
+  u4_qdrant_calls_total: 0,
   u4_hits_total: 0,
   u4_degraded_lldbi_total: 0,
   u4_filtered_search_total: 0,
   u4_low_confidence_total: 0,
+  u4_planner_tier_selected_0_total: 0,
+  u4_planner_tier_selected_1_total: 0,
+  u4_planner_tier_selected_2_total: 0,
+  u4_planner_calls_1_total: 0,
+  u4_planner_calls_2_total: 0,
+  u4_goals_count_1_total: 0,
+  u4_goals_count_2_total: 0,
+  u4_goals_count_3_total: 0,
+  u4_coverage_enforced_total: 0,
+  u4_noise_penalty_total: 0,
+  u4_hits_cap_applied_total: 0,
+  u4_hits_before_cap_le_100_total: 0,
+  u4_hits_before_cap_101_200_total: 0,
+  u4_hits_before_cap_gt_200_total: 0,
   taxonomy_refresh_success_total: 0,
   taxonomy_refresh_failed_total: 0,
   taxonomy_snapshot_age_seconds: 0,
@@ -160,6 +175,37 @@ export function incrementU4FilteredSearch() {
 }
 export function incrementU4LowConfidence() {
   metrics.u4_low_confidence_total += 1;
+}
+export function incrementU4QdrantCalls(n: number) {
+  metrics.u4_qdrant_calls_total += n;
+}
+export function incrementU4PlannerTierSelected(tier: 0 | 1 | 2) {
+  if (tier === 0) metrics.u4_planner_tier_selected_0_total += 1;
+  else if (tier === 1) metrics.u4_planner_tier_selected_1_total += 1;
+  else metrics.u4_planner_tier_selected_2_total += 1;
+}
+export function incrementU4PlannerCalls(tier: 1 | 2) {
+  if (tier === 1) metrics.u4_planner_calls_1_total += 1;
+  else metrics.u4_planner_calls_2_total += 1;
+}
+export function incrementU4GoalsCount(n: number) {
+  if (n <= 1) metrics.u4_goals_count_1_total += 1;
+  else if (n === 2) metrics.u4_goals_count_2_total += 1;
+  else metrics.u4_goals_count_3_total += 1;
+}
+export function incrementU4CoverageEnforced() {
+  metrics.u4_coverage_enforced_total += 1;
+}
+export function incrementU4NoisePenalty() {
+  metrics.u4_noise_penalty_total += 1;
+}
+export function incrementU4HitsCapApplied() {
+  metrics.u4_hits_cap_applied_total += 1;
+}
+export function recordU4HitsBeforeCapBucket(beforeCap: number) {
+  if (beforeCap <= 100) metrics.u4_hits_before_cap_le_100_total += 1;
+  else if (beforeCap <= 200) metrics.u4_hits_before_cap_101_200_total += 1;
+  else metrics.u4_hits_before_cap_gt_200_total += 1;
 }
 
 // U4 ActTaxonomyStore (LEX-114, LEX-117)

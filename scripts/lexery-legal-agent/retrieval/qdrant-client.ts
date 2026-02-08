@@ -22,6 +22,8 @@ export interface QdrantSearchOptions {
   limit: number;
   filter?: QdrantFilter;
   timeoutMs?: number;
+  /** Optional: increment .count on each actual Qdrant API call (for observability). */
+  callCounter?: { count: number };
 }
 
 let clientInstance: QdrantClient | null = null;
@@ -49,6 +51,7 @@ export async function qdrantSearch(
 ): Promise<QdrantSearchHit[]> {
   const timeoutMs = options.timeoutMs ?? config.qdrantTimeoutSec * 1000;
   const client = getClient();
+  const callCounter = options.callCounter;
 
   const doSearch = async (): Promise<QdrantSearchHit[]> => {
     const controller = new AbortController();
@@ -61,6 +64,7 @@ export async function qdrantSearch(
         with_payload: true,
       });
       clearTimeout(t);
+      if (callCounter) callCounter.count += 1;
       return (result || []).map((p: { id?: string | number; score?: number; payload?: Record<string, unknown> }) => ({
         id: p.id ?? '',
         score: typeof p.score === 'number' ? p.score : 0,
@@ -84,7 +88,8 @@ export async function qdrantSearch(
         msg.includes('aborted'));
     if (isRetryable) {
       await new Promise((r) => setTimeout(r, 300));
-      return await doSearch();
+      const out = await doSearch();
+      return out;
     }
     throw firstErr;
   }
