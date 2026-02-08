@@ -5,8 +5,16 @@
 - **A. Query understanding** — NFC, whitespace, typo fix; anchors from taxonomy only. Intent/domain from query_profile.
 - **B. Act candidate generation** — Taxonomy (alias/keyword/topic) + Qdrant acts search → top 5 acts → act_candidates_top in trace.
 - **C. Within-act chunks** — First pass: unfiltered chunks + acts. When act candidates exist: **per-act retrieval** (top N chunks per act, e.g. 35 per act) so relevant article can appear within act. No hardcode act names.
-- **D. Hybrid scoring + diversity** — w_vec*vector + alias + article_ref + category + title_overlap. Diversity cap: in top 25, max 16 from same act.
-- **E. Selective LLM** — (Optional) rewrite/rerank only on triggers (low_confidence, diversity collapse); not used by default.
+- **D. Hybrid scoring + anti-noise + diversity** — w_vec*vector + alias + article_ref + category + title_overlap. **Anti-noise penalty** (патерни "окрема думка", "порядок торгівлі") з **guard**: penalty тільки якщо в top N є primary-law-like документ у межах DELTA і noisy hit не єдине джерело для goal. Trace: noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes (NO_PRIMARY_ALTERNATIVE, ONLY_SOURCE_FOR_GOAL). Diversity cap: в top 25 не більше 16 з одного акту.
+- **E. Hits cap** — Після fusion → noise → diversity cap застосовується u4HitsCap (напр. 100). Trace: hits_total_before_cap, hits_total_after_cap, hits_cap_applied, topN_used_for_distribution, scores_computed_on/avg_score_source = "final_hits_after_cap_and_guards". Cap не впливає на low_confidence (reason_codes не "cap").
+- **F. Selective LLM planner** — Тільки за тригерами (multi_goal або contract-like); tier 0/1/2; fallback reason_codes. Не використовується за замовчуванням (U4_PLANNER_ENABLED=false).
+
+## Multi-goal evidence pipeline
+
+- **Goal split** — Heuristic splitter (no LLM by default): multi_question (several "?", "і чия"), multi_topic (criminal+procedure, tax+admin, etc.), contract/table from routing_flags. Cap: goals_max = 3 (config).
+- **Selective LLM planner** — Only when: multi_goal_detected, or input_is_large && input_looks_like_contract. Returns JSON goals (goal_type, subquery, domain_hint, likely_acts, keywords, why). No article names. Semaphore + circuit breaker (U2); cache in RunContext.
+- **Per-goal retrieval** — For each goal: embed(goal.subquery), getTaxonomyCandidates(goal.subquery, goal.domain_hint), steps (chunks + acts), within-act, hybrid sort. Tag hits with goal_id.
+- **Goal fusion + coverage** — Merge hits; dedupe by r2_key:json_path. Coverage: in top N ensure at least M hits per goal (config u4FusionTopN, u4FusionMinHitsPerGoal). Act diversity cap. Trace: goals_summary, fusion, planner, stage_decisions (used_goal_splitter, used_llm_planner, per_goal_act_retrieval).
 
 ## Кроки
 
@@ -21,17 +29,25 @@
 9. **Hybrid re-score** — ordering без LLM. hit.score у trace залишається векторний.
 10. **Diversity cap** — у топ 25 не більше 16 hits з одного акту (generalizable).
 11. **RawHits** — з payload: r2_key, json_path, score, rada_nreg, article_number, title, source.
-12. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_llm_rewrite, used_llm_rerank), distribution (hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
+12. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_goal_splitter, used_llm_planner, per_goal_act_retrieval, used_global_fallback), **goals_summary**, **fusion** (coverage_enforced, per_goal_min_hits, topN, per_goal_counts_in_topN), **planner** (tier_selected, called, call_failed_reason, tier, model_id, duration_ms, degraded, reason_codes), **qdrant_calls_count_total**, **hits_total_before_cap**, **hits_total_after_cap**, **hits_cap_applied**, **topN_used_for_distribution**, **scores_computed_on**, **avg_score_source**, **distribution** (noise_penalty_applied_count, noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes, hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
 13. **Persist** — RunRepository.updateRetrievalTrace; RunContext: raw_hits + retrieval_trace.
 14. **Enqueue U5** — Gate.
 
 ## Схема
 
+**Single-goal (default):**
 ```
-U3a → [U4] → getTaxonomyCandidates → shapeQuery(anchors)
+U3a → [U4] → heuristicGoalSplit(1 goal) → getTaxonomyCandidates → shapeQuery(anchors)
          → embedQuery → Qdrant chunks/acts
          → within-act retrieval (per act, top N chunks) when candidates exist
          → hybrid re-score → diversity cap → RawHits + RetrievalTrace → U5
+```
+
+**Multi-goal (when heuristic or LLM planner yields 2+ goals):**
+```
+U3a → [U4] → heuristicGoalSplit → [optional LLM planner if trigger] → for each goal:
+         embed(goal.subquery) → getTaxonomyCandidates(goal) → steps → within-act → hybrid
+         → merge hits (goal_id) → coverage fusion → diversity cap → goals_summary + fusion in meta → U5
 ```
 
 ## Limits

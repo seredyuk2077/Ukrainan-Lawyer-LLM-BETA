@@ -16,52 +16,49 @@ pnpm brain:verify:u4
 
 Ручних кроків не потрібно.
 
-## LLDBI Semantic Evidence: ККУ ст.115
-
-Доказова перевірка, що LLDBI (Qdrant + R2 refs) повертає правильний фрагмент закону для запитів про умисне вбивство.
+## Retrieval quality (25 cases)
 
 **Команда:**
 
 ```bash
-pnpm brain:verify:lldbi-kku115
+pnpm brain:verify:retrieval-quality
 ```
 
-- Стартує brain server на random port, health wait.
-- POST /v1/runs з 3 запитами: «умисне вбивство», «умисне вбиство» (типова помилка), «ККУ ст. 115 умисне вбивство».
-- Polling GET /v1/runs/:id до появи `retrieval_trace` (і `meta.sample_hits`).
-- Для кожного кейсу бере top sample hits, завантажує фрагмент з R2 за `r2_key` + `json_path`, перевіряє:
-  - текст містить «Стаття 115» / «115» у контексті статті;
-  - текст містить «умисне вбивство»;
-  - act — ККУ/Кримінальний кодекс України.
-- Якщо хоча б один hit з top-3 проходить — кейс PASS. Exit 0 тільки якщо всі 3 кейси PASS.
+- 25 кейсів: універсальні запити (умисне вбивство, звільнення, ККУ, поліція, спадщина, трудовий, податкове, адмін, конституційні, земля, банкрутство, договір, захист споживача, ЦПК, оскарження податкової, тощо) + golden article/act для окремих кейсів.
+- Очікування: non-empty hits або low_confidence; optional goldenArticleRef / goldenActTitleContains.
+- Summary: Cases 25/25, Latency median/p95, low_confidence %, used_filtered_chunks %, % multi_goal_detected, % llm_planner_used.
 
-**Режим REAL_LLDBI_REQUIRED:** якщо `REAL_LLDBI_REQUIRED=true` і немає доступу до Qdrant/R2 або retrieval degraded — verify FAIL з чіткою причиною (не PASS).
+**Останній прогін:** 25/25 PASS.
 
-**Останній прогін: 3/3 PASS**
-
-- **Кейс 1** («умисне вбивство»): PASS — query shaping (anchors ККУ, Кримінальний кодекс України) + один embedding; top hit act_title=Кримінальний кодекс України, article_ref=115, score ≈ 0.70; фрагмент з R2 містить «Умисне вбивство» та текст статті.
-- **Кейс 2** («умисне вбиство» — typo): PASS — typo-fix (вбиство→вбивство) + anchors; при потребі two-stage (acts → filtered chunks); top hit ККУ ст.115, score ≈ 0.29; фрагмент підтверджує «Умисне вбивство».
-- **Кейс 3** («ККУ ст. 115 умисне вбивство»): PASS — direct_citation, top hit ККУ ст.115, score ≈ 0.77; фрагмент містить «Умисне вбивство» та текст статті.
-
-## Universal retrieval verify suite (20 cases)
+## Multi-goal retrieval verify (62 cases)
 
 **Команда:**
 
 ```bash
-pnpm brain:verify:retrieval
+pnpm brain:verify:retrieval-multigoal
 ```
 
-- Стартує brain server на random port, health wait.
-- 20 кейсів: короткі людські (умисне вбивство, звільнення з роботи, оскарження податкової, поліція перевищення повноважень, спадщина квартира, ККУ ст. 115, ЦПК ст. 121, трудовий договір, податкове право, адмін провадження, конституційні права, земельна ділянка, банкрутство, договір купівлі-продажу, захист споживача), довгий контрактний абзац, абсурдний запит, змішана мова, КЗпП, умисне вбиство ККУ.
-- Очікувані сигнали: expected_non_empty_hits (або low_confidence при 0 hits), optional expected_article_ref для коротких запитів з «ст. X», optional expected_domain (soft).
-- Summary: median/p95 latency, % low_confidence, % used_filtered_chunks_search, top-1 act_title coverage.
+- 62 кейси: multi-goal/multi-act (корупція, бандитизм, тероризм, правочин, емансипація, договірний текст), cap transparency regression, noise guard regression (КСУ, порядок процедура, кодекс+окремі), універсальні запити.
+- Очікування: goals_summary, fusion, act diversity, minGoals/minDistinctActsInTop, actTitleContains, requireSignalInTitle, expectCapTransparency, expectNoPlanner.
+- Budget: median/p95 latency, % llm_planner_used ≤ порогу, qdrant_calls_total median/max, % hits_cap_applied (smell якщо >80%).
 
-**Останній прогін:** 20/20 PASS (median latency ~3.6s, p95 ~9.4s, low_confidence % 40, filtered_search % 5, top-1 act_title coverage 100%).
+**Останній прогін:** 62/62 PASS.
 
-## Останній прогін
+- **Cases:** 62/62 PASS
+- **Latency median ms:** ~3400
+- **Latency p95 ms:** ~7100
+- **% multi_goal_detected:** ~32
+- **% llm_planner_used:** 0 (U4_PLANNER_ENABLED=false за замовчуванням)
+- **qdrant_calls_total:** median 8, max 16
+- **% hits_cap_applied:** ~24
+- **Budget (median/p95/llm%/cap%):** PASS
 
-- Health: PASS
-- Smoke (verify:u4): PASS (retrieval_trace присутній; при наявному Qdrant — hits, при відсутності — degraded)
-- verify:lldbi-kku115: 3/3 PASS
-- verify:retrieval: 20/20 PASS
-- Exit: 0
+## Останній повний прогін
+
+- `pnpm brain:verify:u3` — smoke + U3/U3a plan test
+- `pnpm brain:verify:u4` — Health + Smoke PASS
+- `pnpm brain:verify:u5` — Scenario A/B/C PASS
+- `pnpm brain:verify:retrieval-quality` — 25/25 PASS
+- `pnpm brain:verify:retrieval-multigoal` — 62/62 PASS, Budget PASS
+
+Ручних кроків не потрібно.
