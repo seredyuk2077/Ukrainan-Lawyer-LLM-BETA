@@ -11,11 +11,16 @@ export interface QdrantSearchHit {
   payload: Record<string, unknown>;
 }
 
+/** Qdrant filter: must (AND) or should (OR). For "rada_nreg in [a,b]" use should with match value. */
+export type QdrantFilter =
+  | { must: Array<{ key: string; match: { value: string } }> }
+  | { should: Array<{ key: string; match: { value: string } }> };
+
 export interface QdrantSearchOptions {
   collection: string;
   vector: number[];
   limit: number;
-  filter?: { must: Array<{ key: string; match: { value: string } }> };
+  filter?: QdrantFilter;
   timeoutMs?: number;
 }
 
@@ -90,4 +95,45 @@ export function getQdrantCollections(): { chunks: string; acts: string } {
     chunks: config.lldbiCollectionChunks,
     acts: config.lldbiCollectionActs,
   };
+}
+
+/** Scroll points (read-only). For inspection/debug; filter by rada_nreg etc. */
+export interface QdrantScrollFilter {
+  must?: Array<{ key: string; match: { value: string } }>;
+}
+
+export interface QdrantScrollResult {
+  points: Array<{ id: string | number; payload: Record<string, unknown> }>;
+  next_page_offset: string | number | null;
+}
+
+export async function qdrantScroll(
+  collection: string,
+  options: {
+    limit?: number;
+    filter?: QdrantScrollFilter;
+    with_payload?: boolean;
+    with_vector?: boolean;
+    offset?: string | number;
+  }
+): Promise<QdrantScrollResult> {
+  const client = getClient();
+  const limit = options.limit ?? 100;
+  const withPayload = options.with_payload !== false;
+  const withVector = options.with_vector === true;
+  const res = await client.scroll(collection, {
+    limit,
+    filter: options.filter as never,
+    with_payload: withPayload,
+    with_vector: withVector,
+    offset: options.offset as never,
+  });
+  const points = ((res as { points?: Array<{ id?: string | number; payload?: Record<string, unknown> }> }).points ?? []).map(
+    (p) => ({
+      id: p.id ?? '',
+      payload: p.payload ?? {},
+    })
+  );
+  const next = (res as { next_page_offset?: string | number | null }).next_page_offset ?? null;
+  return { points, next_page_offset: next };
 }

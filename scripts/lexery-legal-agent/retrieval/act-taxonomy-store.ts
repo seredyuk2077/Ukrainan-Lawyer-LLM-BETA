@@ -9,6 +9,7 @@ import {
   incrementTaxonomyRefreshFailed,
   setTaxonomySnapshotAgeSeconds,
 } from '../gateway/observability.js';
+import { tolerantNormalizeToStrings } from './tolerant-normalizer.js';
 
 const LEGISLATION_TABLE = 'legislation_documents';
 const MIN_TOKEN_LEN = 2;
@@ -29,13 +30,6 @@ interface TaxonomySnapshot {
   acts: Map<string, ActEntry>;
   version: number;
   loadedAt: number;
-}
-
-function normalizeStrings(val: unknown): string[] {
-  if (val == null) return [];
-  if (Array.isArray(val)) return val.filter((x): x is string => typeof x === 'string');
-  if (typeof val === 'string') return [val];
-  return [];
 }
 
 function toKey(s: string): string {
@@ -107,9 +101,9 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     const entry: ActEntry = { rada_nreg, title, category };
     acts.set(rada_nreg, entry);
 
-    for (const a of normalizeStrings(row?.aliases)) addToMap(byAlias, a, entry);
-    for (const k of normalizeStrings(row?.keywords)) addToMap(byKeyword, k, entry);
-    for (const t of normalizeStrings(row?.topics)) addToMap(byTopic, t, entry);
+    for (const a of tolerantNormalizeToStrings(row?.aliases)) addToMap(byAlias, a, entry);
+    for (const k of tolerantNormalizeToStrings(row?.keywords)) addToMap(byKeyword, k, entry);
+    for (const t of tolerantNormalizeToStrings(row?.topics)) addToMap(byTopic, t, entry);
     if (category) addToMap(byCategory, category, entry);
   }
 
@@ -279,4 +273,86 @@ export async function getTaxonomyCandidates(
       source: 'supabase',
     },
   };
+}
+
+export interface ActMeta {
+  rada_nreg: string;
+  title: string;
+  category: string | null;
+}
+
+/** Get act metadata by rada_nreg (from snapshot; no DB write). */
+export async function getActMeta(rada_nreg: string): Promise<ActMeta | null> {
+  const snap = await ensureSnapshot();
+  if (!snap) return null;
+  const entry = snap.acts.get(rada_nreg.trim());
+  if (!entry) return null;
+  return { rada_nreg: entry.rada_nreg, title: entry.title, category: entry.category };
+}
+
+/** Find act candidates by alias/keyword/topic token overlap. Returns rada_nreg[]. */
+export async function findCandidatesByAliasTokens(tokens: string[]): Promise<string[]> {
+  const snap = await ensureSnapshot();
+  if (!snap) return [];
+  const scores = new Map<string, number>();
+  for (const t of tokens) {
+    const key = toKey(t);
+    if (!key) continue;
+    for (const entry of snap.byAlias.get(key) ?? []) {
+      scores.set(entry.rada_nreg, (scores.get(entry.rada_nreg) ?? 0) + 2);
+    }
+    for (const entry of snap.byKeyword.get(key) ?? []) {
+      scores.set(entry.rada_nreg, (scores.get(entry.rada_nreg) ?? 0) + 1);
+    }
+    for (const entry of snap.byTopic.get(key) ?? []) {
+      scores.set(entry.rada_nreg, (scores.get(entry.rada_nreg) ?? 0) + 1);
+    }
+  }
+  return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([nreg]) => nreg);
+}
+
+export interface ActCandidateScore {
+  score: number;
+  reasons: string[];
+}
+
+/** Score one act candidate by query tokens and domain hint (no DB write). */
+export async function scoreActCandidate(
+  rada_nreg: string,
+  queryTokens: string[],
+  domainHint?: string
+): Promise<ActCandidateScore> {
+  const snap = await ensureSnapshot();
+  if (!snap) return { score: 0, reasons: [] };
+  const entry = snap.acts.get(rada_nreg.trim());
+  if (!entry) return { score: 0, reasons: [] };
+  let score = 0;
+  const reasons: string[] = [];
+  for (const t of queryTokens) {
+    const key = toKey(t);
+    if (!key) continue;
+    for (const e of snap.byAlias.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += 2;
+        if (!reasons.includes('alias_match')) reasons.push('alias_match');
+      }
+    }
+    for (const e of snap.byKeyword.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += 1;
+        if (!reasons.includes('keyword_match')) reasons.push('keyword_match');
+      }
+    }
+    for (const e of snap.byTopic.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += 1;
+        if (!reasons.includes('topic_match')) reasons.push('topic_match');
+      }
+    }
+  }
+  if (domainHint && entry.category && toKey(entry.category) === toKey(domainHint)) {
+    score += 1;
+    reasons.push('category_hint');
+  }
+  return { score, reasons };
 }

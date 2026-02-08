@@ -72,6 +72,32 @@ export const RetrievalTraceSchema = z.object({
       hybrid_rescore_used: z.boolean().optional(),
       why_low_confidence: z.string().optional(),
       thesaurus_version: z.number().int().optional(),
+      act_candidates_top: z
+        .array(
+          z.object({
+            rada_nreg: z.string(),
+            title: z.string().optional(),
+            score: z.number().optional(),
+            reasons: z.array(z.string()).optional(),
+          })
+        )
+        .optional(),
+      stage_decisions: z
+        .object({
+          used_taxonomy: z.boolean().optional(),
+          used_acts_search: z.boolean().optional(),
+          used_filtered_chunks: z.boolean().optional(),
+          used_llm_rewrite: z.boolean().optional(),
+          used_llm_rerank: z.boolean().optional(),
+        })
+        .optional(),
+      distribution: z
+        .object({
+          hits_by_act_top3: z.record(z.number()).optional(),
+          avg_score_by_act_top3: z.record(z.number()).optional(),
+        })
+        .optional(),
+      reason_codes: z.array(z.string()).optional(),
     })
     .passthrough()
     .optional(),
