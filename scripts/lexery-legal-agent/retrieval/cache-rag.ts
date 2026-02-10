@@ -43,6 +43,12 @@ const GOOD_SCORE_THRESHOLD = 0.4;
 const TWO_STAGE_ACTS_TOP = 5;
 /** ACTS-1 pool size: broader candidate set before diversity + policy cap (Act selection 3.1). */
 const ACTS_1_POOL_SIZE = 12;
+/** ACTS-2 refinement (Phase 2): second-pass act retrieval when trigger fires. */
+const ACTS_2_POOL_SIZE = 8;
+const ACTS_2_SCORE_THRESHOLD = 0.55;
+const ACTS_2_TOP_N_CHECK = 6;
+/** Max qdrant calls before skipping ACTS-2 (budget guard). */
+const MAX_QDRANT_CALLS_BEFORE_ACTS2 = 18;
 /** selected_acts cap: single-goal high confidence. */
 const SELECTED_ACTS_CAP_HIGH = 3;
 /** selected_acts cap: single-goal low confidence (wider to reduce miss). */
@@ -99,6 +105,36 @@ function queryFamilySignals(query: string): { criminal?: boolean; administrative
     /\b(штраф|купап|адмін|адміністративн|правопорушення|провадження.*адмін)/i.test(q);
   const tax = /\b(податк|пкку|податковий|податков)\b/i.test(q);
   return { criminal: criminal || false, administrative: administrative || false, tax: tax || false };
+}
+
+/** Lexical anchors per family for ACTS-2 query (rule-based when planner has no query_variants). */
+const ACTS_2_LEXICAL_ANCHORS: Record<string, string> = {
+  criminal: 'Кримінальний кодекс України',
+  criminal_procedure: 'Кримінальний процесуальний кодекс України',
+  administrative_offenses: 'Кодекс України про адміністративні правопорушення',
+  administrative: 'Кодекс України про адміністративні правопорушення',
+  civil: 'Цивільний кодекс України',
+  civil_procedure: 'Цивільний процесуальний кодекс України',
+  tax_customs: 'Податковий кодекс України',
+  labor_social: 'Кодекс законів про працю України',
+  constitutional: 'Конституція України',
+  anti_corruption: 'протидія корупції',
+  finance_banking: 'банківське регулювання',
+};
+
+/**
+ * Build ACTS-2 search query: planner query_variants[0] or rule-based family lexical anchor.
+ */
+function buildActs2Query(
+  familyHints: Array<{ family: string; confidence: number }>,
+  _query: string,
+  actPlannerOutput: { goals?: Array<{ query_variants?: string[] }> } | null
+): string {
+  const variant = actPlannerOutput?.goals?.[0]?.query_variants?.[0]?.trim();
+  if (variant && variant.length > 0) return variant.slice(0, 300);
+  const firstFamily = familyHints.length > 0 ? familyHints[0].family : null;
+  const anchor = firstFamily ? ACTS_2_LEXICAL_ANCHORS[firstFamily] : null;
+  return anchor ?? 'кодекс закон Україна';
 }
 
 function effectiveQuery(query: string): string {
@@ -1030,57 +1066,137 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const familyPriorBoostMagnitude = ambiguousGuard ? FAMILY_PRIOR_BOOST_WEAK : FAMILY_PRIOR_BOOST;
   const querySignals = queryFamilySignals(query);
 
-  const scoredPool = await Promise.all(
-    basePool.map(async (nreg) => {
-      const meta = await getActMeta(nreg);
-      const { score, reasons } = await scoreActCandidate(nreg, queryTokens, domainHint);
-      const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
-      const title = meta?.title ?? '';
-      const actFamily = actTitleToFamily(title);
+  const actSelectionLowConfidence =
+    (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) ||
+    (actPlannerOutput?.global?.missing_info_flags?.length ?? 0) > 0;
 
-      let familyPriorBoost = 0;
-      let priorApplied = false;
-      for (const h of familyHints) {
-        if (actFamily && (h.family === actFamily || actTitleMatchesFamily(title, h.family))) {
-          familyPriorBoost = Math.min(familyPriorBoostMagnitude, h.confidence * 0.3);
-          priorApplied = true;
-          break;
-        }
-      }
+  type ScoredActItem = {
+    rada_nreg: string;
+    title: string | undefined;
+    category: string | null;
+    score: number;
+    reasons: string[];
+    priorApplied: boolean;
+    priorBoost: number;
+    antiPenalty: number;
+    whyTag: string;
+    source_tier: 'ACTS_1' | 'ACTS_2';
+  };
 
-      let antiPenalty = 0;
-      if (querySignals.criminal && (actFamily === 'administrative' || actFamily === 'administrative_offenses')) {
-        antiPenalty = ANTI_FAMILY_PENALTY;
+  const scoreOneCandidate = async (nreg: string, tier: 'ACTS_1' | 'ACTS_2'): Promise<ScoredActItem> => {
+    const meta = await getActMeta(nreg);
+    const { score, reasons } = await scoreActCandidate(nreg, queryTokens, domainHint);
+    const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
+    const title = meta?.title ?? '';
+    const actFamily = actTitleToFamily(title);
+    let familyPriorBoost = 0;
+    let priorApplied = false;
+    for (const h of familyHints) {
+      if (actFamily && (h.family === actFamily || actTitleMatchesFamily(title, h.family))) {
+        familyPriorBoost = Math.min(familyPriorBoostMagnitude, h.confidence * 0.3);
+        priorApplied = true;
+        break;
       }
-      if (querySignals.administrative && actFamily === 'criminal') {
-        antiPenalty = ANTI_FAMILY_PENALTY;
-      }
+    }
+    let antiPenalty = 0;
+    if (querySignals.criminal && (actFamily === 'administrative' || actFamily === 'administrative_offenses')) {
+      antiPenalty = ANTI_FAMILY_PENALTY;
+    }
+    if (querySignals.administrative && actFamily === 'criminal') {
+      antiPenalty = ANTI_FAMILY_PENALTY;
+    }
+    const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty;
+    const whyTag = priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
+    return {
+      rada_nreg: nreg,
+      title: meta?.title ?? undefined,
+      category: meta?.category ?? null,
+      score: totalScore,
+      reasons,
+      priorApplied,
+      priorBoost: familyPriorBoost,
+      antiPenalty,
+      whyTag,
+      source_tier: tier,
+    };
+  };
 
-      const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty;
-      const whyTag = priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
-      return {
-        rada_nreg: nreg,
-        title: meta?.title ?? undefined,
-        category: meta?.category ?? null,
-        score: totalScore,
-        reasons,
-        priorApplied,
-        priorBoost: familyPriorBoost,
-        antiPenalty,
-        whyTag,
-      };
-    })
+  let scoredPool: ScoredActItem[] = await Promise.all(
+    basePool.map((nreg) => scoreOneCandidate(nreg, 'ACTS_1'))
   );
   scoredPool.sort((a, b) => b.score - a.score);
+
+  // ACTS-2 trigger: low_confidence, or top-1 score low, or hinted family missing from top N
+  const acts2Triggers: string[] = [];
+  if (actSelectionLowConfidence) acts2Triggers.push('LOW_CONFIDENCE');
+  const top1Score = scoredPool[0]?.score ?? 0;
+  if (top1Score < ACTS_2_SCORE_THRESHOLD) acts2Triggers.push('TOP1_LOW_SCORE');
+  const familiesInTopN = new Set(
+    scoredPool
+      .slice(0, ACTS_2_TOP_N_CHECK)
+      .map((a) => actTitleToFamily(a.title ?? ''))
+      .filter((f): f is string => !!f)
+  );
+  const hintedFamilyMissing = familyHints.some((h) => h.family && !familiesInTopN.has(h.family));
+  if (hintedFamilyMissing) acts2Triggers.push('FAMILY_MISSING_IN_TOP');
+
+  let acts2Used = false;
+  let acts2Trigger: string[] = [];
+  let acts2Queries: string[] = [];
+  let acts2QdrantCalls = 0;
+  const qdrantCountBeforeACTS2 = qdrantCallCounter.count;
+
+  if (acts2Triggers.length > 0 && qdrantCallCounter.count < MAX_QDRANT_CALLS_BEFORE_ACTS2) {
+    const acts2Query = buildActs2Query(familyHints, query, actPlannerOutput);
+    acts2Queries.push(acts2Query.slice(0, 150));
+    try {
+      const acts2EmbedStart = Date.now();
+      const acts2Emb = await embedQuery(acts2Query);
+      stepsLatencyMs.push(Date.now() - acts2EmbedStart);
+      const collections = getQdrantCollections();
+      const acts2Hits = await qdrantSearch({
+        collection: collections.acts,
+        vector: acts2Emb.embedding,
+        limit: ACTS_2_POOL_SIZE,
+        timeoutMs: config.qdrantTimeoutSec * 1000,
+        callCounter: qdrantCallCounter,
+      });
+      acts2QdrantCalls = qdrantCallCounter.count - qdrantCountBeforeACTS2;
+      acts2Used = true;
+      acts2Trigger = [...acts2Triggers];
+      const acts2Nregs = [
+        ...new Set(
+          acts2Hits
+            .map((h) => (h.payload?.rada_nreg as string)?.trim())
+            .filter((n): n is string => !!n)
+        ),
+      ];
+      const existingNregs = new Set(scoredPool.map((a) => a.rada_nreg));
+      const newNregs = acts2Nregs.filter((n) => !existingNregs.has(n));
+      if (newNregs.length > 0) {
+        const scoredNew = await Promise.all(newNregs.map((nreg) => scoreOneCandidate(nreg, 'ACTS_2')));
+        const byNreg = new Map(scoredPool.map((a) => [a.rada_nreg, a]));
+        for (const a of scoredNew) byNreg.set(a.rada_nreg, a);
+        scoredPool = Array.from(byNreg.values());
+        scoredPool.sort((a, b) => b.score - a.score);
+      }
+    } catch {
+      acts2Used = false;
+      acts2Trigger = [];
+      acts2Queries = [];
+      acts2QdrantCalls = 0;
+    }
+  }
+
   // Diversity: up to 2 per category so we don't drop the right family (class A)
-  const byCategory = new Map<string, typeof scoredPool>();
+  const byCategory = new Map<string, ScoredActItem[]>();
   for (const a of scoredPool) {
     const cat = a.category ?? '_';
     if (!byCategory.has(cat)) byCategory.set(cat, []);
     const arr = byCategory.get(cat)!;
     if (arr.length < 2) arr.push(a);
   }
-  const diversityOrdered: typeof scoredPool = [];
+  const diversityOrdered: ScoredActItem[] = [];
   for (const arr of byCategory.values()) {
     diversityOrdered.push(...arr);
   }
@@ -1095,6 +1211,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     score: a.score,
     reasons: a.reasons,
     why_tag: a.whyTag,
+    source_tier: a.source_tier,
   }));
 
   // Distribution: hits by act in top 3 acts (by hit count in top 30 of returned list)
@@ -1124,9 +1241,6 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   if (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) {
     reasonCodes.push('ACT_SELECTION_LOW_CONFIDENCE');
   }
-  const actSelectionLowConfidence =
-    (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) ||
-    (actPlannerOutput?.global?.missing_info_flags?.length ?? 0) > 0;
 
   const plannerRationaleByNreg = new Map<string, string>();
   if (actPlannerOutput?.goals?.[0]?.act_candidates?.length) {
@@ -1189,6 +1303,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         familyHints.length > 0
           ? { applied: priorAppliedAny, boost_used: priorBoostUsed }
           : undefined,
+      acts2_used: acts2Used,
+      acts2_trigger: acts2Trigger.length ? acts2Trigger : undefined,
+      acts2_queries: acts2Queries.length ? acts2Queries : undefined,
+      acts2_qdrant_calls: acts2Used ? acts2QdrantCalls : undefined,
       used_act_planner: actPlannerCalledThisRun,
       query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
       used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
