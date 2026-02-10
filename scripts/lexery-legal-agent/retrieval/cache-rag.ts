@@ -13,6 +13,12 @@ import { config } from '../lib/config.js';
 import { shapeQueryForRetrieval } from './query-shaping.js';
 import { heuristicGoalSplit } from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
+import {
+  selectActPlannerTier,
+  callActPlanner,
+  type ActPlannerOutput,
+  type TaxonomySnapshotSummary,
+} from './act-planner.js';
 import { runContextGet, runContextSet } from '../lib/run-context.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { isCircuitOpen, recordLlmFailure } from '../classify/circuit-breaker.js';
@@ -35,11 +41,65 @@ const W_TITLE = 0.05;
 const MIN_HITS_FOR_TWO_STAGE = 3;
 const GOOD_SCORE_THRESHOLD = 0.4;
 const TWO_STAGE_ACTS_TOP = 5;
+/** ACTS-1 pool size: broader candidate set before diversity + policy cap (Act selection 3.1). */
+const ACTS_1_POOL_SIZE = 12;
+/** selected_acts cap: single-goal high confidence. */
+const SELECTED_ACTS_CAP_HIGH = 3;
+/** selected_acts cap: single-goal low confidence (wider to reduce miss). */
+const SELECTED_ACTS_CAP_LOW = 7;
+/** Max selected_acts / act_candidates_top length (harness invariant ≤9). */
+const SELECTED_ACTS_MAX = 9;
 /** Chunks per act in within-act retrieval (so relevant article can appear within each act). */
 const TWO_STAGE_CHUNKS_PER_ACT = 35;
 /** Diversity cap: max hits from same act in top N (avoids one act dominating). */
 const DIVERSITY_TOP_N = 25;
 const DIVERSITY_MAX_SAME_ACT = 16;
+
+/** Family prior (Phase 1): soft boost when candidate family matches planner/query hints. */
+const FAMILY_PRIOR_BOOST = 0.15;
+const FAMILY_PRIOR_BOOST_WEAK = 0.05;
+const ANTI_FAMILY_PENALTY = 0.05;
+
+/** family_id -> regex to match act title (Ukrainian). Order: more specific first for actTitleToFamily. */
+const FAMILY_TITLE_SIGNALS: Record<string, RegExp> = {
+  administrative_offenses: /купап|адмін.*правопоруш|кодекс.*адмін/i,
+  criminal_procedure: /кпк|кримінальн.*процес|кримінально.*процесуальн/i,
+  civil_procedure: /ципк|цпк|цивільн.*процес/i,
+  criminal: /кримін|кку|злочин|кримінальний\s+кодекс/i,
+  civil: /цивіль|цк\s*у|цік|цивільний\s+кодекс/i,
+  administrative: /адмін|адміністративн/i,
+  tax_customs: /податк|пкку|податковий\s+кодекс/i,
+  labor_social: /труд|кзпп|трудовий\s+кодекс/i,
+  constitutional: /конституц/i,
+  anti_corruption: /корупц|протидія.*корупц/i,
+  finance_banking: /банк|фінмон|санкц/i,
+};
+
+function actTitleToFamily(title: string): string | null {
+  if (!title?.trim()) return null;
+  for (const [family, re] of Object.entries(FAMILY_TITLE_SIGNALS)) {
+    if (re.test(title)) return family;
+  }
+  return null;
+}
+
+function actTitleMatchesFamily(title: string, familyId: string): boolean {
+  if (familyId === 'general') return true;
+  const re = FAMILY_TITLE_SIGNALS[familyId];
+  if (!re) return title.toLowerCase().includes(familyId.toLowerCase());
+  return re.test(title);
+}
+
+/** Query-based family signals for fallback prior / anti-signals (soft only). */
+function queryFamilySignals(query: string): { criminal?: boolean; administrative?: boolean; tax?: boolean } {
+  const q = query.normalize('NFC').toLowerCase();
+  const criminal =
+    /\b(умисн|злочин|кк\b|кримін|кримінальн|нетверез|сп'?янін|керуван.*сп'?янін|відповідальність.*кримін)/i.test(q);
+  const administrative =
+    /\b(штраф|купап|адмін|адміністративн|правопорушення|провадження.*адмін)/i.test(q);
+  const tax = /\b(податк|пкку|податковий|податков)\b/i.test(q);
+  return { criminal: criminal || false, administrative: administrative || false, tax: tax || false };
+}
 
 function effectiveQuery(query: string): string {
   const t = query.trim();
@@ -652,6 +712,70 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     entities,
   });
   taxonomySnapshotVersion = taxonomyResult.debug.taxonomy_snapshot_version ?? null;
+
+  let actPlannerOutput: ActPlannerOutput | null = null;
+  let actPlannerCalledThisRun = false;
+  const actPlannerTier = selectActPlannerTier(
+    1,
+    taxonomyResult.rada_nreg_candidates?.length ?? 0,
+    query.length,
+    !!routing_flags?.input_looks_like_contract
+  );
+  if (
+    actPlannerTier >= 1 &&
+    run_id &&
+    config.u4ActPlannerEnabled &&
+    config.openRouterApiKey &&
+    !isCircuitOpen()
+  ) {
+    const actsFromAliases = new Map<string, { rada_nreg: string; title: string; category?: string | null }>();
+    for (const h of taxonomyResult.alias_hits ?? []) {
+      if (!actsFromAliases.has(h.rada_nreg))
+        actsFromAliases.set(h.rada_nreg, {
+          rada_nreg: h.rada_nreg,
+          title: h.title ?? '',
+          category: h.category ?? null,
+        });
+    }
+    for (const nreg of taxonomyResult.rada_nreg_candidates ?? []) {
+      if (!actsFromAliases.has(nreg)) {
+        const meta = await getActMeta(nreg);
+        if (meta) actsFromAliases.set(nreg, { rada_nreg: meta.rada_nreg, title: meta.title, category: meta.category });
+      }
+    }
+    const taxonomy_snapshot_summary: TaxonomySnapshotSummary = {
+      top_aliases: [...new Set((taxonomyResult.alias_hits ?? []).map((h) => h.alias))].slice(0, 15),
+      top_categories: taxonomyResult.category_hints ?? [],
+      acts: [...actsFromAliases.values()].slice(0, 25),
+    };
+    try {
+      const ctx = (await runContextGet<{ act_planner_result?: ActPlannerOutput }>(run_id)) ?? null;
+      if (ctx?.act_planner_result) {
+        actPlannerOutput = ctx.act_planner_result;
+      } else {
+        actPlannerCalledThisRun = true;
+        actPlannerOutput = await callActPlanner({
+          query,
+          goals: goalSplit.goals,
+          domainHint,
+          taxonomy_snapshot_summary,
+          max_acts_total: 10,
+          max_acts_per_goal: 5,
+          allow_multi_act: true,
+          tier: actPlannerTier as 1 | 2,
+        });
+        const mergedCtx = (await runContextGet<Record<string, unknown>>(run_id)) ?? {};
+        await runContextSet(
+          run_id,
+          { ...mergedCtx, act_planner_result: actPlannerOutput } as Record<string, unknown>,
+          RUN_CONTEXT_TTL_SEC
+        );
+      }
+    } catch {
+      actPlannerOutput = null;
+    }
+  }
+
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
     query,
     domainHint,
@@ -791,7 +915,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           .map((h) => (h.payload?.rada_nreg as string)?.trim())
           .filter((n): n is string => !!n);
         const taxonomyNregs = taxonomyResult.rada_nreg_candidates ?? [];
-        const mergedNregs = [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
+        let mergedNregs = [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
+        if (actPlannerOutput?.goals?.[0]?.act_candidates?.length) {
+          const preferred = actPlannerOutput.goals[0].act_candidates
+            .filter((c) => c.rada_nreg)
+            .map((c) => c.rada_nreg as string);
+          const validPreferred = preferred.filter((n) => mergedNregs.includes(n));
+          mergedNregs = [...validPreferred, ...mergedNregs.filter((n) => !validPreferred.includes(n))].slice(
+            0,
+            TWO_STAGE_ACTS_TOP
+          );
+        }
         const topNregs = mergedNregs.length > 0 ? mergedNregs : actNregs.slice(0, TWO_STAGE_ACTS_TOP);
         if (topNregs.length > 0) {
           const chunkStart = Date.now();
@@ -852,7 +986,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const avgScore =
     finalHits.length > 0 ? finalHits.reduce((s, h) => s + h.score, 0) / finalHits.length : undefined;
 
-  // Act candidates top 5 (for trace): taxonomy + act search nregs, with title and score
+  // Act candidates (ACTS-1 pool + score + diversity): taxonomy + act search, then policy cap (Act selection 3.1)
   const actNregsFromSearch = [
     ...new Set(
       rawPerStep
@@ -861,22 +995,107 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         .filter((n): n is string => !!n)
     ),
   ];
-  const top5Nregs = [
-    ...new Set([...taxonomyResult.rada_nreg_candidates, ...actNregsFromSearch]),
-  ].slice(0, 5);
+  const basePool = [...new Set([...taxonomyResult.rada_nreg_candidates, ...actNregsFromSearch])].slice(
+    0,
+    ACTS_1_POOL_SIZE
+  );
   const queryTokens = query
     .normalize('NFC')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .split(/[^\p{L}\p{N}]+/u)
     .filter((t) => t.length >= 2);
-  const actCandidatesTop = await Promise.all(
-    top5Nregs.map(async (nreg) => {
+  const plannerPreferredNregs = new Set(
+    (actPlannerOutput?.goals?.[0]?.act_candidates ?? [])
+      .filter((c) => c.rada_nreg)
+      .map((c) => c.rada_nreg as string)
+  );
+
+  // Family hints: from planner act_families or fallback from query signals (soft prior only)
+  type FamilyHint = { family: string; confidence: number };
+  let familyHints: FamilyHint[] =
+    actPlannerOutput?.goals?.[0]?.act_families?.map((f) => ({ family: f.family.trim().toLowerCase(), confidence: f.confidence })) ?? [];
+  if (familyHints.length === 0) {
+    const qSignals = queryFamilySignals(query);
+    if (qSignals.criminal) familyHints.push({ family: 'criminal', confidence: 0.6 });
+    if (qSignals.administrative) familyHints.push({ family: 'administrative_offenses', confidence: 0.6 });
+    if (qSignals.tax) familyHints.push({ family: 'tax_customs', confidence: 0.6 });
+    // Normalize "admin" -> administrative_offenses for matching
+    familyHints = familyHints.map((h) =>
+      h.family === 'admin' ? { ...h, family: 'administrative_offenses' } : h
+    );
+  }
+  const maxHintConfidence = familyHints.length ? Math.max(...familyHints.map((h) => h.confidence)) : 0;
+  const ambiguousGuard = familyHints.length > 2 || maxHintConfidence < 0.6;
+  const familyPriorBoostMagnitude = ambiguousGuard ? FAMILY_PRIOR_BOOST_WEAK : FAMILY_PRIOR_BOOST;
+  const querySignals = queryFamilySignals(query);
+
+  const scoredPool = await Promise.all(
+    basePool.map(async (nreg) => {
       const meta = await getActMeta(nreg);
       const { score, reasons } = await scoreActCandidate(nreg, queryTokens, domainHint);
-      return { rada_nreg: nreg, title: meta?.title ?? undefined, score, reasons };
+      const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
+      const title = meta?.title ?? '';
+      const actFamily = actTitleToFamily(title);
+
+      let familyPriorBoost = 0;
+      let priorApplied = false;
+      for (const h of familyHints) {
+        if (actFamily && (h.family === actFamily || actTitleMatchesFamily(title, h.family))) {
+          familyPriorBoost = Math.min(familyPriorBoostMagnitude, h.confidence * 0.3);
+          priorApplied = true;
+          break;
+        }
+      }
+
+      let antiPenalty = 0;
+      if (querySignals.criminal && (actFamily === 'administrative' || actFamily === 'administrative_offenses')) {
+        antiPenalty = ANTI_FAMILY_PENALTY;
+      }
+      if (querySignals.administrative && actFamily === 'criminal') {
+        antiPenalty = ANTI_FAMILY_PENALTY;
+      }
+
+      const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty;
+      const whyTag = priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
+      return {
+        rada_nreg: nreg,
+        title: meta?.title ?? undefined,
+        category: meta?.category ?? null,
+        score: totalScore,
+        reasons,
+        priorApplied,
+        priorBoost: familyPriorBoost,
+        antiPenalty,
+        whyTag,
+      };
     })
   );
+  scoredPool.sort((a, b) => b.score - a.score);
+  // Diversity: up to 2 per category so we don't drop the right family (class A)
+  const byCategory = new Map<string, typeof scoredPool>();
+  for (const a of scoredPool) {
+    const cat = a.category ?? '_';
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    const arr = byCategory.get(cat)!;
+    if (arr.length < 2) arr.push(a);
+  }
+  const diversityOrdered: typeof scoredPool = [];
+  for (const arr of byCategory.values()) {
+    diversityOrdered.push(...arr);
+  }
+  diversityOrdered.sort((a, b) => b.score - a.score);
+  const priorAppliedAny = scoredPool.some((a) => a.priorApplied);
+  const priorBoostUsed = priorAppliedAny
+    ? Math.max(...scoredPool.filter((a) => a.priorApplied).map((a) => a.priorBoost), 0)
+    : 0;
+  const actCandidatesTop = diversityOrdered.slice(0, SELECTED_ACTS_MAX).map((a) => ({
+    rada_nreg: a.rada_nreg,
+    title: a.title,
+    score: a.score,
+    reasons: a.reasons,
+    why_tag: a.whyTag,
+  }));
 
   // Distribution: hits by act in top 3 acts (by hit count in top 30 of returned list)
   const top30 = finalHits.slice(0, 30);
@@ -902,6 +1121,30 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   const reasonCodes: string[] = [];
   if (useLowConfidenceFallback) reasonCodes.push('low_confidence_fallback');
+  if (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) {
+    reasonCodes.push('ACT_SELECTION_LOW_CONFIDENCE');
+  }
+  const actSelectionLowConfidence =
+    (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) ||
+    (actPlannerOutput?.global?.missing_info_flags?.length ?? 0) > 0;
+
+  const plannerRationaleByNreg = new Map<string, string>();
+  if (actPlannerOutput?.goals?.[0]?.act_candidates?.length) {
+    for (const c of actPlannerOutput.goals[0].act_candidates) {
+      if (c.rada_nreg && c.rationale_short) plannerRationaleByNreg.set(c.rada_nreg, c.rationale_short);
+    }
+  }
+  const selectedActsCap = actSelectionLowConfidence ? SELECTED_ACTS_CAP_LOW : SELECTED_ACTS_CAP_HIGH;
+  let selectedActsSize = Math.min(selectedActsCap, actCandidatesTop.length);
+  if (actCandidatesTop.length >= 2 && selectedActsSize < 2) selectedActsSize = 2;
+  selectedActsSize = Math.min(SELECTED_ACTS_MAX, selectedActsSize);
+  const selected_acts = actCandidatesTop.slice(0, selectedActsSize).map((a) => ({
+    rada_nreg: a.rada_nreg,
+    act_title: a.title,
+    score: a.score,
+    why_selected: plannerRationaleByNreg.get(a.rada_nreg),
+    reason_tag: a.why_tag,
+  }));
 
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
     source: h.source,
@@ -933,11 +1176,20 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       scores_computed_on: 'final_hits_after_cap_and_guards',
       avg_score_source: 'final_hits_after_cap_and_guards',
       avg_score: avgScore,
-      low_confidence: useLowConfidenceFallback,
+      low_confidence: useLowConfidenceFallback || actSelectionLowConfidence,
       why_low_confidence:
         useLowConfidenceFallback && rawPerStep.length > 0
           ? 'all_hits_below_min_score_fallback_to_top_k'
+          : actSelectionLowConfidence
+            ? 'ACT_SELECTION_LOW_CONFIDENCE'
+            : undefined,
+      selected_acts,
+      family_hints: familyHints.length ? familyHints.slice(0, 5).map((h) => h.family) : undefined,
+      prior_applied:
+        familyHints.length > 0
+          ? { applied: priorAppliedAny, boost_used: priorBoostUsed }
           : undefined,
+      used_act_planner: actPlannerCalledThisRun,
       query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
       used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
       anchors_used: anchorsUsed.length ? anchorsUsed : undefined,
@@ -953,6 +1205,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         used_llm_rerank: false,
         used_goal_splitter: true,
         used_llm_planner: goalSplit.used_llm_planner,
+        used_act_planner: actPlannerCalledThisRun,
         per_goal_act_retrieval: false,
         used_global_fallback: useLowConfidenceFallback,
       },
@@ -962,7 +1215,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           goal_type: goalSplit.goals[0].goal_type,
           subquery_preview: goalSplit.goals[0].subquery.slice(0, 200),
           used_llm_planner: goalSplit.used_llm_planner,
-          act_candidates_top3: top5Nregs.slice(0, 3),
+          act_candidates_top3: actCandidatesTop.slice(0, 3).map((a) => a.rada_nreg),
           hits_count: finalHits.length,
           top_score: topScore,
         },
