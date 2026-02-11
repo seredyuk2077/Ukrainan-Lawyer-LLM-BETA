@@ -28,7 +28,8 @@ import {
   scoreActCandidate,
   type TaxonomyCandidatesResult,
 } from './act-taxonomy-store.js';
-import { buildSelectedActs } from './selected-acts.js';
+import { buildSelectedActs, computeChunksEvidenceTopActs } from './selected-acts.js';
+import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -726,12 +727,19 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         };
       })
     );
+    const chunksEvidenceMulti = computeChunksEvidenceTopActs(finalMulti);
+    const familyEvidenceMulti = await computeFamilyEvidence({
+      chunks_evidence_top_acts: chunksEvidenceMulti,
+      getActMeta,
+    });
     const selectedActsMulti = buildSelectedActs({
       finalHits: finalMulti,
       actCandidatesTop: multiActCandidatesTop,
       goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
+      chunks_evidence_top_acts: chunksEvidenceMulti,
+      familyEvidence: toFamilyEvidenceSummary(familyEvidenceMulti),
     });
     const selected_acts_multi = selectedActsMulti.selected_acts.map((a) => ({
       rada_nreg: a.rada_nreg,
@@ -775,6 +783,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         selected_acts_decision: selectedActsMulti.selected_acts_decision,
         selected_acts_confidence: selectedActsMulti.selected_acts_confidence,
         selected_acts_kinds_count: selectedActsMulti.selected_acts_kinds_count,
+        family_evidence_summary: toFamilyEvidenceSummary(familyEvidenceMulti),
+        family_evidence_reason_codes:
+          familyEvidenceMulti.reason_codes.length ? familyEvidenceMulti.reason_codes : undefined,
         fusion: {
           coverage_enforced: true,
           per_goal_min_hits: config.u4FusionMinHitsPerGoal,
@@ -830,6 +841,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           })),
           stages: [{ stage: 'multi_goal', qdrant_calls_count: qdrantCallCounter.count, time_ms: totalLatencyMulti }],
           distribution_by_goal: goalsSummary.map((g) => ({ goal_id: g.goal_id, hits_count: g.hits_count ?? 0 })),
+          family_evidence_top2: familyEvidenceMulti.debug.top_families,
         },
       },
     };
@@ -1354,7 +1366,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
   const taxonomyNregSet = new Set(taxonomyResult.rada_nreg_candidates ?? []);
 
-  // Phase 2: evidence-driven selected_acts (buildSelectedActs 2.0)
+  const chunks_evidence_top_acts_pre = computeChunksEvidenceTopActs(finalHits);
+  const familyEvidence = await computeFamilyEvidence({
+    chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
+    getActMeta,
+  });
+
+  const familyWeakOrNoPrimary =
+    familyEvidence.reason_codes.includes('FAMILY_WEAK_EVIDENCE') ||
+    familyEvidence.reason_codes.includes('NO_PRIMARY_LAW_EVIDENCE');
+
+  // Phase 2: evidence-driven selected_acts (buildSelectedActs 2.0 + v3 family guard)
   const selectedActsResult = buildSelectedActs({
     finalHits,
     actCandidatesTop,
@@ -1364,7 +1386,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     taxonomyNregs: taxonomyNregSet,
     actsSearchNregs: actNregsFromSearch,
     domainHint,
-    actSelectionLowConfidence,
+    actSelectionLowConfidence: actSelectionLowConfidence || familyWeakOrNoPrimary,
+    chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
+    familyEvidence: toFamilyEvidenceSummary(familyEvidence),
   });
   const selected_acts = selectedActsResult.selected_acts.map((a) => ({
     rada_nreg: a.rada_nreg,
@@ -1378,6 +1402,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const selected_acts_decision = selectedActsResult.selected_acts_decision;
   if (selectedActsResult.selected_acts_reason_codes.length) {
     reasonCodes.push(...selectedActsResult.selected_acts_reason_codes);
+  }
+  if (familyEvidence.reason_codes.length) {
+    reasonCodes.push(...familyEvidence.reason_codes);
+  }
+  if (selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED')) {
+    // low_confidence already set via actSelectionLowConfidence when family weak; also set when guard failed
   }
 
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
@@ -1410,7 +1440,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       scores_computed_on: 'final_hits_after_cap_and_guards',
       avg_score_source: 'final_hits_after_cap_and_guards',
       avg_score: avgScore,
-      low_confidence: useLowConfidenceFallback || actSelectionLowConfidence,
+      low_confidence:
+        useLowConfidenceFallback ||
+        actSelectionLowConfidence ||
+        familyWeakOrNoPrimary ||
+        selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED'),
       why_low_confidence:
         useLowConfidenceFallback && rawPerStep.length > 0
           ? 'all_hits_below_min_score_fallback_to_top_k'
@@ -1482,6 +1516,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selected_acts_decision,
       selected_acts_confidence: selectedActsResult.selected_acts_confidence,
       selected_acts_kinds_count: selectedActsResult.selected_acts_kinds_count,
+      family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
+      family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,
@@ -1505,6 +1541,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         selected_acts_sources_breakdown,
         chunks_evidence_top_acts,
         selected_acts_decision,
+        family_evidence_top2: familyEvidence.debug.top_families,
       },
     },
   };

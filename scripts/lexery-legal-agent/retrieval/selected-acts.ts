@@ -71,6 +71,14 @@ export type SelectedActOutput = {
   source_tags?: string[];
 };
 
+/** Family evidence summary (from family-evidence module) for coverage guard v3. */
+export type FamilyEvidenceSummaryInput = {
+  dominant_family_key?: string;
+  family_confidence: number;
+  family_conflict: boolean;
+  top2: Array<{ family_key: string; support_score: number }>;
+};
+
 export type BuildSelectedActsInput = {
   finalHits: RawHit[];
   actCandidatesTop: ActCandidateInput[];
@@ -82,6 +90,10 @@ export type BuildSelectedActsInput = {
   actsSearchNregs: string[];
   domainHint?: string;
   actSelectionLowConfidence?: boolean;
+  /** Precomputed chunks evidence (when provided, used instead of computing from finalHits). */
+  chunks_evidence_top_acts?: ChunksEvidenceItem[];
+  /** Family evidence for coverage guard v3 (per-goal family coverage). */
+  familyEvidence?: FamilyEvidenceSummaryInput;
 };
 
 /** Count of selected acts by act_kind (for trace meta). */
@@ -100,12 +112,14 @@ export type BuildSelectedActsOutput = {
   selected_acts_decision: {
     policy_version: number;
     included_from_chunks_evidence: boolean;
+    included_from_family_guard?: boolean;
+    family_guard_actions?: Array<{ goal_id: string; family: string; added_rada_nreg?: string }>;
     reason_codes: string[];
   };
   selected_acts_kinds_count: SelectedActsKindsCount;
 };
 
-function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenceItem[] {
+export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenceItem[] {
   const top30 = finalHits.slice(0, 30);
   const stats = new Map<string, { count: number; sumScore: number; maxScore: number }>();
   for (const h of top30) {
@@ -128,6 +142,14 @@ function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenceItem[]
     .slice(0, 10);
 }
 
+function categoryToFamilyKey(category: string | undefined | null): string {
+  return (category ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .trim() || 'unknown';
+}
+
 /** Min distinct act_kinds in chunks evidence to enforce diversity in selected_acts. */
 const DIVERSITY_EVIDENCE_KINDS_MIN = 2;
 /** Min support (count) for an act in chunks to count toward "evidence kind". */
@@ -137,6 +159,9 @@ const DIVERSITY_EVIDENCE_COUNT_MIN = 2;
  * Build selected_acts from chunks evidence (priority) + taxonomy/acts_search (support) + diversity.
  * Policy v2: act_kind, diversity guard, anti-order (max 1 SECONDARY_ORDER, only with evidence).
  */
+const FAMILY_GUARD_CONFIDENCE_THRESHOLD = 0.55;
+const FAMILY_CONFLICT_TOP2_MIN = 0.45;
+
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
   const {
     finalHits,
@@ -144,9 +169,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     taxonomyNregs,
     actsSearchNregs,
     actSelectionLowConfidence,
+    chunks_evidence_top_acts: inputChunksEvidence,
+    familyEvidence,
   } = input;
 
-  const chunks_evidence_top_acts = computeChunksEvidenceTopActs(finalHits);
+  const chunks_evidence_top_acts = inputChunksEvidence ?? computeChunksEvidenceTopActs(finalHits);
   const chunksEvidenceNregs = new Set(
     chunks_evidence_top_acts
       .filter(
@@ -311,6 +338,82 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  // --- Policy v3: family coverage guard (per-goal family coverage) ---
+  const familyGuardActions: Array<{ goal_id: string; family: string; added_rada_nreg?: string }> = [];
+  let includedFromFamilyGuard = false;
+  if (familyEvidence && selected.length < SELECTED_ACTS_MAX_OUT) {
+    const goalId = input.goals_summary[0]?.goal_id ?? 'goal_0';
+    if (
+      familyEvidence.dominant_family_key &&
+      familyEvidence.family_confidence >= FAMILY_GUARD_CONFIDENCE_THRESHOLD
+    ) {
+      const hasDominantFamily = selected.some((s) => {
+        const cand = candidateByNreg.get(s.rada_nreg);
+        if (classifyActKind(cand?.title ?? s.act_title ?? '') !== 'PRIMARY_LAW') return false;
+        return categoryToFamilyKey(cand?.category) === familyEvidence.dominant_family_key;
+      });
+      if (!hasDominantFamily) {
+        const candidate = actCandidatesTop.find((a) => {
+          if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
+          if (classifyActKind(a.title ?? '') !== 'PRIMARY_LAW') return false;
+          return categoryToFamilyKey(a.category) === familyEvidence.dominant_family_key;
+        });
+        if (candidate) {
+          selected.push({
+            rada_nreg: candidate.rada_nreg,
+            act_title: candidate.title,
+            score: candidate.score,
+            why_selected: 'FAMILY_GUARD',
+            reason_tag: 'FAMILY_GUARD',
+            source_tags: ['FAMILY_GUARD'],
+          });
+          if (taxonomyNregs.has(candidate.rada_nreg)) fromTaxonomy.push(candidate.rada_nreg);
+          if (actsSearchNregs.includes(candidate.rada_nreg)) fromActsSearch.push(candidate.rada_nreg);
+          familyGuardActions.push({ goal_id: goalId, family: familyEvidence.dominant_family_key, added_rada_nreg: candidate.rada_nreg });
+          includedFromFamilyGuard = true;
+        } else {
+          reasonCodes.push('COVERAGE_GUARD_FAILED');
+        }
+      }
+    }
+    if (
+      familyEvidence.family_conflict &&
+      familyEvidence.top2.length >= 2 &&
+      familyEvidence.top2[0].support_score >= FAMILY_CONFLICT_TOP2_MIN &&
+      familyEvidence.top2[1].support_score >= FAMILY_CONFLICT_TOP2_MIN &&
+      selected.length < SELECTED_ACTS_MAX_OUT
+    ) {
+      const familiesToCover = [familyEvidence.top2[0].family_key, familyEvidence.top2[1].family_key];
+      for (const fam of familiesToCover) {
+        const hasFam = selected.some((s) => {
+          const cand = candidateByNreg.get(s.rada_nreg);
+          return classifyActKind(cand?.title ?? s.act_title ?? '') === 'PRIMARY_LAW' && categoryToFamilyKey(cand?.category) === fam;
+        });
+        if (!hasFam) {
+          const candidate = actCandidatesTop.find((a) => {
+            if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
+            if (classifyActKind(a.title ?? '') !== 'PRIMARY_LAW') return false;
+            return categoryToFamilyKey(a.category) === fam;
+          });
+          if (candidate && selected.length < SELECTED_ACTS_MAX_OUT) {
+            selected.push({
+              rada_nreg: candidate.rada_nreg,
+              act_title: candidate.title,
+              score: candidate.score,
+              why_selected: 'FAMILY_GUARD',
+              reason_tag: 'FAMILY_GUARD',
+              source_tags: ['FAMILY_GUARD'],
+            });
+            if (taxonomyNregs.has(candidate.rada_nreg)) fromTaxonomy.push(candidate.rada_nreg);
+            if (actsSearchNregs.includes(candidate.rada_nreg)) fromActsSearch.push(candidate.rada_nreg);
+            familyGuardActions.push({ goal_id: goalId, family: fam, added_rada_nreg: candidate.rada_nreg });
+            includedFromFamilyGuard = true;
+          }
+        }
+      }
+    }
+  }
+
   // Cap total for harness invariant (≤9)
   const selectedCapped = selected.slice(0, SELECTED_ACTS_MAX_OUT);
 
@@ -345,8 +448,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   }
 
   const selected_acts_decision = {
-    policy_version: 2,
+    policy_version: includedFromFamilyGuard ? 3 : 2,
     included_from_chunks_evidence: fromChunksEvidence.length > 0,
+    included_from_family_guard: includedFromFamilyGuard,
+    family_guard_actions: familyGuardActions.length ? familyGuardActions : undefined,
     reason_codes: reasonCodes,
   };
 

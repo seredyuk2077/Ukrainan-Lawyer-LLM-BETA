@@ -45,6 +45,8 @@ const metrics: Record<string, number> = {
   u4_hits_before_cap_le_100_total: 0,
   u4_hits_before_cap_101_200_total: 0,
   u4_hits_before_cap_gt_200_total: 0,
+  u4_family_conflict_total: 0,
+  u4_family_weak_evidence_total: 0,
   taxonomy_refresh_success_total: 0,
   taxonomy_refresh_failed_total: 0,
   taxonomy_snapshot_age_seconds: 0,
@@ -206,6 +208,12 @@ export function recordU4HitsBeforeCapBucket(beforeCap: number) {
   if (beforeCap <= 100) metrics.u4_hits_before_cap_le_100_total += 1;
   else if (beforeCap <= 200) metrics.u4_hits_before_cap_101_200_total += 1;
   else metrics.u4_hits_before_cap_gt_200_total += 1;
+}
+export function incrementU4FamilyConflict() {
+  metrics.u4_family_conflict_total += 1;
+}
+export function incrementU4FamilyWeakEvidence() {
+  metrics.u4_family_weak_evidence_total += 1;
 }
 
 // U4 ActTaxonomyStore (LEX-114, LEX-117)
