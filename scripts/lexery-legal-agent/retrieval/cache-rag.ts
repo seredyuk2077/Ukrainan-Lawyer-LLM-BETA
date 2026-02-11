@@ -1220,6 +1220,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     reasons: a.reasons,
     why_tag: a.whyTag,
     source_tier: a.source_tier,
+    category: a.category ?? undefined,
   }));
 
   // Distribution: hits by act in top 3 acts (by hit count in top 30 of returned list)
@@ -1385,6 +1386,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       chunks_evidence_top_acts,
       selected_acts_decision,
       selected_acts_confidence: selectedActsResult.selected_acts_confidence,
+      selected_acts_kinds_count: selectedActsResult.selected_acts_kinds_count,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,
