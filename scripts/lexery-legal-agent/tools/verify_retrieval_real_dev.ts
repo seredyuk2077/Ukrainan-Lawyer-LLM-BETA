@@ -79,6 +79,8 @@ interface RunResult {
       hits_cap_applied?: boolean;
       stage_decisions?: { used_llm_planner?: boolean; used_act_planner?: boolean };
       planner?: { tier?: number };
+      routing_hints?: { enabled?: boolean; called?: boolean };
+      selected_acts_sources_breakdown?: { from_routing_hints?: string[] };
     };
   } | null;
   latencyMs: number;
@@ -236,6 +238,8 @@ async function main(): Promise<void> {
     actPlannerUsed?: boolean;
     actListSize?: number;
     failReasons?: string[];
+    routingHintsCalled?: boolean;
+    routingHintsUsed?: boolean;
   }[] = [];
 
   try {
@@ -276,6 +280,9 @@ async function main(): Promise<void> {
         actPlannerUsed: rt?.meta?.stage_decisions?.used_act_planner,
         actListSize: (rt?.meta?.selected_acts ?? rt?.meta?.act_candidates_top ?? []).length,
         failReasons: pass ? [] : [(!actFamilyHit && 'act_family_miss'), (!multiGoalCorrect && 'multi_goal_miss'), (!multiActCorrect && 'multi_act_miss')].filter(Boolean) as string[],
+        routingHintsCalled: rt?.meta?.routing_hints?.called === true,
+        routingHintsUsed:
+          (rt?.meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
       });
       const label = `#${i + 1} "${row.query.slice(0, 50)}..."`;
       if (pass) {
@@ -347,6 +354,12 @@ async function main(): Promise<void> {
   console.log('% llm_planner_used:', llmPlannerPct);
   console.log('% act_planner_used:', actPlannerPct);
   console.log('% hits_cap_applied:', hitsCapPct);
+  const routingCalledCount = results.filter((r) => r.routingHintsCalled).length;
+  const routingUsedCount = results.filter((r) => r.routingHintsUsed).length;
+  const routingCalledPct = total > 0 ? Math.round((routingCalledCount / total) * 100) : 0;
+  const routingUsedPct = total > 0 ? Math.round((routingUsedCount / total) * 100) : 0;
+  console.log('% routing_hints_called:', routingCalledPct, `(${routingCalledCount}/${total})`);
+  console.log('% routing_hints_used:', routingUsedPct, `(${routingUsedCount}/${total})`);
   console.log('--- Top failure reasons ---');
   console.log('act_family_miss:', actFamilyMissCount);
   console.log('multi_goal_miss:', multiGoalMissCount);

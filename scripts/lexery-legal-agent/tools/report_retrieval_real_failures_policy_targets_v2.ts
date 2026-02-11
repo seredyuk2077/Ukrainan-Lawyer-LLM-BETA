@@ -53,12 +53,24 @@ interface RunResult {
       act_candidates_top?: Array<{ rada_nreg?: string; title?: string }>;
       selected_acts?: Array<{ rada_nreg?: string; act_title?: string }>;
       goals_summary?: Array<{ goal_id?: string; required_categories?: string[] }>;
-      selected_acts_sources_breakdown?: Record<string, unknown>;
+      selected_acts_sources_breakdown?: Record<string, unknown> & { from_routing_hints?: string[] };
       chunks_evidence_top_acts?: Array<{ rada_nreg?: string; count_in_top30?: number; max_score?: number }>;
       selected_acts_decision?: { reason_codes?: string[]; confidence?: number };
       qdrant_calls_count_total?: number;
       stage_decisions?: { used_llm_planner?: boolean; used_act_planner?: boolean };
       planner?: { tier?: number };
+      routing_hints?: {
+        enabled?: boolean;
+        called?: boolean;
+        call_failed_reason?: string;
+        families_ranked_top2?: Array<{ family_key: string; confidence?: number }>;
+      };
+      family_evidence_summary?: {
+        dominant_family_key?: string;
+        family_confidence?: number;
+        family_conflict?: boolean;
+        top2?: Array<{ family_key: string; support_score: number }>;
+      };
     };
   } | null;
   latencyMs: number;
@@ -153,6 +165,40 @@ function actTitleMatchesFamily(title: string, familyId: string): boolean {
   const re = FAMILY_TITLE_SIGNALS[familyId];
   if (!re) return title.toLowerCase().includes(familyId.toLowerCase());
   return re.test(title);
+}
+
+/** Derive family_keys from selected_acts titles using title signals (read-only, no taxonomy call). */
+function selectedActsFamilyKeys(selectedActs: Array<{ act_title?: string }>): string[] {
+  const keys = new Set<string>();
+  for (const a of selectedActs) {
+    const title = (a as { act_title?: string }).act_title ?? '';
+    let matched = false;
+    for (const familyId of Object.keys(FAMILY_TITLE_SIGNALS)) {
+      if (actTitleMatchesFamily(title, familyId)) {
+        keys.add(familyId);
+        matched = true;
+      }
+    }
+    if (title && !matched) keys.add('other');
+  }
+  return Array.from(keys);
+}
+
+const FAMILY_MISMATCH_SUPPORT_THRESHOLD = 0.62;
+
+type FamilyEvidenceSummaryLike = {
+  dominant_family_key?: string;
+  family_confidence?: number;
+  family_conflict?: boolean;
+  top2?: Array<{ support_score: number }>;
+} | undefined;
+
+function familyMismatchFlag(familyEvidence: FamilyEvidenceSummaryLike, selectedActs: Array<{ act_title?: string }>): boolean {
+  if (!familyEvidence?.dominant_family_key) return false;
+  const support = familyEvidence.family_confidence ?? familyEvidence.top2?.[0]?.support_score ?? 0;
+  if (support < FAMILY_MISMATCH_SUPPORT_THRESHOLD || familyEvidence.family_conflict) return false;
+  const hasMatch = selectedActs.some((a) => actTitleMatchesFamily((a.act_title ?? '') as string, familyEvidence.dominant_family_key!));
+  return !hasMatch;
 }
 
 function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Array<{ family_id: string }>): boolean {
@@ -458,6 +504,39 @@ async function main(): Promise<void> {
     lines.push(`**low_confidence:** ${!!meta?.low_confidence}`);
     lines.push(`**qdrant_calls_count_total:** ${meta?.qdrant_calls_count_total ?? '-'}`);
     lines.push(`**latency_ms:** ${f.run.latencyMs}`);
+
+    const routingHints = meta?.routing_hints;
+    const routingCalled = routingHints?.called === true;
+    const routingUsed = (meta?.selected_acts_sources_breakdown as { from_routing_hints?: string[] } | undefined)?.from_routing_hints?.length ? true : false;
+    lines.push('');
+    lines.push('**routing_hints:**');
+    lines.push(`- called: ${routingCalled}`);
+    lines.push(`- used: ${routingUsed}`);
+    if (routingHints?.families_ranked_top2?.length) {
+      lines.push(`- families_ranked_top2: ${JSON.stringify(routingHints.families_ranked_top2)}`);
+    }
+    if (routingHints?.call_failed_reason) {
+      lines.push(`- call_failed_reason: ${routingHints.call_failed_reason}`);
+    }
+    lines.push(`- triggers/reason_codes (may have triggered call): ${JSON.stringify(meta?.reason_codes ?? [])}`);
+
+    const familyEvidence = meta?.family_evidence_summary;
+    if (familyEvidence) {
+      lines.push('');
+      lines.push('**family_evidence_summary:**');
+      lines.push(`- dominant_family_key: ${familyEvidence.dominant_family_key ?? '-'}`);
+      lines.push(`- family_confidence/support: ${familyEvidence.family_confidence ?? familyEvidence.top2?.[0]?.support_score ?? '-'}`);
+      lines.push(`- family_conflict: ${!!familyEvidence.family_conflict}`);
+      lines.push(`- top2: ${familyEvidence.top2 ? JSON.stringify(familyEvidence.top2) : '-'}`);
+    }
+
+    const selActsFamilyKeys = selectedActsFamilyKeys(selectedActs as Array<{ act_title?: string }>);
+    lines.push('');
+    lines.push(`**selected_acts_family_keys (from titles):** ${JSON.stringify(selActsFamilyKeys)}`);
+
+    const mismatch = familyMismatchFlag(meta?.family_evidence_summary, selectedActs as Array<{ act_title?: string }>);
+    lines.push(`**family_mismatch_flag:** ${mismatch}`);
+
     lines.push('');
   }
 
