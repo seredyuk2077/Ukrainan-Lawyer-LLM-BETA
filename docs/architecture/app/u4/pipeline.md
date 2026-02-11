@@ -12,9 +12,12 @@
 ## Multi-goal evidence pipeline
 
 - **Goal split** — Heuristic splitter (no LLM by default): multi_question (several "?", "і чия"), multi_topic (criminal+procedure, tax+admin, etc.), contract/table from routing_flags. Cap: goals_max = 3 (config).
+- **Goal split v2 (taxonomy-induced)** — When heuristic yields 1 goal: get taxonomy candidates, then **category-cluster split** (substance vs procedure) from taxonomy + chunks evidence only (no word triggers). Inputs: taxonomy alias_hits by category, chunks evidence distribution in top30. Two strongest clusters: substance (tax_customs/labor_social/civil/criminal/admin) and procedure (judiciary_justice/criminal_procedure/civil_procedure). Split rule: both clusters above threshold, top2 not "other", not direct_citation → 2 goals with required_categories. Trace: goals_summary[].split_source = TAXONOMY_CLUSTER_SPLIT_V2, meta.stage_decisions.goal_split_v2, meta.goal_split_inputs (top_categories, supports).
+- **Per-goal act allocation** — When goals_count ≥ 2: act pool per goal filtered by goal.required_categories (from taxonomy alias_hits); minActsPerGoal = 2 when candidates exist; else reason_codes GOAL_ACT_POOL_WEAK. Trace: goals_summary[].act_pool_size, meta.retrieval_debug_bundle.per_goal_act_pool_size.
 - **Selective LLM planner** — Only when: multi_goal_detected, or input_is_large && input_looks_like_contract. Returns JSON goals (goal_type, subquery, domain_hint, likely_acts, keywords, why). No article names. Semaphore + circuit breaker (U2); cache in RunContext.
-- **Per-goal retrieval** — For each goal: embed(goal.subquery), getTaxonomyCandidates(goal.subquery, goal.domain_hint), steps (chunks + acts), within-act, hybrid sort. Tag hits with goal_id.
+- **Per-goal retrieval** — For each goal: embed(goal.subquery), getTaxonomyCandidates(goal.subquery, goal.domain_hint) filtered by required_categories when set, steps (chunks + acts), within-act, hybrid sort. Tag hits with goal_id.
 - **Goal fusion + coverage** — Merge hits; dedupe by r2_key:json_path. Coverage: in top N ensure at least M hits per goal (config u4FusionTopN, u4FusionMinHitsPerGoal). Act diversity cap. Trace: goals_summary, fusion, planner, stage_decisions (used_goal_splitter, used_llm_planner, per_goal_act_retrieval).
+- **Selected_acts multi-goal coverage** — When goals_count ≥ 2: minDistinctActs = goals_count (or goals_count+1 if procedure goal); max 8; PRIMARY_LAW priority. If selected_acts do not cover all goals → reason_codes COVERAGE_MISS_SELECTED_ACTS, low_confidence = true. Trace: selected_acts_decision, selected_acts_confidence, selected_acts_kinds_count.
 
 ## Кроки
 
@@ -43,11 +46,12 @@ U3a → [U4] → heuristicGoalSplit(1 goal) → getTaxonomyCandidates → shapeQ
          → hybrid re-score → diversity cap → RawHits + RetrievalTrace → U5
 ```
 
-**Multi-goal (when heuristic or LLM planner yields 2+ goals):**
+**Multi-goal (when heuristic or LLM planner yields 2+ goals; or single-goal path + tryCategoryClusterSplitV2 yields 2 goals):**
 ```
-U3a → [U4] → heuristicGoalSplit → [optional LLM planner if trigger] → for each goal:
-         embed(goal.subquery) → getTaxonomyCandidates(goal) → steps → within-act → hybrid
-         → merge hits (goal_id) → coverage fusion → diversity cap → goals_summary + fusion in meta → U5
+U3a → [U4] → heuristicGoalSplit → [if 1 goal: getTaxonomyCandidates → tryCategoryClusterSplitV2]
+         → [optional LLM planner if trigger] → for each goal:
+         act pool by required_categories (minActsPerGoal=2) → embed(goal.subquery) → getTaxonomyCandidates(goal) → steps → within-act → hybrid
+         → merge hits (goal_id) → coverage fusion → diversity cap → buildSelectedActs (minDistinctActs=goals_count, COVERAGE_MISS if not covering) → goals_summary + fusion in meta → U5
 ```
 
 ## Limits

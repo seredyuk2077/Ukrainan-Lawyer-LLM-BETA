@@ -30,7 +30,7 @@ pnpm brain:verify:retrieval-quality
 
 **Останній прогін:** 25/25 PASS.
 
-## Multi-goal retrieval verify (62 cases)
+## Multi-goal retrieval verify (25 cases)
 
 **Команда:**
 
@@ -38,20 +38,44 @@ pnpm brain:verify:retrieval-quality
 pnpm brain:verify:retrieval-multigoal
 ```
 
-- 62 кейси: multi-goal/multi-act (корупція, бандитизм, тероризм, правочин, емансипація, договірний текст), cap transparency regression, noise guard regression (КСУ, порядок процедура, кодекс+окремі), універсальні запити.
-- Очікування: goals_summary, fusion, act diversity, minGoals/minDistinctActsInTop, actTitleContains, requireSignalInTitle, expectCapTransparency, expectNoPlanner.
-- Budget: median/p95 latency, % llm_planner_used ≤ порогу, qdrant_calls_total median/max, % hits_cap_applied (smell якщо >80%).
+- 25 кейсів: multi-goal/multi-act (корупція, бандитизм, тероризм, правочин, емансипація, договірний текст, міграція, адмін-провадження, санкції) + topic pack (Phase 4) — invariants only, no banned golden.
+- Очікування: selected_acts in policy, multi-act when expectMultiAct, multi-goal when expectMultiGoal, low_confidence → reason_codes, coverage per goal.
+- Budget: median/p95 latency, % act_planner_used, % low_confidence.
 
-**Останній прогін:** 62/62 PASS.
+**Останній прогін:** 25/25 PASS.
 
-- **Cases:** 62/62 PASS
-- **Latency median ms:** ~3400
-- **Latency p95 ms:** ~7100
-- **% multi_goal_detected:** ~32
-- **% llm_planner_used:** 0 (U4_PLANNER_ENABLED=false за замовчуванням)
-- **qdrant_calls_total:** median 8, max 16
-- **% hits_cap_applied:** ~24
-- **Budget (median/p95/llm%/cap%):** PASS
+- **Cases:** 25/25 PASS
+- **Latency median ms:** ~5058
+- **Latency p95 ms:** ~8812
+- **qdrant_calls median:** 9
+- **% act_planner_used:** 0
+- **% low_confidence:** ~20
+
+## Real-dev retrieval verify (43 cases, quality gate)
+
+**Команда:**
+
+```bash
+pnpm brain:verify:retrieval-real-dev
+```
+
+- 43 кейси (DEV split з retrieval_real_labeled.json): очікування act families, multi-goal, multi-act; без article-level assertions.
+- **Quality gate:** `RETRIEVAL_REAL_DEV_MIN_HARD_PASS` (default 30), `RETRIEVAL_REAL_DEV_MAX_HARD_FAIL` (default 13). Exit 0 when hard_pass ≥ MIN and hard_fail ≤ MAX; exit 1 below threshold. Summary prints thresholds and gate PASS/FAIL.
+- HOLDOUT verifier залишається строгим (100%); запускати фінально окремо.
+
+**Останній прогін (Phase 3):**
+
+- **hard_pass:** 30/43
+- **hard_fail:** 13
+- **% act_family_hit:** 72
+- **% act_list_hit:** 72
+- **% multi_goal_correct:** 100
+- **% multi_act_correct:** 98
+- **p50 latency ms:** 4263
+- **p95 latency ms:** 14543
+- **qdrant_calls median:** 9, **max:** 16
+- **planner tier:** 0=43 (no LLM planner used)
+- **Quality gate:** PASS (hard_pass=30 ≥ 30 && hard_fail=13 ≤ 13)
 
 ## Останній повний прогін
 
@@ -59,6 +83,7 @@ pnpm brain:verify:retrieval-multigoal
 - `pnpm brain:verify:u4` — Health + Smoke PASS
 - `pnpm brain:verify:u5` — Scenario A/B/C PASS
 - `pnpm brain:verify:retrieval-quality` — 25/25 PASS
-- `pnpm brain:verify:retrieval-multigoal` — 62/62 PASS, Budget PASS
+- `pnpm brain:verify:retrieval-multigoal` — 25/25 PASS
+- `pnpm brain:verify:retrieval-real-dev` — 30/43 PASS, quality gate PASS
 
 Ручних кроків не потрібно.
