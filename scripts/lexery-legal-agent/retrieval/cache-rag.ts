@@ -11,7 +11,7 @@ import { embedQuery } from './embedding.js';
 import { qdrantSearch, getQdrantCollections } from './qdrant-client.js';
 import { config } from '../lib/config.js';
 import { shapeQueryForRetrieval } from './query-shaping.js';
-import { heuristicGoalSplit } from './goal-splitter.js';
+import { heuristicGoalSplit, tryCategoryClusterSplitV2 } from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
 import {
   selectActPlannerTier,
@@ -393,11 +393,24 @@ async function runOneGoal(
   const topK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
   const minScore = searchPlan.thresholds?.min_score ?? config.minScoreThreshold;
 
-  const taxonomyResult = await getTaxonomyCandidates({
+  let taxonomyResult = await getTaxonomyCandidates({
     query: goal.subquery,
     domainHint: goal.domain_hint,
     entities,
   });
+  if (goal.required_categories?.length && taxonomyResult.alias_hits?.length) {
+    const allowedNregs = new Set(
+      taxonomyResult.alias_hits
+        .filter((h) => h.category && goal.required_categories!.includes(h.category))
+        .map((h) => h.rada_nreg)
+    );
+    if (allowedNregs.size > 0) {
+      taxonomyResult = {
+        ...taxonomyResult,
+        rada_nreg_candidates: taxonomyResult.rada_nreg_candidates.filter((n) => allowedNregs.has(n)),
+      };
+    }
+  }
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
     goal.subquery,
     goal.domain_hint,
@@ -543,6 +556,20 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   let taxonomySnapshotVersion: number | null = null;
 
   let goalSplit = heuristicGoalSplit(query, domainHint, routing_flags ?? undefined);
+  let taxonomyResultEarly: TaxonomyCandidatesResult | null = null;
+  if (goalSplit.goals.length === 1) {
+    taxonomyResultEarly = await getTaxonomyCandidates({ query, domainHint, entities });
+    const clusterSplit = tryCategoryClusterSplitV2(
+      taxonomyResultEarly,
+      query,
+      domainHint,
+      routing_flags ?? undefined
+    );
+    if (clusterSplit && clusterSplit.goals.length >= 2) {
+      goalSplit = clusterSplit;
+    }
+  }
+
   type PlannerMeta = { tier: 0 | 1 | 2; model_id?: string; duration_ms?: number; degraded?: boolean; reason_codes?: string[] };
   let plannerMeta: PlannerMeta = { tier: 0 };
   let plannerCalledThisRun = false;
@@ -626,6 +653,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   // Multi-goal path: per-goal retrieval → merge → coverage fusion → diversity cap
   if (isMultiGoal) {
     const multiHits: RawHit[] = [];
+    const goalSplitV2 = goalSplit.reason_codes?.includes('TAXONOMY_CLUSTER_SPLIT_V2') ?? false;
     const goalsSummary: Array<{
       goal_id: string;
       goal_type?: string;
@@ -634,7 +662,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       act_candidates_top3?: string[];
       hits_count?: number;
       top_score?: number | null;
+      split_source?: string;
+      act_pool_size?: number;
     }> = [];
+    const multiReasonCodes: string[] = [...goalSplit.reason_codes];
     const allCollectionsUsed: string[] = [];
     let totalLatencyMulti = 0;
     for (const goal of goalSplit.goals) {
@@ -642,6 +673,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       for (const h of one.hits) multiHits.push(h);
       allCollectionsUsed.push(...one.collectionsUsed);
       totalLatencyMulti += one.stepsLatencyMs.reduce((a, b) => a + b, 0);
+      const poolSize = one.taxonomyResult.rada_nreg_candidates?.length ?? 0;
+      if (goal.required_categories?.length && poolSize < 2) {
+        multiReasonCodes.push('GOAL_ACT_POOL_WEAK');
+      }
       const top3Nregs = [...new Set([...one.actNregsForSummary, ...(one.taxonomyResult.rada_nreg_candidates ?? [])])].slice(0, 3);
       goalsSummary.push({
         goal_id: goal.id,
@@ -651,6 +686,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         act_candidates_top3: top3Nregs,
         hits_count: one.hits.length,
         top_score: one.hits.length > 0 ? Math.max(...one.hits.map((h) => h.score)) : null,
+        split_source: goalSplitV2 ? 'TAXONOMY_CLUSTER_SPLIT_V2' : undefined,
+        act_pool_size: poolSize,
       });
     }
     const mergedMulti = dedupeHits(multiHits);
@@ -674,6 +711,36 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const finalMulti = config.u4HitsCap > 0 ? cappedMulti.slice(0, config.u4HitsCap) : cappedMulti;
     const hitsCapAppliedMulti = config.u4HitsCap > 0 && hitsTotalBeforeCapMulti > config.u4HitsCap;
     const topScoreMulti = finalMulti.length > 0 ? Math.max(...finalMulti.map((h) => h.score)) : null;
+
+    const mergedNregs = [...new Set(goalsSummary.flatMap((g) => g.act_candidates_top3 ?? []))].filter(Boolean);
+    const multiActCandidatesTop = await Promise.all(
+      mergedNregs.slice(0, SELECTED_ACTS_MAX).map(async (nreg) => {
+        const meta = await getActMeta(nreg);
+        return {
+          rada_nreg: nreg,
+          title: meta?.title,
+          score: 1,
+          why_tag: 'TAXONOMY',
+          source_tier: 'ACTS_2' as const,
+          category: meta?.category ?? undefined,
+        };
+      })
+    );
+    const selectedActsMulti = buildSelectedActs({
+      finalHits: finalMulti,
+      actCandidatesTop: multiActCandidatesTop,
+      goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
+      taxonomyNregs: new Set(mergedNregs),
+      actsSearchNregs: mergedNregs,
+    });
+    const selected_acts_multi = selectedActsMulti.selected_acts.map((a) => ({
+      rada_nreg: a.rada_nreg,
+      act_title: a.act_title,
+      score: a.score,
+      why_selected: a.why_selected,
+      reason_tag: a.reason_tag,
+    }));
+
     const multiTrace: RetrievalTrace = {
       version: 1,
       hits: finalMulti,
@@ -694,6 +761,20 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         scores_computed_on: 'final_hits_after_cap_and_guards',
         avg_score_source: 'final_hits_after_cap_and_guards',
         goals_summary: goalsSummary,
+        selected_acts: selected_acts_multi,
+        act_candidates_top: multiActCandidatesTop.map((a) => ({
+          rada_nreg: a.rada_nreg,
+          title: a.title,
+          score: a.score,
+          reasons: [],
+          why_tag: a.why_tag,
+          source_tier: a.source_tier,
+        })),
+        selected_acts_sources_breakdown: selectedActsMulti.selected_acts_sources_breakdown,
+        chunks_evidence_top_acts: selectedActsMulti.chunks_evidence_top_acts,
+        selected_acts_decision: selectedActsMulti.selected_acts_decision,
+        selected_acts_confidence: selectedActsMulti.selected_acts_confidence,
+        selected_acts_kinds_count: selectedActsMulti.selected_acts_kinds_count,
         fusion: {
           coverage_enforced: true,
           per_goal_min_hits: config.u4FusionMinHitsPerGoal,
@@ -716,8 +797,16 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           used_llm_planner: goalSplit.used_llm_planner,
           per_goal_act_retrieval: true,
           used_global_fallback: false,
+          goal_split_v2: goalSplitV2,
         },
-        reason_codes: goalSplit.reason_codes.length ? goalSplit.reason_codes : undefined,
+        goal_split_inputs:
+          goalSplitV2 && goalSplit.goals.length >= 2
+            ? {
+                top_categories: goalSplit.goals.map((g) => g.required_categories?.[0]).filter(Boolean) as string[],
+                supports: '(from taxonomy alias_hits)',
+              }
+            : undefined,
+        reason_codes: multiReasonCodes.length ? multiReasonCodes : undefined,
         qdrant_calls_count_total: qdrantCallCounter.count,
         planner: {
           tier_selected: plannerMeta.tier,
@@ -735,6 +824,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             act_candidates_top3: g.act_candidates_top3,
             hits_count: g.hits_count,
           })),
+          per_goal_act_pool_size: goalsSummary.map((g) => ({
+            goal_id: g.goal_id,
+            act_pool_size: g.act_pool_size ?? 0,
+          })),
           stages: [{ stage: 'multi_goal', qdrant_calls_count: qdrantCallCounter.count, time_ms: totalLatencyMulti }],
           distribution_by_goal: goalsSummary.map((g) => ({ goal_id: g.goal_id, hits_count: g.hits_count ?? 0 })),
         },
@@ -743,11 +836,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     return { rawHits: finalMulti, retrievalTrace: multiTrace };
   }
 
-  const taxonomyResult = await getTaxonomyCandidates({
-    query,
-    domainHint,
-    entities,
-  });
+  const taxonomyResult =
+    taxonomyResultEarly ??
+    (await getTaxonomyCandidates({
+      query,
+      domainHint,
+      entities,
+    }));
   taxonomySnapshotVersion = taxonomyResult.debug.taxonomy_snapshot_version ?? null;
 
   let actPlannerOutput: ActPlannerOutput | null = null;

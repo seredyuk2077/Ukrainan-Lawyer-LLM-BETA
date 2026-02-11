@@ -335,6 +335,15 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   }
 
   const selectedNregs = new Set(selectedCapped.map((s) => s.rada_nreg));
+  const minDistinctForMultiGoal = input.goals_summary?.length >= 2 ? input.goals_summary.length : 0;
+  if (minDistinctForMultiGoal > 0 && selectedCapped.length > 0) {
+    const distinctCount = selectedNregs.size;
+    if (distinctCount < minDistinctForMultiGoal) {
+      reasonCodes.push('COVERAGE_MISS_SELECTED_ACTS');
+      selected_acts_confidence = Math.min(selected_acts_confidence, 0.5);
+    }
+  }
+
   const selected_acts_decision = {
     policy_version: 2,
     included_from_chunks_evidence: fromChunksEvidence.length > 0,
