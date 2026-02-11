@@ -63,7 +63,7 @@ pnpm brain:verify:retrieval-real-dev
 - **Quality gate:** `RETRIEVAL_REAL_DEV_MIN_HARD_PASS` (default 30), `RETRIEVAL_REAL_DEV_MAX_HARD_FAIL` (default 13). Exit 0 when hard_pass ≥ MIN and hard_fail ≤ MAX; exit 1 below threshold. Summary prints thresholds and gate PASS/FAIL.
 - HOLDOUT verifier залишається строгим (100%); запускати фінально окремо.
 
-**Останній прогін (Phase 3):**
+**Останній прогін (2026-02-11, baseline routing OFF):**
 
 - **hard_pass:** 30/43
 - **hard_fail:** 13
@@ -71,11 +71,18 @@ pnpm brain:verify:retrieval-real-dev
 - **% act_list_hit:** 72
 - **% multi_goal_correct:** 100
 - **% multi_act_correct:** 98
-- **p50 latency ms:** 4263
-- **p95 latency ms:** 14543
+- **p50 latency ms:** 4047
+- **p95 latency ms:** 9516
 - **qdrant_calls median:** 9, **max:** 16
 - **planner tier:** 0=43 (no LLM planner used)
+- **% routing_hints_called:** 0 (feature off)
 - **Quality gate:** PASS (hard_pass=30 ≥ 30 && hard_fail=13 ≤ 13)
+
+**Repeat3 report (baseline):** hard_fail consensus 12; buckets A=11, B=0, C=0, D=1. Artifact: `tools/_reports/retrieval_real_dev_failures_policy_targets_v2_baseline.md`.
+
+**Treatment A (routing ON, repeat3):** hard_fail consensus 12 (no change); buckets A=11, B=0, C=0, D=1. Single run: routing_hints_called 33%, routing_hints_used 0%; p50 ~5.5s, p95 ~10–23s. Artifact: `tools/_reports/retrieval_real_dev_failures_policy_targets_v2_routing_on.md`.
+
+**Delta (baseline vs routing ON):** See `tools/_reports/retrieval_real_dev_routing_hints_delta_2026-02-11.md`. Conclusion: routing ON does not improve hard_fail; routing called but never used (actCandidatesTop lacks PRIMARY_LAW from routing top2). Phase 2 diagnosis + trigger v2 / use v2 in place (ADR: `u4-routing-hints-iteration-v2.md`).
 
 ## Останній повний прогін
 
