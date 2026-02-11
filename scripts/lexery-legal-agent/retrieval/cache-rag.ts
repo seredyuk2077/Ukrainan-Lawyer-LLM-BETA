@@ -1144,6 +1144,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   let acts2Trigger: string[] = [];
   let acts2Queries: string[] = [];
   let acts2QdrantCalls = 0;
+  let acts2DebugTopTitles: { title: string; rada_nreg: string; id: string; score: number }[] = [];
   const qdrantCountBeforeACTS2 = qdrantCallCounter.count;
 
   if (acts2Triggers.length > 0 && qdrantCallCounter.count < MAX_QDRANT_CALLS_BEFORE_ACTS2) {
@@ -1164,6 +1165,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       acts2QdrantCalls = qdrantCallCounter.count - qdrantCountBeforeACTS2;
       acts2Used = true;
       acts2Trigger = [...acts2Triggers];
+      acts2DebugTopTitles = acts2Hits.slice(0, 3).map((h) => ({
+        title: typeof h.payload?.title === 'string' ? h.payload.title : '',
+        rada_nreg: typeof h.payload?.rada_nreg === 'string' ? h.payload.rada_nreg : '',
+        id: String(h.id ?? ''),
+        score: h.score ?? 0,
+      }));
       const acts2Nregs = [
         ...new Set(
           acts2Hits
@@ -1307,6 +1314,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       acts2_trigger: acts2Trigger.length ? acts2Trigger : undefined,
       acts2_queries: acts2Queries.length ? acts2Queries : undefined,
       acts2_qdrant_calls: acts2Used ? acts2QdrantCalls : undefined,
+      acts2_debug_top_titles:
+        process.env.DEBUG_ACTS_LOOKUP === '1' && acts2DebugTopTitles.length
+          ? acts2DebugTopTitles
+          : undefined,
       used_act_planner: actPlannerCalledThisRun,
       query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
       used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
