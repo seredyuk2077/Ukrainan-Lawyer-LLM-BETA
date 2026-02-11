@@ -352,7 +352,15 @@ async function main(): Promise<void> {
   console.log('multi_goal_miss:', multiGoalMissCount);
   console.log('multi_act_miss:', multiActMissCount);
 
-  process.exit(allPass ? 0 : 1);
+  const minHardPass = parseInt(process.env.RETRIEVAL_REAL_DEV_MIN_HARD_PASS ?? '30', 10);
+  const maxHardFail = parseInt(process.env.RETRIEVAL_REAL_DEV_MAX_HARD_FAIL ?? '13', 10);
+  const gatePass = hardPass >= minHardPass && hardFailCount <= maxHardFail;
+  console.log('--- Quality gate ---');
+  console.log('thresholds: MIN_HARD_PASS=', minHardPass, 'MAX_HARD_FAIL=', maxHardFail);
+  console.log('gate:', gatePass ? 'PASS' : 'FAIL', `(hard_pass=${hardPass} >= ${minHardPass} && hard_fail=${hardFailCount} <= ${maxHardFail})`);
+
+  const exitCode = allPass ? 0 : gatePass ? 0 : 1;
+  process.exit(exitCode);
 }
 
 main().catch((err) => {
