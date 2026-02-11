@@ -67,7 +67,11 @@ export type RoutingHintsTriggers = {
   reason_codes_include_coverage_guard_failed: boolean;
   reason_codes_include_no_strong_act_evidence: boolean;
   query_short_cryptic_high_entropy?: boolean;
+  /** v2: dominant family has strong support but selected_acts don't contain that family (evidence-based, no word→family). */
+  confident_family_mismatch?: boolean;
 };
+
+const CONFIDENT_FAMILY_SUPPORT_THRESHOLD = 0.62;
 
 export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean {
   if (!config.u4RoutingHintsEnabled || !config.openRouterApiKey) return false;
@@ -77,7 +81,8 @@ export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean 
     triggers.selected_acts_confidence_below_055 ||
     triggers.reason_codes_include_coverage_guard_failed ||
     triggers.reason_codes_include_no_strong_act_evidence ||
-    (triggers.query_short_cryptic_high_entropy ?? false)
+    (triggers.query_short_cryptic_high_entropy ?? false) ||
+    (triggers.confident_family_mismatch ?? false)
   );
 }
 

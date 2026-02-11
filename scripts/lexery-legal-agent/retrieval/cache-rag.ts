@@ -1445,6 +1445,26 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
   const allowed_family_keys = Array.from(allowedFamilyKeysSet);
 
+  const CONFIDENT_FAMILY_SUPPORT_THRESHOLD = 0.62;
+  let confidentFamilyMismatch = false;
+  if (
+    familyEvidence.dominant_family_key &&
+    familyEvidence.family_confidence >= CONFIDENT_FAMILY_SUPPORT_THRESHOLD &&
+    !familyEvidence.family_conflict
+  ) {
+    const toKey = (c: string | null | undefined) =>
+      (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
+    let hasSelectedActFromDominantFamily = false;
+    for (const s of selected_acts) {
+      const meta = await getActMeta(s.rada_nreg);
+      if (toKey(meta?.category) === familyEvidence.dominant_family_key) {
+        hasSelectedActFromDominantFamily = true;
+        break;
+      }
+    }
+    confidentFamilyMismatch = !hasSelectedActFromDominantFamily;
+  }
+
   const routingTriggers: RoutingHintsTriggers = {
     family_weak_evidence: familyWeakOrNoPrimary,
     family_conflict: familyEvidence.family_conflict,
@@ -1453,6 +1473,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       'COVERAGE_GUARD_FAILED'
     ),
     reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
+    confident_family_mismatch: confidentFamilyMismatch,
   };
 
   if (shouldCallRoutingHints(routingTriggers)) {
@@ -1483,7 +1504,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       low_confidence_final = true;
       reasonCodes.push('ROUTING_HINTS_LOW_CONF');
     }
-    if (routingResult.output?.routing?.families_ranked?.length && actCandidatesTop.length) {
+    if (routingResult.output?.routing?.families_ranked?.length && routingResult.output.overall_confidence >= 0.55) {
       const toFamilyKey = (c: string | undefined | null) =>
         (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
       const top2Families = routingResult.output.routing.families_ranked.slice(0, 2).map((f) => f.family_key);
@@ -1497,17 +1518,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         ...selected_acts_sources_breakdown_final,
         from_routing_hints: [],
       };
-      for (const fam of top2Families) {
-        let hasPrimaryFromFamily = false;
+      const hasPrimaryFromFamilyFor = async (fam: string): Promise<boolean> => {
         for (const s of selected_acts_final) {
           const cand = actCandidatesTop.find((a) => a.rada_nreg === s.rada_nreg);
           if (!cand) continue;
-          const meta = await getActMeta(cand.rada_nreg);
-          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) {
-            hasPrimaryFromFamily = true;
-            break;
-          }
+          const meta = await getActMeta(s.rada_nreg);
+          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) return true;
         }
+        return false;
+      };
+      for (const fam of top2Families) {
+        let hasPrimaryFromFamily = await hasPrimaryFromFamilyFor(fam);
         if (hasPrimaryFromFamily) continue;
         for (const cand of actCandidatesTop) {
           if (existingNregs.has(cand.rada_nreg)) continue;
@@ -1529,6 +1550,88 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           (breakdown.from_routing_hints ??= []).push(cand.rada_nreg);
           existingNregs.add(cand.rada_nreg);
           break;
+        }
+      }
+      let stillMissingFamily = false;
+      for (const fam of top2Families) {
+        if (!(await hasPrimaryFromFamilyFor(fam))) {
+          stillMissingFamily = true;
+          break;
+        }
+      }
+      if (
+        stillMissingFamily &&
+        selected_acts_final.length < SELECTED_ACTS_MAX_OUT &&
+        routingResult.output?.query_variants?.[0] != null
+      ) {
+        const extraQuery = routingResult.output.query_variants[0].slice(0, 500);
+        try {
+          const extraEmb = await embedQuery(extraQuery);
+          const extraHits = await qdrantSearch({
+            collection: collections.acts,
+            vector: extraEmb.embedding,
+            limit: 20,
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
+          for (const h of extraHits) {
+            const nreg = (h.payload?.rada_nreg as string)?.trim();
+            if (!nreg || existingNregs.has(nreg)) continue;
+            const meta = await getActMeta(nreg);
+            const title = meta?.title ?? (h.payload?.title as string) ?? '';
+            const famKey = toFamilyKey(meta?.category);
+            if (!top2Families.includes(famKey)) continue;
+            if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
+            selected_acts_final = [
+              ...selected_acts_final,
+              {
+                rada_nreg: nreg,
+                act_title: title,
+                score: (h.score as number) ?? 0,
+                why_selected: 'routing_hints_family_boost',
+                reason_tag: 'from_routing_hints' as const,
+              },
+            ];
+            (breakdown.from_routing_hints ??= []).push(nreg);
+            existingNregs.add(nreg);
+            break;
+          }
+        } catch {
+          // best-effort; keep selected_acts as is
+        }
+      } else if (stillMissingFamily && selected_acts_final.length < SELECTED_ACTS_MAX_OUT) {
+        try {
+          const extraHits = await qdrantSearch({
+            collection: collections.acts,
+            vector,
+            limit: 20,
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
+          for (const h of extraHits) {
+            const nreg = (h.payload?.rada_nreg as string)?.trim();
+            if (!nreg || existingNregs.has(nreg)) continue;
+            const meta = await getActMeta(nreg);
+            const title = meta?.title ?? (h.payload?.title as string) ?? '';
+            const famKey = toFamilyKey(meta?.category);
+            if (!top2Families.includes(famKey)) continue;
+            if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
+            selected_acts_final = [
+              ...selected_acts_final,
+              {
+                rada_nreg: nreg,
+                act_title: title,
+                score: (h.score as number) ?? 0,
+                why_selected: 'routing_hints_family_boost',
+                reason_tag: 'from_routing_hints' as const,
+              },
+            ];
+            (breakdown.from_routing_hints ??= []).push(nreg);
+            existingNregs.add(nreg);
+            break;
+          }
+        } catch {
+          // best-effort
         }
       }
       selected_acts_sources_breakdown_final = breakdown as typeof selected_acts_sources_breakdown_final;
