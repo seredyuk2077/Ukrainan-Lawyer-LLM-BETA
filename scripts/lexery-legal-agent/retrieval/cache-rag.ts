@@ -28,8 +28,14 @@ import {
   scoreActCandidate,
   type TaxonomyCandidatesResult,
 } from './act-taxonomy-store.js';
-import { buildSelectedActs, computeChunksEvidenceTopActs } from './selected-acts.js';
+import { buildSelectedActs, computeChunksEvidenceTopActs, classifyActKind, SELECTED_ACTS_MAX_OUT } from './selected-acts.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
+import {
+  shouldCallRoutingHints,
+  callRoutingHints,
+  type RoutingHintsTriggers,
+  type RoutingHintsInput,
+} from './routing-hints-llm.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -1410,6 +1416,125 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     // low_confidence already set via actSelectionLowConfidence when family weak; also set when guard failed
   }
 
+  // Phase 6.1: Routing-hints LLM (budgeted, rare) — only when triggers fire
+  let routingHintsMeta: {
+    enabled: boolean;
+    called: boolean;
+    call_failed_reason?: string;
+    model_id?: string;
+    tokens_approx?: number;
+    families_ranked_top2?: Array<{ family_key: string; confidence?: number }>;
+    goals_count: number;
+  } = { enabled: config.u4RoutingHintsEnabled, called: false, goals_count: 0 };
+  let selected_acts_final = selected_acts;
+  let selected_acts_sources_breakdown_final = selected_acts_sources_breakdown;
+  let low_confidence_final =
+    useLowConfidenceFallback ||
+    actSelectionLowConfidence ||
+    familyWeakOrNoPrimary ||
+    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED');
+
+  const allowedFamilyKeysSet = new Set<string>(['unknown']);
+  for (const f of familyEvidence.debug.top_families) allowedFamilyKeysSet.add(f.family_key);
+  for (const a of actCandidatesTop) {
+    const meta = await getActMeta(a.rada_nreg);
+    if (meta?.category) {
+      const key = (meta.category ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
+      allowedFamilyKeysSet.add(key);
+    }
+  }
+  const allowed_family_keys = Array.from(allowedFamilyKeysSet);
+
+  const routingTriggers: RoutingHintsTriggers = {
+    family_weak_evidence: familyWeakOrNoPrimary,
+    family_conflict: familyEvidence.family_conflict,
+    selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) < 0.55,
+    reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
+      'COVERAGE_GUARD_FAILED'
+    ),
+    reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
+  };
+
+  if (shouldCallRoutingHints(routingTriggers)) {
+    const taxonomySnapshotSummary = `Categories: ${allowed_family_keys.slice(0, 20).join(', ')}`;
+    const routingInput: RoutingHintsInput = {
+      original_query: query,
+      goals_summary: [{ goal_id: goalSplit.goals[0].id }],
+      taxonomy_snapshot_summary: taxonomySnapshotSummary,
+      family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
+      selected_acts_decision_summary: {
+        confidence: selectedActsResult.selected_acts_confidence,
+        reason_codes: selected_acts_decision.reason_codes,
+      },
+      allowed_family_keys,
+      max_goals: 3,
+    };
+    const routingResult = await callRoutingHints(routingInput);
+    routingHintsMeta = {
+      enabled: config.u4RoutingHintsEnabled,
+      called: routingResult.called,
+      call_failed_reason: routingResult.call_failed_reason,
+      model_id: routingResult.model_id,
+      tokens_approx: routingResult.tokens_approx,
+      families_ranked_top2: routingResult.output?.routing?.families_ranked?.slice(0, 2),
+      goals_count: routingResult.output?.suggested_goals?.length ?? 0,
+    };
+    if (routingResult.output?.overall_confidence != null && routingResult.output.overall_confidence < 0.55) {
+      low_confidence_final = true;
+      reasonCodes.push('ROUTING_HINTS_LOW_CONF');
+    }
+    if (routingResult.output?.routing?.families_ranked?.length && actCandidatesTop.length) {
+      const toFamilyKey = (c: string | undefined | null) =>
+        (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
+      const top2Families = routingResult.output.routing.families_ranked.slice(0, 2).map((f) => f.family_key);
+      const existingNregs = new Set(selected_acts_final.map((s) => s.rada_nreg));
+      const breakdown: {
+        from_taxonomy: string[];
+        from_acts_search: string[];
+        from_chunks_evidence: string[];
+        from_routing_hints?: string[];
+      } = {
+        ...selected_acts_sources_breakdown_final,
+        from_routing_hints: [],
+      };
+      for (const fam of top2Families) {
+        let hasPrimaryFromFamily = false;
+        for (const s of selected_acts_final) {
+          const cand = actCandidatesTop.find((a) => a.rada_nreg === s.rada_nreg);
+          if (!cand) continue;
+          const meta = await getActMeta(cand.rada_nreg);
+          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) {
+            hasPrimaryFromFamily = true;
+            break;
+          }
+        }
+        if (hasPrimaryFromFamily) continue;
+        for (const cand of actCandidatesTop) {
+          if (existingNregs.has(cand.rada_nreg)) continue;
+          if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) break;
+          const meta = await getActMeta(cand.rada_nreg);
+          const famKey = toFamilyKey(meta?.category);
+          if (famKey !== fam) continue;
+          if (classifyActKind(cand.title ?? '') !== 'PRIMARY_LAW') continue;
+          selected_acts_final = [
+            ...selected_acts_final,
+            {
+              rada_nreg: cand.rada_nreg,
+              act_title: cand.title ?? '',
+              score: cand.score ?? 0,
+              why_selected: 'routing_hints',
+              reason_tag: 'from_routing_hints' as const,
+            },
+          ];
+          (breakdown.from_routing_hints ??= []).push(cand.rada_nreg);
+          existingNregs.add(cand.rada_nreg);
+          break;
+        }
+      }
+      selected_acts_sources_breakdown_final = breakdown as typeof selected_acts_sources_breakdown_final;
+    }
+  }
+
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
     source: h.source,
     score: h.score,
@@ -1440,18 +1565,16 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       scores_computed_on: 'final_hits_after_cap_and_guards',
       avg_score_source: 'final_hits_after_cap_and_guards',
       avg_score: avgScore,
-      low_confidence:
-        useLowConfidenceFallback ||
-        actSelectionLowConfidence ||
-        familyWeakOrNoPrimary ||
-        selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED'),
+      low_confidence: low_confidence_final,
       why_low_confidence:
         useLowConfidenceFallback && rawPerStep.length > 0
           ? 'all_hits_below_min_score_fallback_to_top_k'
-          : actSelectionLowConfidence
-            ? 'ACT_SELECTION_LOW_CONFIDENCE'
-            : undefined,
-      selected_acts,
+          : reasonCodes.includes('ROUTING_HINTS_LOW_CONF')
+            ? 'ROUTING_HINTS_LOW_CONF'
+            : actSelectionLowConfidence
+              ? 'ACT_SELECTION_LOW_CONFIDENCE'
+              : undefined,
+      selected_acts: selected_acts_final,
       family_hints: familyHints.length ? familyHints.slice(0, 5).map((h) => h.family) : undefined,
       prior_applied:
         familyHints.length > 0
@@ -1511,13 +1634,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             }
           : undefined,
       reason_codes: reasonCodes.length ? reasonCodes : undefined,
-      selected_acts_sources_breakdown,
+      selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
       chunks_evidence_top_acts,
       selected_acts_decision,
       selected_acts_confidence: selectedActsResult.selected_acts_confidence,
       selected_acts_kinds_count: selectedActsResult.selected_acts_kinds_count,
       family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
+      routing_hints: routingHintsMeta,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,
@@ -1538,7 +1662,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         })),
         distribution_by_act: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
         distribution_by_goal: [{ goal_id: goalSplit.goals[0].id, hits_count: finalHits.length }],
-        selected_acts_sources_breakdown,
+        selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
         chunks_evidence_top_acts,
         selected_acts_decision,
         family_evidence_top2: familyEvidence.debug.top_families,

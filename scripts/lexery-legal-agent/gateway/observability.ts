@@ -47,6 +47,9 @@ const metrics: Record<string, number> = {
   u4_hits_before_cap_gt_200_total: 0,
   u4_family_conflict_total: 0,
   u4_family_weak_evidence_total: 0,
+  u4_routing_hints_called_total: 0,
+  u4_routing_hints_failed_total: 0,
+  u4_routing_hints_used_total: 0,
   taxonomy_refresh_success_total: 0,
   taxonomy_refresh_failed_total: 0,
   taxonomy_snapshot_age_seconds: 0,
@@ -214,6 +217,15 @@ export function incrementU4FamilyConflict() {
 }
 export function incrementU4FamilyWeakEvidence() {
   metrics.u4_family_weak_evidence_total += 1;
+}
+export function incrementU4RoutingHintsCalled() {
+  metrics.u4_routing_hints_called_total += 1;
+}
+export function incrementU4RoutingHintsFailed() {
+  metrics.u4_routing_hints_failed_total += 1;
+}
+export function incrementU4RoutingHintsUsed() {
+  metrics.u4_routing_hints_used_total += 1;
 }
 
 // U4 ActTaxonomyStore (LEX-114, LEX-117)

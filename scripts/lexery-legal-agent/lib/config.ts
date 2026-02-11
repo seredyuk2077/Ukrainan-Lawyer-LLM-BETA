@@ -127,6 +127,46 @@ export const config = {
   // U4 optional rerank (LLM): only when enabled; strict timeout; fallback to hybrid re-score
   u4RerankEnabled: process.env.U4_RERANK_ENABLED === 'true',
   u4RerankTimeoutSec: Math.max(1, Math.min(5, parseInt(process.env.U4_RERANK_TIMEOUT_SEC || '3', 10))),
+
+  // U4 multi-goal evidence (evidence goals max; heuristic splitter cap)
+  u4GoalsMax: Math.max(1, Math.min(5, parseInt(process.env.U4_GOALS_MAX || '3', 10))),
+  /** Per-goal min hits in top N when coverage enforced (multi-goal fusion). */
+  u4FusionTopN: Math.max(10, Math.min(50, parseInt(process.env.U4_FUSION_TOP_N || '30', 10))),
+  u4FusionMinHitsPerGoal: Math.max(2, Math.min(15, parseInt(process.env.U4_FUSION_MIN_HITS_PER_GOAL || '5', 10))),
+
+  // U4 Selective LLM Retrieval Planner (only when triggers; reuse OpenRouter + circuit)
+  u4PlannerEnabled: process.env.U4_PLANNER_ENABLED === 'true',
+  u4PlannerModelId: process.env.U4_PLANNER_MODEL_ID || process.env.CLF_MODEL_ID || 'anthropic/claude-sonnet-4',
+  u4PlannerTimeoutSec: Math.max(2, Math.min(15, parseInt(process.env.U4_PLANNER_TIMEOUT_SEC || '8', 10))),
+  u4PlannerMaxTokens: Math.max(256, Math.min(2048, parseInt(process.env.U4_PLANNER_MAX_TOKENS || '512', 10))),
+  u4PlannerConcurrency: Math.max(1, parseInt(process.env.U4_PLANNER_CONCURRENCY || '2', 10)),
+
+  /** Max raw hits returned to downstream (U5/U9); prevents payload blow-up. */
+  u4HitsCap: Math.max(30, Math.min(200, parseInt(process.env.U4_HITS_CAP || '100', 10))),
+
+  // U4 Weak-labeling (Phase 5.1): optional LLM labeler for low-confidence queries
+  u4LabelerEnabled: process.env.U4_LABELER_ENABLED === 'true',
+  u4LabelerModel: process.env.U4_LABELER_MODEL || process.env.CLF_MODEL_ID || 'openai/gpt-4o-mini',
+  u4LabelerMaxTokens: Math.max(128, Math.min(512, parseInt(process.env.U4_LABELER_MAX_TOKENS || '256', 10))),
+  u4LabelerConfidenceThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U4_LABELER_CONFIDENCE_THRESHOLD || '0.5'))),
+
+  // U4 Act Retrieval Planner (Phase 5.4): LLM-first act routing, budgeted
+  u4ActPlannerEnabled: process.env.U4_ACT_PLANNER_ENABLED === 'true',
+  u4ActPlannerModel: process.env.U4_ACT_PLANNER_MODEL || process.env.CLF_MODEL_ID || 'openai/gpt-4o-mini',
+  u4ActPlannerMaxTokensTier1: Math.max(220, Math.min(350, parseInt(process.env.U4_ACT_PLANNER_MAX_TOKENS_TIER1 || '280', 10))),
+  u4ActPlannerMaxTokensTier2: Math.max(450, Math.min(700, parseInt(process.env.U4_ACT_PLANNER_MAX_TOKENS_TIER2 || '550', 10))),
+  u4ActPlannerMaxCallsPerRun: Math.max(1, Math.min(2, parseInt(process.env.U4_ACT_PLANNER_MAX_CALLS_PER_RUN || '1', 10))),
+  u4ActPlannerTimeoutSec: Math.max(3, Math.min(15, parseInt(process.env.U4_ACT_PLANNER_TIMEOUT_SEC || '10', 10))),
+
+  // U4 Routing-hints LLM (Phase 6.1): budgeted, rare; only when evidence weak/conflict/coverage failed
+  u4RoutingHintsEnabled: process.env.U4_ROUTING_HINTS_ENABLED === 'true',
+  u4RoutingHintsModel:
+    process.env.U4_ROUTING_HINTS_MODEL || process.env.CLF_MODEL_ID || 'anthropic/claude-3.5-haiku',
+  u4RoutingHintsMaxTokens: Math.max(128, Math.min(512, parseInt(process.env.U4_ROUTING_HINTS_MAX_TOKENS || '256', 10))),
+  u4RoutingHintsMaxCallsPerRun: Math.max(1, Math.min(2, parseInt(process.env.U4_ROUTING_HINTS_MAX_CALLS_PER_RUN || '1', 10))),
+  u4RoutingHintsConcurrency: Math.max(1, parseInt(process.env.U4_ROUTING_HINTS_CONCURRENCY || '1', 10)),
+  u4RoutingHintsTimeoutSec: Math.max(3, Math.min(15, parseInt(process.env.U4_ROUTING_HINTS_TIMEOUT_SEC || '8', 10))),
+  u4RoutingHintsCacheByRunId: process.env.U4_ROUTING_HINTS_CACHE_BY_RUN_ID !== 'false',
 } as const;
 
 export function requireEnv(name: string): string {
