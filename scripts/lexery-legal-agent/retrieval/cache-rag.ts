@@ -28,6 +28,7 @@ import {
   scoreActCandidate,
   type TaxonomyCandidatesResult,
 } from './act-taxonomy-store.js';
+import { buildSelectedActs } from './selected-acts.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -1255,17 +1256,33 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       if (c.rada_nreg && c.rationale_short) plannerRationaleByNreg.set(c.rada_nreg, c.rationale_short);
     }
   }
-  const selectedActsCap = actSelectionLowConfidence ? SELECTED_ACTS_CAP_LOW : SELECTED_ACTS_CAP_HIGH;
-  let selectedActsSize = Math.min(selectedActsCap, actCandidatesTop.length);
-  if (actCandidatesTop.length >= 2 && selectedActsSize < 2) selectedActsSize = 2;
-  selectedActsSize = Math.min(SELECTED_ACTS_MAX, selectedActsSize);
-  const selected_acts = actCandidatesTop.slice(0, selectedActsSize).map((a) => ({
+  const taxonomyNregSet = new Set(taxonomyResult.rada_nreg_candidates ?? []);
+
+  // Phase 2: evidence-driven selected_acts (buildSelectedActs 2.0)
+  const selectedActsResult = buildSelectedActs({
+    finalHits,
+    actCandidatesTop,
+    goals_summary: [{ goal_id: goalSplit.goals[0].id }],
+    hits_by_act_top3: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
+    avg_score_by_act_top3: Object.keys(avgScoreByActTop3).length > 0 ? avgScoreByActTop3 : undefined,
+    taxonomyNregs: taxonomyNregSet,
+    actsSearchNregs: actNregsFromSearch,
+    domainHint,
+    actSelectionLowConfidence,
+  });
+  const selected_acts = selectedActsResult.selected_acts.map((a) => ({
     rada_nreg: a.rada_nreg,
-    act_title: a.title,
+    act_title: a.act_title,
     score: a.score,
-    why_selected: plannerRationaleByNreg.get(a.rada_nreg),
-    reason_tag: a.why_tag,
+    why_selected: plannerRationaleByNreg.get(a.rada_nreg) ?? a.why_selected,
+    reason_tag: a.reason_tag,
   }));
+  const selected_acts_sources_breakdown = selectedActsResult.selected_acts_sources_breakdown;
+  const chunks_evidence_top_acts = selectedActsResult.chunks_evidence_top_acts;
+  const selected_acts_decision = selectedActsResult.selected_acts_decision;
+  if (selectedActsResult.selected_acts_reason_codes.length) {
+    reasonCodes.push(...selectedActsResult.selected_acts_reason_codes);
+  }
 
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
     source: h.source,
@@ -1364,6 +1381,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             }
           : undefined,
       reason_codes: reasonCodes.length ? reasonCodes : undefined,
+      selected_acts_sources_breakdown,
+      chunks_evidence_top_acts,
+      selected_acts_decision,
+      selected_acts_confidence: selectedActsResult.selected_acts_confidence,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,
@@ -1384,6 +1405,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         })),
         distribution_by_act: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
         distribution_by_goal: [{ goal_id: goalSplit.goals[0].id, hits_count: finalHits.length }],
+        selected_acts_sources_breakdown,
+        chunks_evidence_top_acts,
+        selected_acts_decision,
       },
     },
   };
