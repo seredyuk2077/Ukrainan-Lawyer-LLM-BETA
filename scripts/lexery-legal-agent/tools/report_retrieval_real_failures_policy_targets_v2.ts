@@ -24,7 +24,10 @@ const DEV_KEY = process.env.DEV_API_KEY ?? 'dev-key-change-me';
 const HEALTH_POLL_MS = 250;
 const HEALTH_TIMEOUT_MS = 20_000;
 const POLL_MS = 400;
-const POLL_TIMEOUT_MS = 240_000;
+/** Per-query poll timeout; one slow case does not kill the run (graceful continue). */
+const POLL_TIMEOUT_MS = 120_000; // 2 min per query
+/** Total wall-clock timeout for all runs (e.g. repeat 3); after this we finish current run and write report. */
+const REPORT_TOTAL_TIMEOUT_MS = 20 * 60 * 1000; // 20 min
 const SHUTDOWN_WAIT_MS = 5_000;
 const EXPECTED_CONFIDENCE_HARD_THRESHOLD = 0.5;
 
@@ -228,14 +231,39 @@ type CaseResult = {
   bucket: BucketV2;
 };
 
+interface RunOnePassOptions {
+  /** If set, stop before next query when Date.now() >= deadlineAt (graceful timeout). */
+  deadlineAt?: number;
+  /** Progress: (queryIndex1Based, totalQueries). */
+  onProgress?: (j: number, total: number) => void;
+}
+
 async function runOnePass(
   baseUrl: string,
   dev: LabeledRow[],
   tenantId: string,
-  userId: string
+  userId: string,
+  options: RunOnePassOptions = {}
 ): Promise<CaseResult[]> {
+  const { deadlineAt, onProgress } = options;
   const results: CaseResult[] = [];
   for (let i = 0; i < dev.length; i++) {
+    if (deadlineAt != null && Date.now() >= deadlineAt) {
+      for (let k = i; k < dev.length; k++) {
+        const row = dev[k];
+        results.push({
+          index: k + 1,
+          row,
+          run: { retrievalTrace: null, latencyMs: 0 },
+          pass: false,
+          softFail: false,
+          hardFail: true,
+          bucket: 'A',
+        });
+      }
+      return results;
+    }
+    onProgress?.(i + 1, dev.length);
     const row = dev[i];
     const run = await runQuery(baseUrl, row.query, tenantId, userId);
     const rt = run.retrievalTrace;
@@ -275,7 +303,16 @@ async function main(): Promise<void> {
   const { dev } = splitLabeled(labeled);
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[report_policy_targets_v2] port', port, 'DEV cases', dev.length, 'repeat', repeat);
+  console.log(
+    '[report_policy_targets_v2] port',
+    port,
+    'DEV cases',
+    dev.length,
+    'repeat',
+    repeat,
+    'total_timeout_ms',
+    REPORT_TOTAL_TIMEOUT_MS
+  );
 
   const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
   const child = spawn(
@@ -287,6 +324,8 @@ async function main(): Promise<void> {
   child.stderr?.on('data', (c) => process.stderr.write(c));
 
   const runsResults: CaseResult[][] = [];
+  const startTime = Date.now();
+  const deadlineAt = startTime + REPORT_TOTAL_TIMEOUT_MS;
 
   try {
     const healthOk = await waitHealth(baseUrl);
@@ -297,8 +336,15 @@ async function main(): Promise<void> {
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
     for (let r = 0; r < repeat; r++) {
+      if (Date.now() >= deadlineAt) {
+        console.log('[report_policy_targets_v2] total timeout reached, stopping after', r, 'runs');
+        break;
+      }
       console.log('[report_policy_targets_v2] run', r + 1, '/', repeat);
-      const oneRun = await runOnePass(baseUrl, dev, tenantId, userId);
+      const oneRun = await runOnePass(baseUrl, dev, tenantId, userId, {
+        deadlineAt,
+        onProgress: (j, total) => console.log('[report_policy_targets_v2] run', r + 1, '/', repeat, 'query', j, '/', total),
+      });
       runsResults.push(oneRun);
       const passCount = oneRun.filter((x) => x.pass).length;
       const hardCount = oneRun.filter((x) => x.hardFail).length;

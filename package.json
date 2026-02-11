@@ -21,6 +21,8 @@
     "brain:label:retrieval-expectations": "tsx scripts/lexery-legal-agent/tools/label_retrieval_expectations.ts",
     "brain:report:retrieval-real-failures": "tsx scripts/lexery-legal-agent/tools/report_retrieval_real_failures.ts",
     "brain:report:retrieval-real-dev-regression": "tsx scripts/lexery-legal-agent/tools/report_retrieval_real_dev_regression.ts",
+    "brain:report:retrieval-real-failures-policy-targets-v2": "tsx scripts/lexery-legal-agent/tools/report_retrieval_real_failures_policy_targets_v2.ts",
+    "brain:report:retrieval-real-failures-policy-targets-v2:repeat3": "tsx scripts/lexery-legal-agent/tools/report_retrieval_real_failures_policy_targets_v2.ts --repeat 3",
     "brain:u2:stress": "tsx scripts/lexery-legal-agent/tools/u2_stress_queries.ts",
     "brain:u2:bench-models": "tsx scripts/lexery-legal-agent/tools/u2_bench_models.ts",
     "brain:u2:loadtest": "tsx scripts/lexery-legal-agent/tools/u2_loadtest.ts",
