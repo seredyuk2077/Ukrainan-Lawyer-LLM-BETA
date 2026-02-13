@@ -64,6 +64,13 @@ interface RunResult {
         called?: boolean;
         call_failed_reason?: string;
         families_ranked_top2?: Array<{ family_key: string; confidence?: number }>;
+        used_reason_codes?: string[];
+        not_used_reason_codes?: string[];
+        used_effect?: {
+          added_act?: { rada_nreg: string; title: string; family_key: string; source: string };
+          added_count: number;
+        };
+        routing_path?: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE';
       };
       family_evidence_summary?: {
         dominant_family_key?: string;
@@ -434,12 +441,20 @@ async function main(): Promise<void> {
   mkdirSync(reportDir, { recursive: true });
   const reportPath = resolve(reportDir, 'retrieval_real_dev_failures_policy_targets_v2.md');
 
+  const lastRun = runsResults[runsResults.length - 1] ?? [];
+  const routingPathCounts: Record<string, number> = { TAXONOMY_FIRST: 0, ACTS_SEARCH: 0, NONE: 0 };
+  for (const c of lastRun) {
+    const path = c.run.retrievalTrace?.meta?.routing_hints?.routing_path ?? 'NONE';
+    routingPathCounts[path] = (routingPathCounts[path] ?? 0) + 1;
+  }
+
   const lines: string[] = [
     '# Retrieval real DEV failures — policy targets v2',
     '',
     `Generated: ${new Date().toISOString()}`,
     `repeat: ${repeat} | consensus: hard_fail if ≥${consensusMin}/${repeat} runs`,
     `hard_fail (consensus): ${hardFails.length} (of ${dev.length} DEV)`,
+    `routing_path (last run): TAXONOMY_FIRST=${routingPathCounts.TAXONOMY_FIRST ?? 0} ACTS_SEARCH=${routingPathCounts.ACTS_SEARCH ?? 0} NONE=${routingPathCounts.NONE ?? 0}`,
     '',
     '## Buckets',
     '- **A)** Wrong family routing',
@@ -512,6 +527,19 @@ async function main(): Promise<void> {
     lines.push('**routing_hints:**');
     lines.push(`- called: ${routingCalled}`);
     lines.push(`- used: ${routingUsed}`);
+    if (routingHints?.not_used_reason_codes?.length) {
+      lines.push(`- not_used_reason_codes: ${JSON.stringify(routingHints.not_used_reason_codes)}`);
+    }
+    if (routingHints?.used_reason_codes?.length) {
+      lines.push(`- used_reason_codes: ${JSON.stringify(routingHints.used_reason_codes)}`);
+    }
+    if (routingHints?.used_effect && routingHints.used_effect.added_count > 0) {
+      lines.push(`- used_effect.added_count: ${routingHints.used_effect.added_count}`);
+      if (routingHints.used_effect.added_act) {
+        lines.push(`- used_effect.added_act: ${JSON.stringify(routingHints.used_effect.added_act)}`);
+      }
+    }
+    lines.push(`- routing_path: ${routingHints?.routing_path ?? 'NONE'}`);
     if (routingHints?.families_ranked_top2?.length) {
       lines.push(`- families_ranked_top2: ${JSON.stringify(routingHints.families_ranked_top2)}`);
     }

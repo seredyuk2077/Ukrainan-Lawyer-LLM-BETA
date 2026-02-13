@@ -1438,6 +1438,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     used_effect: RoutingHintsUsedEffect;
     attempts?: number;
     parse_mode?: 'strict' | 'extract';
+    routing_path?: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE';
   } = {
     enabled: config.u4RoutingHintsEnabled,
     called: false,
@@ -1489,11 +1490,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     family_weak_evidence: familyWeakOrNoPrimary,
     family_conflict: familyEvidence.family_conflict,
     selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) < 0.55,
+    selected_acts_confidence_below_06: (selectedActsResult.selected_acts_confidence ?? 0) < 0.6,
     reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
       'COVERAGE_GUARD_FAILED'
     ),
     reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
     confident_family_mismatch: confidentFamilyMismatch,
+    goals_count: goalSplit.goals?.length ?? 1,
   };
 
   if (!shouldCallRoutingHints(routingTriggers)) {
@@ -1603,163 +1606,133 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         }
       }
       if (allTop2Covered) not_used_reason_codes.push('ALREADY_COVERED');
-      let capBlockedPushed = false;
-      let onlyOrdersFoundPushed = false;
-      for (const fam of top2Families) {
-        if (expandOnlyMode && used_effect.added_count >= 1) break;
-        let hasPrimaryFromFamily = await hasPrimaryFromFamilyFor(fam);
-        if (hasPrimaryFromFamily) continue;
-        let hadCandidatesForFamily = false;
-        let hadPrimaryCandidate = false;
-        for (const cand of actCandidatesTop) {
-          if (existingNregs.has(cand.rada_nreg)) continue;
-          const meta = await getActMeta(cand.rada_nreg);
-          const famKey = toFamilyKey(meta?.category);
-          if (famKey !== fam) continue;
-          hadCandidatesForFamily = true;
-          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW') hadPrimaryCandidate = true;
-          if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) {
-            if (!capBlockedPushed) {
-              not_used_reason_codes.push('CAP_BLOCKED');
-              capBlockedPushed = true;
-            }
-            break;
-          }
-          if (classifyActKind(cand.title ?? '') !== 'PRIMARY_LAW') continue;
-          selected_acts_final = [
-            ...selected_acts_final,
-            {
-              rada_nreg: cand.rada_nreg,
-              act_title: cand.title ?? '',
-              score: cand.score ?? 0,
-              why_selected: expandOnlyMode ? 'routing_hints_family_boost' : 'routing_hints',
-              reason_tag: 'from_routing_hints' as const,
-            },
-          ];
-          (breakdown.from_routing_hints ??= []).push(cand.rada_nreg);
-          existingNregs.add(cand.rada_nreg);
-          used_effect.added_count += 1;
-          if (used_effect.added_count === 1) {
-            used_effect.added_act = {
-              rada_nreg: cand.rada_nreg,
-              title: cand.title ?? '',
-              family_key: fam,
-              source: 'act_candidates',
-            };
-          }
-          if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
-          break;
-        }
-        if (!hadPrimaryCandidate && hadCandidatesForFamily && !onlyOrdersFoundPushed) {
-          not_used_reason_codes.push('ONLY_ORDERS_FOUND');
-          onlyOrdersFoundPushed = true;
-        }
-      }
-      let stillMissingFamily = false;
+      let family_key_target: string | null = null;
       for (const fam of top2Families) {
         if (!(await hasPrimaryFromFamilyFor(fam))) {
-          stillMissingFamily = true;
+          family_key_target = fam;
           break;
         }
       }
-      if (
-        stillMissingFamily &&
-        selected_acts_final.length < SELECTED_ACTS_MAX_OUT &&
-        (!expandOnlyMode || used_effect.added_count < 1) &&
-        routingResult.output?.query_variants?.[0] != null
-      ) {
-        const extraQuery = routingResult.output.query_variants[0].slice(0, 500);
-        try {
-          const extraEmb = await embedQuery(extraQuery);
-          const extraHits = await qdrantSearch({
-            collection: collections.acts,
-            vector: extraEmb.embedding,
-            limit: 20,
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
+      let capBlockedPushed = false;
+      let onlyOrdersFoundPushed = false;
+      if (family_key_target != null && used_effect.added_count < 1) {
+        if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) {
+          not_used_reason_codes.push('CAP_BLOCKED');
+          capBlockedPushed = true;
+        } else {
+          // 4.1 USEFULNESS v3: taxonomy-first — PRIMARY_LAW from actCandidatesTop by category, no Qdrant
+          const taxonomyCandidates = actCandidatesTop.filter((cand) => {
+            if (existingNregs.has(cand.rada_nreg)) return false;
+            const famKey = toFamilyKey(cand.category);
+            if (famKey !== family_key_target) return false;
+            if (classifyActKind(cand.title ?? '') !== 'PRIMARY_LAW') return false;
+            return true;
           });
-          for (const h of extraHits) {
-            const nreg = (h.payload?.rada_nreg as string)?.trim();
-            if (!nreg || existingNregs.has(nreg)) continue;
-            const meta = await getActMeta(nreg);
-            const title = meta?.title ?? (h.payload?.title as string) ?? '';
-            const famKey = toFamilyKey(meta?.category);
-            if (!top2Families.includes(famKey)) continue;
-            if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
+          const hadCandidatesForFamily = actCandidatesTop.some((cand) => {
+            const famKey = toFamilyKey(cand.category);
+            return famKey === family_key_target;
+          });
+          const hadPrimaryInTaxonomy = taxonomyCandidates.length > 0;
+          if (!hadPrimaryInTaxonomy && hadCandidatesForFamily && !onlyOrdersFoundPushed) {
+            not_used_reason_codes.push('ONLY_ORDERS_FOUND');
+            onlyOrdersFoundPushed = true;
+          }
+          if (taxonomyCandidates.length > 0) {
+            taxonomyCandidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+            const best = taxonomyCandidates[0];
             selected_acts_final = [
               ...selected_acts_final,
               {
-                rada_nreg: nreg,
-                act_title: title,
-                score: (h.score as number) ?? 0,
-                why_selected: 'routing_hints_family_boost',
+                rada_nreg: best.rada_nreg,
+                act_title: best.title ?? '',
+                score: best.score ?? 0,
+                why_selected: expandOnlyMode ? 'routing_hints_family_boost' : 'routing_hints',
                 reason_tag: 'from_routing_hints' as const,
               },
             ];
-            (breakdown.from_routing_hints ??= []).push(nreg);
-            existingNregs.add(nreg);
+            (breakdown.from_routing_hints ??= []).push(best.rada_nreg);
+            existingNregs.add(best.rada_nreg);
             used_effect.added_count += 1;
-            if (used_effect.added_count === 1) {
-              used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
-            }
+            used_effect.added_act = {
+              rada_nreg: best.rada_nreg,
+              title: best.title ?? '',
+              family_key: family_key_target,
+              source: 'routing_hints_taxonomy',
+            };
+            used_reason_codes.push('ADDED_PRIMARY_LAW_FROM_TAXONOMY');
             if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
-            break;
-          }
-        } catch {
-          // best-effort; keep selected_acts as is
-        }
-      } else if (
-        stillMissingFamily &&
-        selected_acts_final.length < SELECTED_ACTS_MAX_OUT &&
-        (!expandOnlyMode || used_effect.added_count < 1)
-      ) {
-        try {
-          const extraHits = await qdrantSearch({
-            collection: collections.acts,
-            vector,
-            limit: 20,
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
-          });
-          for (const h of extraHits) {
-            const nreg = (h.payload?.rada_nreg as string)?.trim();
-            if (!nreg || existingNregs.has(nreg)) continue;
-            const meta = await getActMeta(nreg);
-            const title = meta?.title ?? (h.payload?.title as string) ?? '';
-            const famKey = toFamilyKey(meta?.category);
-            if (!top2Families.includes(famKey)) continue;
-            if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
-            selected_acts_final = [
-              ...selected_acts_final,
-              {
-                rada_nreg: nreg,
-                act_title: title,
-                score: (h.score as number) ?? 0,
-                why_selected: 'routing_hints_family_boost',
-                reason_tag: 'from_routing_hints' as const,
-              },
-            ];
-            (breakdown.from_routing_hints ??= []).push(nreg);
-            existingNregs.add(nreg);
-            used_effect.added_count += 1;
-            if (used_effect.added_count === 1) {
-              used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
+          } else {
+            not_used_reason_codes.push('NO_TAXONOMY_PRIMARY_ACT');
+            // Fallback: one extra acts-search (query_variants[0] or vector)
+            const runExtraSearch = !expandOnlyMode || used_effect.added_count < 1;
+            if (runExtraSearch) {
+              try {
+                const extraVector =
+                  routingResult.output?.query_variants?.[0] != null
+                    ? (await embedQuery(routingResult.output.query_variants[0].slice(0, 500))).embedding
+                    : vector;
+                const extraHits = await qdrantSearch({
+                  collection: collections.acts,
+                  vector: extraVector,
+                  limit: 20,
+                  timeoutMs: config.qdrantTimeoutSec * 1000,
+                  callCounter: qdrantCallCounter,
+                });
+                for (const h of extraHits) {
+                  const nreg = (h.payload?.rada_nreg as string)?.trim();
+                  if (!nreg || existingNregs.has(nreg)) continue;
+                  const meta = await getActMeta(nreg);
+                  const title = meta?.title ?? (h.payload?.title as string) ?? '';
+                  const famKey = toFamilyKey(meta?.category);
+                  if (famKey !== family_key_target) continue;
+                  if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
+                  selected_acts_final = [
+                    ...selected_acts_final,
+                    {
+                      rada_nreg: nreg,
+                      act_title: title,
+                      score: (h.score as number) ?? 0,
+                      why_selected: 'routing_hints_family_boost',
+                      reason_tag: 'from_routing_hints' as const,
+                    },
+                  ];
+                  (breakdown.from_routing_hints ??= []).push(nreg);
+                  existingNregs.add(nreg);
+                  used_effect.added_count += 1;
+                  used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
+                  used_reason_codes.push('ADDED_PRIMARY_LAW_FROM_ACTS_SEARCH');
+                  if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
+                  break;
+                }
+                if (used_effect.added_count === 0) not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
+              } catch {
+                not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
+              }
+            } else {
+              not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
             }
-            if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
-            break;
           }
-        } catch {
-          // best-effort
         }
       }
-      if (stillMissingFamily) not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
       if (used_effect.added_count > 0) {
         used_reason_codes.push('ADDED_PRIMARY_LAW');
         incrementU4RoutingHintsUsed();
       } else {
         for (const r of not_used_reason_codes) incrementU4RoutingHintsNotUsed(r);
       }
-      routingHintsMeta = { ...routingHintsMeta, used_reason_codes, not_used_reason_codes, used_effect };
+      const routing_path: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE' =
+        used_effect.added_act?.source === 'routing_hints_taxonomy'
+          ? 'TAXONOMY_FIRST'
+          : used_effect.added_act?.source === 'extra_acts_search'
+            ? 'ACTS_SEARCH'
+            : 'NONE';
+      routingHintsMeta = {
+        ...routingHintsMeta,
+        used_reason_codes,
+        not_used_reason_codes,
+        used_effect,
+        routing_path,
+      };
       selected_acts_sources_breakdown_final = breakdown as typeof selected_acts_sources_breakdown_final;
     } else {
       if (used_effect.added_count === 0) {
