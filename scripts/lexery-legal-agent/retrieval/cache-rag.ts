@@ -36,6 +36,10 @@ import {
   type RoutingHintsTriggers,
   type RoutingHintsInput,
 } from './routing-hints-llm.js';
+import {
+  incrementU4RoutingHintsNotUsed,
+  incrementU4RoutingHintsUsed,
+} from '../gateway/observability.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -1417,6 +1421,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
 
   // Phase 6.1: Routing-hints LLM (budgeted, rare) — only when triggers fire
+  type RoutingHintsUsedEffect = {
+    added_act?: { rada_nreg: string; title: string; family_key: string; source: string };
+    added_count: number;
+  };
   let routingHintsMeta: {
     enabled: boolean;
     called: boolean;
@@ -1425,7 +1433,19 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     tokens_approx?: number;
     families_ranked_top2?: Array<{ family_key: string; confidence?: number }>;
     goals_count: number;
-  } = { enabled: config.u4RoutingHintsEnabled, called: false, goals_count: 0 };
+    used_reason_codes: string[];
+    not_used_reason_codes: string[];
+    used_effect: RoutingHintsUsedEffect;
+    attempts?: number;
+    parse_mode?: 'strict' | 'extract';
+  } = {
+    enabled: config.u4RoutingHintsEnabled,
+    called: false,
+    goals_count: 0,
+    used_reason_codes: [],
+    not_used_reason_codes: [],
+    used_effect: { added_count: 0 },
+  };
   let selected_acts_final = selected_acts;
   let selected_acts_sources_breakdown_final = selected_acts_sources_breakdown;
   let low_confidence_final =
@@ -1476,7 +1496,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     confident_family_mismatch: confidentFamilyMismatch,
   };
 
-  if (shouldCallRoutingHints(routingTriggers)) {
+  if (!shouldCallRoutingHints(routingTriggers)) {
+    routingHintsMeta = { ...routingHintsMeta, not_used_reason_codes: ['NOT_CALLED'] };
+    incrementU4RoutingHintsNotUsed('NOT_CALLED');
+  } else {
     const taxonomySnapshotSummary = `Categories: ${allowed_family_keys.slice(0, 20).join(', ')}`;
     const routingInput: RoutingHintsInput = {
       original_query: query,
@@ -1491,6 +1514,42 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       max_goals: 3,
     };
     const routingResult = await callRoutingHints(routingInput);
+    const used_reason_codes: string[] = [];
+    const not_used_reason_codes: string[] = [];
+    const used_effect: RoutingHintsUsedEffect = { added_count: 0 };
+
+    if (routingResult.call_failed_reason) {
+      if (
+        routingResult.call_failed_reason === 'INVALID_JSON' ||
+        routingResult.call_failed_reason === 'INVALID_JSON_PARSE'
+      )
+        not_used_reason_codes.push('INVALID_JSON');
+      else if (
+        routingResult.call_failed_reason === 'VALIDATION_FAILED' ||
+        routingResult.call_failed_reason === 'INVALID_JSON_SCHEMA'
+      )
+        not_used_reason_codes.push('SCHEMA_MISMATCH');
+      else not_used_reason_codes.push(routingResult.call_failed_reason.slice(0, 32));
+    }
+    if (routingResult.output && !routingResult.output.routing?.families_ranked?.length) {
+      not_used_reason_codes.push('NO_FAMILIES');
+    }
+    if (
+      routingResult.output?.overall_confidence != null &&
+      routingResult.output.overall_confidence < 0.55
+    ) {
+      not_used_reason_codes.push('CONF_TOO_LOW');
+    }
+    const conf = routingResult.output?.overall_confidence ?? 0;
+    const expandAllowed =
+      confidentFamilyMismatch ||
+      familyWeakOrNoPrimary ||
+      selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
+      reasonCodes.includes('NO_STRONG_ACT_EVIDENCE');
+    if (conf < 0.55 && !expandAllowed && routingResult.output?.routing?.families_ranked?.length) {
+      not_used_reason_codes.push('EXPAND_NOT_ALLOWED');
+    }
+
     routingHintsMeta = {
       enabled: config.u4RoutingHintsEnabled,
       called: routingResult.called,
@@ -1499,15 +1558,24 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       tokens_approx: routingResult.tokens_approx,
       families_ranked_top2: routingResult.output?.routing?.families_ranked?.slice(0, 2),
       goals_count: routingResult.output?.suggested_goals?.length ?? 0,
+      used_reason_codes,
+      not_used_reason_codes,
+      used_effect,
+      attempts: routingResult.attempts,
+      parse_mode: routingResult.parse_mode,
     };
     if (routingResult.output?.overall_confidence != null && routingResult.output.overall_confidence < 0.55) {
       low_confidence_final = true;
       reasonCodes.push('ROUTING_HINTS_LOW_CONF');
     }
-    if (routingResult.output?.routing?.families_ranked?.length && routingResult.output.overall_confidence >= 0.55) {
+    const steerMode = conf >= 0.55;
+    const expandOnlyMode = conf < 0.55 && expandAllowed;
+    const mayApplyRouting =
+      (routingResult.output?.routing?.families_ranked?.length ?? 0) > 0 && (steerMode || expandOnlyMode);
+    if (mayApplyRouting) {
       const toFamilyKey = (c: string | undefined | null) =>
         (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
-      const top2Families = routingResult.output.routing.families_ranked.slice(0, 2).map((f) => f.family_key);
+      const top2Families = (routingResult.output?.routing?.families_ranked ?? []).slice(0, 2).map((f) => f.family_key);
       const existingNregs = new Set(selected_acts_final.map((s) => s.rada_nreg));
       const breakdown: {
         from_taxonomy: string[];
@@ -1527,15 +1595,36 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         }
         return false;
       };
+      let allTop2Covered = true;
       for (const fam of top2Families) {
+        if (!(await hasPrimaryFromFamilyFor(fam))) {
+          allTop2Covered = false;
+          break;
+        }
+      }
+      if (allTop2Covered) not_used_reason_codes.push('ALREADY_COVERED');
+      let capBlockedPushed = false;
+      let onlyOrdersFoundPushed = false;
+      for (const fam of top2Families) {
+        if (expandOnlyMode && used_effect.added_count >= 1) break;
         let hasPrimaryFromFamily = await hasPrimaryFromFamilyFor(fam);
         if (hasPrimaryFromFamily) continue;
+        let hadCandidatesForFamily = false;
+        let hadPrimaryCandidate = false;
         for (const cand of actCandidatesTop) {
           if (existingNregs.has(cand.rada_nreg)) continue;
-          if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) break;
           const meta = await getActMeta(cand.rada_nreg);
           const famKey = toFamilyKey(meta?.category);
           if (famKey !== fam) continue;
+          hadCandidatesForFamily = true;
+          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW') hadPrimaryCandidate = true;
+          if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) {
+            if (!capBlockedPushed) {
+              not_used_reason_codes.push('CAP_BLOCKED');
+              capBlockedPushed = true;
+            }
+            break;
+          }
           if (classifyActKind(cand.title ?? '') !== 'PRIMARY_LAW') continue;
           selected_acts_final = [
             ...selected_acts_final,
@@ -1543,13 +1632,27 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
               rada_nreg: cand.rada_nreg,
               act_title: cand.title ?? '',
               score: cand.score ?? 0,
-              why_selected: 'routing_hints',
+              why_selected: expandOnlyMode ? 'routing_hints_family_boost' : 'routing_hints',
               reason_tag: 'from_routing_hints' as const,
             },
           ];
           (breakdown.from_routing_hints ??= []).push(cand.rada_nreg);
           existingNregs.add(cand.rada_nreg);
+          used_effect.added_count += 1;
+          if (used_effect.added_count === 1) {
+            used_effect.added_act = {
+              rada_nreg: cand.rada_nreg,
+              title: cand.title ?? '',
+              family_key: fam,
+              source: 'act_candidates',
+            };
+          }
+          if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
           break;
+        }
+        if (!hadPrimaryCandidate && hadCandidatesForFamily && !onlyOrdersFoundPushed) {
+          not_used_reason_codes.push('ONLY_ORDERS_FOUND');
+          onlyOrdersFoundPushed = true;
         }
       }
       let stillMissingFamily = false;
@@ -1562,6 +1665,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       if (
         stillMissingFamily &&
         selected_acts_final.length < SELECTED_ACTS_MAX_OUT &&
+        (!expandOnlyMode || used_effect.added_count < 1) &&
         routingResult.output?.query_variants?.[0] != null
       ) {
         const extraQuery = routingResult.output.query_variants[0].slice(0, 500);
@@ -1594,12 +1698,21 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             ];
             (breakdown.from_routing_hints ??= []).push(nreg);
             existingNregs.add(nreg);
+            used_effect.added_count += 1;
+            if (used_effect.added_count === 1) {
+              used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
+            }
+            if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
             break;
           }
         } catch {
           // best-effort; keep selected_acts as is
         }
-      } else if (stillMissingFamily && selected_acts_final.length < SELECTED_ACTS_MAX_OUT) {
+      } else if (
+        stillMissingFamily &&
+        selected_acts_final.length < SELECTED_ACTS_MAX_OUT &&
+        (!expandOnlyMode || used_effect.added_count < 1)
+      ) {
         try {
           const extraHits = await qdrantSearch({
             collection: collections.acts,
@@ -1628,13 +1741,31 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             ];
             (breakdown.from_routing_hints ??= []).push(nreg);
             existingNregs.add(nreg);
+            used_effect.added_count += 1;
+            if (used_effect.added_count === 1) {
+              used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
+            }
+            if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
             break;
           }
         } catch {
           // best-effort
         }
       }
+      if (stillMissingFamily) not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
+      if (used_effect.added_count > 0) {
+        used_reason_codes.push('ADDED_PRIMARY_LAW');
+        incrementU4RoutingHintsUsed();
+      } else {
+        for (const r of not_used_reason_codes) incrementU4RoutingHintsNotUsed(r);
+      }
+      routingHintsMeta = { ...routingHintsMeta, used_reason_codes, not_used_reason_codes, used_effect };
       selected_acts_sources_breakdown_final = breakdown as typeof selected_acts_sources_breakdown_final;
+    } else {
+      if (used_effect.added_count === 0) {
+        for (const r of not_used_reason_codes) incrementU4RoutingHintsNotUsed(r);
+      }
+      routingHintsMeta = { ...routingHintsMeta, used_reason_codes, not_used_reason_codes, used_effect };
     }
   }
 
