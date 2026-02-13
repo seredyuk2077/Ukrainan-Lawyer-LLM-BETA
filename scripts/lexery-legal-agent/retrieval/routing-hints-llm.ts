@@ -9,7 +9,7 @@ import { config } from '../lib/config.js';
 import {
   incrementU4RoutingHintsCalled,
   incrementU4RoutingHintsFailed,
-  incrementU4RoutingHintsUsed,
+  incrementU4RoutingHintsInvalidJson,
 } from '../gateway/observability.js';
 
 const SuggestedGoalSchema = z.object({
@@ -64,26 +64,32 @@ export type RoutingHintsTriggers = {
   family_weak_evidence: boolean;
   family_conflict: boolean;
   selected_acts_confidence_below_055: boolean;
+  /** v3: confidence < 0.6 for conflict trigger (TRIGGER_STRONG). */
+  selected_acts_confidence_below_06?: boolean;
   reason_codes_include_coverage_guard_failed: boolean;
   reason_codes_include_no_strong_act_evidence: boolean;
   query_short_cryptic_high_entropy?: boolean;
   /** v2: dominant family has strong support but selected_acts don't contain that family (evidence-based, no word→family). */
   confident_family_mismatch?: boolean;
+  /** v3: single goal for TRIGGER_MEDIUM (optional). */
+  goals_count?: number;
 };
 
 const CONFIDENT_FAMILY_SUPPORT_THRESHOLD = 0.62;
 
+/** v3: Budget guard ≤25%. TRIGGER_STRONG + TRIGGER_MEDIUM + coverage_guard_failed (single-goal path). */
 export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean {
   if (!config.u4RoutingHintsEnabled || !config.openRouterApiKey) return false;
-  return (
-    triggers.family_weak_evidence ||
-    triggers.family_conflict ||
-    triggers.selected_acts_confidence_below_055 ||
-    triggers.reason_codes_include_coverage_guard_failed ||
-    triggers.reason_codes_include_no_strong_act_evidence ||
-    (triggers.query_short_cryptic_high_entropy ?? false) ||
-    (triggers.confident_family_mismatch ?? false)
-  );
+  const strongMismatch = triggers.confident_family_mismatch === true;
+  const strongConflict =
+    triggers.family_conflict === true && (triggers.selected_acts_confidence_below_06 === true);
+  if (strongMismatch || strongConflict) return true;
+  const medium =
+    triggers.family_weak_evidence === true &&
+    (triggers.goals_count ?? 1) === 1 &&
+    triggers.selected_acts_confidence_below_055 === true;
+  if (medium) return true;
+  return triggers.reason_codes_include_coverage_guard_failed === true && (triggers.goals_count ?? 1) === 1;
 }
 
 function mapFamilyKeyToAllowed(key: string, allowed: string[]): string {
@@ -128,7 +134,28 @@ ${decisionLine}
 
 Taxonomy snapshot (top categories/families): ${input.taxonomy_snapshot_summary.slice(0, 800)}
 
-Поверни лише JSON об'єкт.`;
+Return ONLY valid JSON. No markdown. No text. No comments. Schema: { suggested_goals?: [], routing?: { families_ranked?: [{ family_key, confidence? }], ... }, query_variants?: [], missing_info_flags?: [], overall_confidence?: 0-1, rationale_short?: "" }.`;
+}
+
+const RETRY_SYSTEM =
+  'Your previous output was invalid JSON. Return ONLY valid JSON matching the schema. No extra keys. No markdown.';
+
+/** Best-effort: strip markdown/backticks, extract first { ... last }. */
+function extractJsonBestEffort(trimmed: string): { jsonStr: string; parse_mode: 'strict' | 'extract' } {
+  let s = trimmed;
+  const backtickMatch = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (backtickMatch) {
+    s = backtickMatch[1].trim();
+  }
+  const firstBrace = s.indexOf('{');
+  const lastBrace = s.lastIndexOf('}');
+  if (firstBrace === 0 && lastBrace === s.length - 1) {
+    return { jsonStr: s, parse_mode: 'strict' };
+  }
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return { jsonStr: s.slice(firstBrace, lastBrace + 1), parse_mode: 'extract' };
+  }
+  return { jsonStr: s, parse_mode: 'extract' };
 }
 
 export type RoutingHintsCallResult = {
@@ -138,7 +165,47 @@ export type RoutingHintsCallResult = {
   model_id?: string;
   duration_ms?: number;
   tokens_approx?: number;
+  /** Phase 2: 1 or 2 when retry was used */
+  attempts?: number;
+  /** Phase 2: "strict" when content was already JSON-like, "extract" when best-effort extraction was used */
+  parse_mode?: 'strict' | 'extract';
 };
+
+async function doOneCall(
+  input: RoutingHintsInput,
+  messages: Array<{ role: 'system' | 'user'; content: string }>
+): Promise<{
+  content: string;
+  model_id?: string;
+  parse_mode: 'strict' | 'extract';
+  parseError?: boolean;
+  schemaError?: boolean;
+  output?: z.infer<typeof RoutingHintsOutputSchema>;
+}> {
+  const res = await openRouterChat(
+    config.openRouterApiKey!,
+    {
+      model: config.u4RoutingHintsModel,
+      messages,
+      temperature: 0.1,
+      max_tokens: config.u4RoutingHintsMaxTokens,
+    },
+    config.u4RoutingHintsTimeoutSec
+  );
+  const trimmed = (res.content ?? '').trim();
+  const { jsonStr, parse_mode } = extractJsonBestEffort(trimmed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return { content: res.content ?? '', model_id: res.model_id, parse_mode, parseError: true };
+  }
+  const validated = RoutingHintsOutputSchema.safeParse(parsed);
+  if (!validated.success) {
+    return { content: res.content ?? '', model_id: res.model_id, parse_mode, schemaError: true };
+  }
+  return { content: res.content ?? '', model_id: res.model_id, parse_mode, output: validated.data };
+}
 
 export async function callRoutingHints(input: RoutingHintsInput): Promise<RoutingHintsCallResult> {
   if (!config.u4RoutingHintsEnabled || !config.openRouterApiKey) {
@@ -150,52 +217,48 @@ export async function callRoutingHints(input: RoutingHintsInput): Promise<Routin
 
   try {
     const prompt = buildPrompt(input);
-    const res = await openRouterChat(
-      config.openRouterApiKey,
-      {
-        model: config.u4RoutingHintsModel,
-        messages: [
-          { role: 'system', content: 'Ти повертаєш лише один JSON об\'єкт без markdown та без коментарів.' },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.1,
-        max_tokens: config.u4RoutingHintsMaxTokens,
-      },
-      config.u4RoutingHintsTimeoutSec
-    );
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+      { role: 'system', content: 'Return ONLY valid JSON. No markdown. No text. No comments.' },
+      { role: 'user', content: prompt },
+    ];
 
-    const duration_ms = Date.now() - started;
-    const trimmed = res.content.trim();
-    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-    const jsonStr = jsonMatch ? jsonMatch[0] : trimmed;
+    let result = await doOneCall(input, messages);
+    let attempts: number = 1;
+    if (result.parseError || result.schemaError) {
+      messages.push({ role: 'assistant', content: result.content });
+      messages.push({ role: 'user', content: RETRY_SYSTEM });
+      result = await doOneCall(input, messages);
+      attempts = 2;
+    }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
+    if (result.parseError) {
       incrementU4RoutingHintsFailed();
+      incrementU4RoutingHintsInvalidJson();
       return {
         output: null,
         called: true,
-        call_failed_reason: 'INVALID_JSON',
-        model_id: res.model_id,
-        duration_ms,
+        call_failed_reason: 'INVALID_JSON_PARSE',
+        model_id: result.model_id,
+        duration_ms: Date.now() - started,
+        attempts,
+        parse_mode: result.parse_mode,
       };
     }
-
-    const validated = RoutingHintsOutputSchema.safeParse(parsed);
-    if (!validated.success) {
+    if (result.schemaError) {
       incrementU4RoutingHintsFailed();
+      incrementU4RoutingHintsInvalidJson();
       return {
         output: null,
         called: true,
-        call_failed_reason: 'VALIDATION_FAILED',
-        model_id: res.model_id,
-        duration_ms,
+        call_failed_reason: 'INVALID_JSON_SCHEMA',
+        model_id: result.model_id,
+        duration_ms: Date.now() - started,
+        attempts,
+        parse_mode: result.parse_mode,
       };
     }
 
-    const output = validated.data;
+    const output = result.output!;
     const allowed = input.allowed_family_keys;
 
     const mappedRouting = {
@@ -219,24 +282,27 @@ export async function callRoutingHints(input: RoutingHintsInput): Promise<Routin
       suggested_goals: mappedGoals,
     };
 
-    incrementU4RoutingHintsUsed();
-    const tokens_approx = Math.min(config.u4RoutingHintsMaxTokens, (res.content?.length ?? 0) / 4 + 100);
+    const duration_ms = Date.now() - started;
+    const tokens_approx = Math.min(config.u4RoutingHintsMaxTokens, (result.content?.length ?? 0) / 4 + 100);
 
     return {
       output: mappedOutput,
       called: true,
-      model_id: res.model_id,
+      model_id: result.model_id,
       duration_ms,
       tokens_approx,
+      attempts,
+      parse_mode: result.parse_mode,
     };
   } catch (err) {
     incrementU4RoutingHintsFailed();
     const duration_ms = Date.now() - started;
     const reason = err instanceof Error ? err.message : 'CALL_FAILED';
+    const isTimeout = /timeout|ETIMEDOUT/i.test(reason);
     return {
       output: null,
       called: true,
-      call_failed_reason: reason.slice(0, 64),
+      call_failed_reason: isTimeout ? 'TIMEOUT' : reason.slice(0, 64),
       duration_ms,
     };
   }
