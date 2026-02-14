@@ -26,8 +26,12 @@ import {
   getTaxonomyCandidates,
   getActMeta,
   scoreActCandidate,
+  findActByTitleFragment,
+  findActByAlias,
   type TaxonomyCandidatesResult,
 } from './act-taxonomy-store.js';
+import { getFragmentFromR2 } from './r2-fragment.js';
+import { expandReferences, type ReferenceExpansionMeta } from './reference-expander.js';
 import { buildSelectedActs, computeChunksEvidenceTopActs, classifyActKind, SELECTED_ACTS_MAX_OUT } from './selected-acts.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
 import {
@@ -39,9 +43,74 @@ import {
 import {
   incrementU4RoutingHintsNotUsed,
   incrementU4RoutingHintsUsed,
+  incrementU4DomainBootstrapAttempted,
+  incrementU4DomainBootstrapUsed,
+  incrementU4DomainBootstrapConflict,
 } from '../gateway/observability.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
+
+/** Domain hint is weak when absent or generic/unknown (no strong signal for category injection). */
+function isDomainWeak(domainHint: string | undefined): boolean {
+  if (!domainHint || !domainHint.trim()) return true;
+  const k = domainHint.normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
+  return k === 'general' || k === 'unknown' || k === '';
+}
+
+/** Domain bootstrap: from top act hits build category histogram; if clear leader, return effective_domain_hint (evidence-based, no wordlists). */
+const DOMAIN_BOOTSTRAP_ACT_LIMIT = 20;
+const DOMAIN_BOOTSTRAP_MIN_SUPPORT = 2;
+const DOMAIN_BOOTSTRAP_MIN_GAP = 1;
+
+export type DomainBootstrapResult = {
+  attempted: boolean;
+  used: boolean;
+  chosen_family_key?: string;
+  top_categories?: string[];
+  reason_codes: string[];
+};
+
+async function domainBootstrapFromActHits(
+  actHits: { payload?: Record<string, unknown> }[]
+): Promise<DomainBootstrapResult> {
+  const reasonCodes: string[] = [];
+  const radaNregs = actHits
+    .map((h) => (h.payload?.rada_nreg as string)?.trim())
+    .filter((n): n is string => !!n);
+  if (radaNregs.length === 0) {
+    reasonCodes.push('NO_ACT_HITS');
+    return { attempted: true, used: false, reason_codes: reasonCodes };
+  }
+  const categoryCount = new Map<string, number>();
+  for (const nreg of radaNregs) {
+    const meta = await getActMeta(nreg);
+    const cat = meta?.category?.trim();
+    if (cat) {
+      const key = cat.normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
+      categoryCount.set(key, (categoryCount.get(key) ?? 0) + 1);
+    }
+  }
+  const sorted = [...categoryCount.entries()].sort((a, b) => b[1] - a[1]);
+  const top1 = sorted[0];
+  const top2 = sorted[1];
+  if (!top1 || top1[1] < DOMAIN_BOOTSTRAP_MIN_SUPPORT) {
+    reasonCodes.push('LOW_SUPPORT');
+    return { attempted: true, used: false, top_categories: sorted.map(([c]) => c), reason_codes: reasonCodes };
+  }
+  const gap = top2 ? top1[1] - top2[1] : top1[1];
+  if (gap < DOMAIN_BOOTSTRAP_MIN_GAP) {
+    reasonCodes.push('CONFLICT');
+    incrementU4DomainBootstrapConflict();
+    return { attempted: true, used: false, top_categories: sorted.map(([c]) => c), reason_codes: reasonCodes };
+  }
+  return {
+    attempted: true,
+    used: true,
+    chosen_family_key: top1[0],
+    top_categories: sorted.map(([c]) => c),
+    reason_codes: reasonCodes.length ? reasonCodes : ['CLEAR_LEADER'],
+  };
+}
 
 const QUERY_MAX_CHARS = 12000;
 /** Hybrid re-score weights (no extra LLM). Vector remains primary. */
@@ -418,7 +487,7 @@ function hybridScore(
   );
 }
 
-/** Single-goal retrieval: embed + taxonomy + steps + within-act + hybrid sort. Returns hits with goal_id set. */
+/** Single-goal retrieval: embed + taxonomy + optional domain bootstrap + steps + within-act + hybrid sort. Returns hits with goal_id set. */
 async function runOneGoal(
   goal: EvidenceGoal,
   entities: { act_abbrev?: string; article_ref?: string }[] | undefined,
@@ -433,6 +502,7 @@ async function runOneGoal(
   stepsLatencyMs: number[];
   collectionsUsed: string[];
   taxonomyResult: TaxonomyCandidatesResult;
+  domainBootstrap?: DomainBootstrapResult;
 }> {
   const stepsLatencyMs: number[] = [];
   const collectionsUsed: string[] = [];
@@ -475,16 +545,51 @@ async function runOneGoal(
   }
   if (!vector?.length) return { hits: [], actNregsForSummary: [], usedFilteredChunks: false, stepsLatencyMs, collectionsUsed, taxonomyResult };
 
+  let domainBootstrap: DomainBootstrapResult | undefined;
+  let bootstrapActNregs: string[] = [];
+  const domainWeak = isDomainWeak(goal.domain_hint);
+  const taxonomyCandidatesWeak = (taxonomyResult.rada_nreg_candidates?.length ?? 0) < 2;
+  if (domainWeak && taxonomyCandidatesWeak && callCounter && callCounter.count < 25) {
+    incrementU4DomainBootstrapAttempted();
+    try {
+      const actStart = Date.now();
+      const actHits = await qdrantSearch({
+        collection: collections.acts,
+        vector,
+        limit: DOMAIN_BOOTSTRAP_ACT_LIMIT,
+        timeoutMs: config.qdrantTimeoutSec * 1000,
+        callCounter,
+      });
+      stepsLatencyMs.push(Date.now() - actStart);
+      collectionsUsed.push(collections.acts);
+      domainBootstrap = await domainBootstrapFromActHits(actHits);
+      bootstrapActNregs = actHits
+        .map((h) => (h.payload?.rada_nreg as string)?.trim())
+        .filter((n): n is string => !!n);
+      if (domainBootstrap.used && domainBootstrap.chosen_family_key) {
+        incrementU4DomainBootstrapUsed();
+        taxonomyResult = await getTaxonomyCandidates({
+          query: goal.subquery,
+          domainHint: domainBootstrap.chosen_family_key,
+          entities,
+        });
+      }
+    } catch {
+      domainBootstrap = { attempted: true, used: false, reason_codes: ['ACTS_SEARCH_FAILED'] };
+    }
+  }
+
   const stepsToRun: Array<{ kind: 'lldbi_chunks' | 'lldbi_acts'; collection: string }> = [];
   if (steps?.length) {
     for (const s of steps) {
       if (s.kind === 'lldbi_chunks') stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-      else if (s.kind === 'lldbi_acts') stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
+      else if (s.kind === 'lldbi_acts' && bootstrapActNregs.length === 0)
+        stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
     }
   }
   if (stepsToRun.length === 0) {
     stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-    stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
+    if (bootstrapActNregs.length === 0) stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
   }
   const rawPerStep: RawHit[] = [];
   for (const { kind, collection } of stepsToRun) {
@@ -519,60 +624,49 @@ async function runOneGoal(
 
   let topScore = hits.length > 0 ? Math.max(...hits.map((h) => h.score)) : null;
   const hasActCandidates =
-    (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 || stepsToRun.some((s) => s.kind === 'lldbi_acts');
+    (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 ||
+    bootstrapActNregs.length > 0 ||
+    stepsToRun.some((s) => s.kind === 'lldbi_acts');
   let usedFilteredChunks = false;
   const actNregsForSummary: string[] = [];
 
-  if (hasActCandidates && stepsToRun.some((s) => s.kind === 'lldbi_acts')) {
-    const actsStep = stepsToRun.find((s) => s.kind === 'lldbi_acts');
-    if (actsStep) {
-      try {
-        const actStart = Date.now();
-        const actHits = await qdrantSearch({
-          collection: actsStep.collection,
+  const actNregsFromStep = rawPerStep
+    .filter((h) => h.rada_nreg)
+    .map((h) => (h.rada_nreg as string).trim())
+    .filter(Boolean);
+  const allActNregs = [...new Set([...bootstrapActNregs, ...actNregsFromStep, ...(taxonomyResult.rada_nreg_candidates ?? [])])];
+  const topNregs = allActNregs.slice(0, TWO_STAGE_ACTS_TOP);
+
+  if (hasActCandidates && topNregs.length > 0) {
+    try {
+      actNregsForSummary.push(...topNregs);
+      const chunkStart = Date.now();
+      for (const nreg of topNregs) {
+        const ch = await qdrantSearch({
+          collection: collections.chunks,
           vector,
-          limit: searchPlan.thresholds?.top_k_acts ?? 10,
+          limit: TWO_STAGE_CHUNKS_PER_ACT,
+          filter: { must: [{ key: 'rada_nreg', match: { value: nreg } }] },
           timeoutMs: config.qdrantTimeoutSec * 1000,
           callCounter,
         });
-        stepsLatencyMs.push(Date.now() - actStart);
-        const actNregs = actHits
-          .map((h) => (h.payload?.rada_nreg as string)?.trim())
-          .filter((n): n is string => !!n);
-        actNregsForSummary.push(...actNregs);
-        const taxonomyNregs = taxonomyResult.rada_nreg_candidates ?? [];
-        const mergedNregs = [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
-        const topNregs = mergedNregs.length > 0 ? mergedNregs : actNregs.slice(0, TWO_STAGE_ACTS_TOP);
-        if (topNregs.length > 0) {
-          const chunkStart = Date.now();
-          for (const nreg of topNregs) {
-            const ch = await qdrantSearch({
-              collection: collections.chunks,
-              vector,
-              limit: TWO_STAGE_CHUNKS_PER_ACT,
-              filter: { must: [{ key: 'rada_nreg', match: { value: nreg } }] },
-              timeoutMs: config.qdrantTimeoutSec * 1000,
-              callCounter,
-            });
-            for (const h of ch) {
-              const raw = payloadToRawHit(h, 'lldbi_chunks');
-              if (raw.r2_key && raw.json_path) {
-                raw.goal_id = goal.id;
-                hits.push(raw);
-              }
-            }
+        for (const h of ch) {
+          const raw = payloadToRawHit(h, 'lldbi_chunks');
+          if (raw.r2_key && raw.json_path) {
+            raw.goal_id = goal.id;
+            hits.push(raw);
           }
-          stepsLatencyMs.push(Date.now() - chunkStart);
-          collectionsUsed.push(`${collections.chunks}(filtered)`);
-          usedFilteredChunks = true;
-          const deduped = dedupeHits(hits).sort(compareRawHitByScore);
-          hits.length = 0;
-          hits.push(...deduped);
-          topScore = hits.length > 0 ? Math.max(...hits.map((h) => h.score)) : null;
         }
-      } catch {
-        // keep first-pass hits
       }
+      stepsLatencyMs.push(Date.now() - chunkStart);
+      collectionsUsed.push(`${collections.chunks}(filtered)`);
+      usedFilteredChunks = true;
+      const deduped = dedupeHits(hits).sort(compareRawHitByScore);
+      hits.length = 0;
+      hits.push(...deduped);
+      topScore = hits.length > 0 ? Math.max(...hits.map((h) => h.score)) : null;
+    } catch {
+      // keep first-pass hits
     }
   }
   if (actNregsForSummary.length === 0) actNregsForSummary.push(...(taxonomyResult.rada_nreg_candidates ?? []));
@@ -584,7 +678,7 @@ async function runOneGoal(
       return compareRawHitByScore(a, b);
     });
   }
-  return { hits, actNregsForSummary, usedFilteredChunks, stepsLatencyMs, collectionsUsed, taxonomyResult };
+  return { hits, actNregsForSummary, usedFilteredChunks, stepsLatencyMs, collectionsUsed, taxonomyResult, domainBootstrap };
 }
 
 const RUN_CONTEXT_TTL_SEC = 3600;
@@ -715,11 +809,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const multiReasonCodes: string[] = [...goalSplit.reason_codes];
     const allCollectionsUsed: string[] = [];
     let totalLatencyMulti = 0;
+    let domainBootstrapAgg: DomainBootstrapResult | undefined;
     for (const goal of goalSplit.goals) {
       const one = await runOneGoal(goal, entities, searchPlan, steps, collections, qdrantCallCounter);
       for (const h of one.hits) multiHits.push(h);
       allCollectionsUsed.push(...one.collectionsUsed);
       totalLatencyMulti += one.stepsLatencyMs.reduce((a, b) => a + b, 0);
+      if (one.domainBootstrap?.attempted && !domainBootstrapAgg) domainBootstrapAgg = one.domainBootstrap;
+      else if (one.domainBootstrap?.used) domainBootstrapAgg = one.domainBootstrap;
       const poolSize = one.taxonomyResult.rada_nreg_candidates?.length ?? 0;
       if (goal.required_categories?.length && poolSize < 2) {
         multiReasonCodes.push('GOAL_ACT_POOL_WEAK');
@@ -889,6 +986,15 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           distribution_by_goal: goalsSummary.map((g) => ({ goal_id: g.goal_id, hits_count: g.hits_count ?? 0 })),
           family_evidence_top2: familyEvidenceMulti.debug.top_families,
         },
+        ...(domainBootstrapAgg && {
+          domain_bootstrap: {
+            attempted: domainBootstrapAgg.attempted,
+            used: domainBootstrapAgg.used,
+            chosen_family_key: domainBootstrapAgg.chosen_family_key,
+            top_categories: domainBootstrapAgg.top_categories,
+            reason_codes: domainBootstrapAgg.reason_codes,
+          },
+        }),
       },
     };
     return { rawHits: finalMulti, retrievalTrace: multiTrace };
@@ -1168,6 +1274,78 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const capped = applyDiversityCap(allHits);
   allHits.length = 0;
   allHits.push(...capped);
+
+  // Reference expansion (U4): extract refs from top chunks, resolve via taxonomy, add hits (before cap)
+  let referenceExpansionMeta: ReferenceExpansionMeta = {
+    enabled: config.u4ReferenceExpansionEnabled,
+    attempted: false,
+    added_count: 0,
+    referenced_acts: [],
+    parse_hits_used: 0,
+    skipped_reason_codes: [],
+  };
+  if (
+    config.u4ReferenceExpansionEnabled &&
+    vector &&
+    allHits.length > 0
+  ) {
+    const initialQdrantCount = qdrantCallCounter.count;
+    const maxExtraCalls = config.u4ReferenceExpansionMaxQdrantCalls ?? 4;
+    const existingKeys = new Set(allHits.map((h) => `${h.r2_key}:${h.json_path}`));
+    const retrieveChunksForAct = async (params: {
+      rada_nreg: string;
+      articleRef?: string;
+      queryVariant?: string;
+      limit: number;
+    }): Promise<RawHit[]> => {
+      if (qdrantCallCounter.count >= initialQdrantCount + maxExtraCalls) return [];
+      const searchQuery = params.queryVariant ?? params.articleRef ?? query;
+      let searchVector = vector!;
+      if (searchQuery !== query) {
+        try {
+          const emb = await embedQuery(searchQuery);
+          searchVector = emb.embedding;
+        } catch {
+          // fallback to main query vector
+        }
+      }
+      const hits = await qdrantSearch({
+        collection: collections.chunks,
+        vector: searchVector,
+        limit: params.limit,
+        filter: { must: [{ key: 'rada_nreg', match: { value: params.rada_nreg } }] },
+        timeoutMs: config.qdrantTimeoutSec * 1000,
+        callCounter: qdrantCallCounter,
+      });
+      return hits.map((h) => payloadToRawHit(h, 'lldbi_chunks'));
+    };
+    try {
+      const { addedHits, meta } = await expandReferences({
+        finalHitsBeforeCap: allHits.slice(0, 12),
+        fetchChunkText: getFragmentFromR2,
+        resolveActByTitleFragment: findActByTitleFragment,
+        resolveActByAlias: findActByAlias,
+        retrieveChunksForAct,
+        getActMeta,
+        config: {
+          maxParseHits: 10,
+          maxReferencedActs: config.u4ReferenceExpansionMaxReferencedActs ?? 2,
+          maxAddedHits: config.u4ReferenceExpansionMaxAddedHits ?? 10,
+        },
+        lowConfidence: false,
+        existingKeys,
+      });
+      referenceExpansionMeta = meta;
+      if (addedHits.length > 0) {
+        allHits.push(...addedHits);
+        const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
+        allHits.length = 0;
+        allHits.push(...deduped);
+      }
+    } catch {
+      referenceExpansionMeta.skipped_reason_codes.push('EXPANSION_ERROR');
+    }
+  }
 
   const totalLatency = stepsLatencyMs.reduce((a, b) => a + b, 0);
   const hitsTotalBeforeCapSingle = allHits.length;
@@ -1937,6 +2115,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       routing_hints: routingHintsMeta,
+      reference_expansion: referenceExpansionMeta,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,

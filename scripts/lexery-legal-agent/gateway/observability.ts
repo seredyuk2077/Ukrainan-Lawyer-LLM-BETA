@@ -50,6 +50,11 @@ const metrics: Record<string, number> = {
   u4_routing_hints_called_total: 0,
   u4_routing_hints_failed_total: 0,
   u4_routing_hints_used_total: 0,
+  u4_routing_hints_not_used_total: 0,
+  u4_routing_hints_invalid_json_total: 0,
+  u4_domain_bootstrap_attempted_total: 0,
+  u4_domain_bootstrap_used_total: 0,
+  u4_domain_bootstrap_conflict_total: 0,
   taxonomy_refresh_success_total: 0,
   taxonomy_refresh_failed_total: 0,
   taxonomy_snapshot_age_seconds: 0,
@@ -89,6 +94,7 @@ export function getMetrics() {
     u2_intent: { ...u2IntentCounts },
     u2_domain: { ...u2DomainCounts },
     u2_gating_reason: { ...u2GatingReasonCounts },
+    u4_routing_hints_not_used_by_reason: getU4RoutingHintsNotUsedBreakdown(),
   };
 }
 
@@ -226,6 +232,33 @@ export function incrementU4RoutingHintsFailed() {
 }
 export function incrementU4RoutingHintsUsed() {
   metrics.u4_routing_hints_used_total += 1;
+}
+
+const u4RoutingHintsNotUsedByReason: Record<string, number> = {};
+
+export function incrementU4RoutingHintsNotUsed(reason: string) {
+  metrics.u4_routing_hints_not_used_total += 1;
+  const key = reason.slice(0, 64);
+  u4RoutingHintsNotUsedByReason[key] = (u4RoutingHintsNotUsedByReason[key] ?? 0) + 1;
+}
+
+export function incrementU4RoutingHintsInvalidJson() {
+  metrics.u4_routing_hints_invalid_json_total += 1;
+}
+
+export function getU4RoutingHintsNotUsedBreakdown(): Record<string, number> {
+  return { ...u4RoutingHintsNotUsedByReason };
+}
+
+// U4 Domain bootstrap (evidence-based, no wordlists)
+export function incrementU4DomainBootstrapAttempted() {
+  metrics.u4_domain_bootstrap_attempted_total += 1;
+}
+export function incrementU4DomainBootstrapUsed() {
+  metrics.u4_domain_bootstrap_used_total += 1;
+}
+export function incrementU4DomainBootstrapConflict() {
+  metrics.u4_domain_bootstrap_conflict_total += 1;
 }
 
 // U4 ActTaxonomyStore (LEX-114, LEX-117)
