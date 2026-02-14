@@ -84,6 +84,37 @@ pnpm brain:verify:retrieval-real-dev
 
 **Delta (baseline vs routing ON):** See `tools/_reports/retrieval_real_dev_routing_hints_delta_2026-02-11.md`. Conclusion: routing ON does not improve hard_fail; routing called but never used (actCandidatesTop lacks PRIMARY_LAW from routing top2). Phase 2 diagnosis + trigger v2 / use v2 in place (ADR: `u4-routing-hints-iteration-v2.md`).
 
+## Act-type audit (snapshot + cases from Supabase)
+
+**Команди:**
+
+```bash
+pnpm brain:dataset:act-type-audit      # snapshot 20 acts (read-only legislation)
+pnpm brain:generate:act-type-audit-cases
+pnpm brain:verify:act-type-audit:smoke # 8 cases
+pnpm brain:verify:act-type-audit:fast  # 20 cases, gate: explicit ≥70%, implicit ≥50%, pass ≥60%
+pnpm brain:verify:act-type-audit      # FULL + special_multiact + out_of_domain + reference_expansion
+```
+
+- Snapshot: 20 актів (≥5 PRIMARY_LAW, ≥5 SECONDARY_ORDER, presidential/international/KSU). Кейси: A) explicit act, B) implicit domain, C) within-act.
+- **FAST gate:** exit 0 when pass ≥ 60% and explicit_act_hit ≥ 70% and implicit_category_hit ≥ 50%.
+
+**Останній прогін (real snapshot):** explicit 86%, implicit 71%, within 67%; total pass 15/20; FAST gate PASS.
+
+## Audit runs retrieval quality (Phase 5)
+
+**Команда:**
+
+```bash
+pnpm brain:audit:runs-retrieval-quality
+```
+
+- Read-only Supabase `runs`: останні N=200 з retrieval_trace.
+- Інваріанти: low_confidence → reason_codes (дозволені коди: NO_STRONG_ACT_EVIDENCE, COVERAGE_GUARD_FAILED, ORDER_DOMINANCE_BLOCKED, …); domainHint → evidence; reference_expansion.
+- Вивід: `tools/_reports/audit_runs_retrieval_quality.md` (патерни багів, топ 10 runs для ручної перевірки).
+
+**Останній прогін:** 0 runs with issues (reason_codes extended to policy codes).
+
 ## Останній повний прогін
 
 - `pnpm brain:verify:u3` — smoke + U3/U3a plan test

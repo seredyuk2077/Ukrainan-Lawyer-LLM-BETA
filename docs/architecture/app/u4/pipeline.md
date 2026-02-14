@@ -23,18 +23,19 @@
 
 1. **U4 event** — після U3a (search_plan + steps у RunContext/RunRecord).
 2. **Load run** — RunRepository.findByRunId; search_plan/steps з RunContext або RunRecord.search_plan; query_profile (domain, entities).
-3. **ActTaxonomyStore** — getTaxonomyCandidates(query, domainHint, entities). Джерело: Supabase legislation_documents (aliases, keywords, topics, category). TTL refresh; tolerant normalizer (NFC, trim, lower, dedup) for aliases/keywords/topics. getActMeta, scoreActCandidate, findCandidatesByAliasTokens.
-4. **Query shaping** — NFC, whitespace, typo fix; **anchors тільки з taxonomy**. Без hardcode домен→акт.
-5. **Effective query** — нормалізація: короткий query ≤12k; довгий — head+tail (6k+6k).
-6. **Embed** — embedQuery(effective) через OpenRouter (openai/text-embedding-3-small, 1536d). При помилці — degraded_sources.lldbi=true, 0 hits.
-7. **Qdrant search** — за steps: lldbi_chunks (основне), lldbi_acts (опційно). Timeout + 1 retry.
-8. **Within-act retrieval** — якщо є act candidates (taxonomy або acts search): для кожного з top 5 acts — окремий Qdrant search по chunks з filter rada_nreg = act, limit 35. Merge + dedupe. Це дає релевантну статтю в межах акту (act→article).
-9. **Hybrid re-score** — ordering без LLM. hit.score у trace залишається векторний.
-10. **Diversity cap** — у топ 25 не більше 16 hits з одного акту (generalizable).
-11. **RawHits** — з payload: r2_key, json_path, score, rada_nreg, article_number, title, source.
-12. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_goal_splitter, used_llm_planner, per_goal_act_retrieval, used_global_fallback), **goals_summary**, **fusion** (coverage_enforced, per_goal_min_hits, topN, per_goal_counts_in_topN), **planner** (tier_selected, called, call_failed_reason, tier, model_id, duration_ms, degraded, reason_codes), **qdrant_calls_count_total**, **hits_total_before_cap**, **hits_total_after_cap**, **hits_cap_applied**, **topN_used_for_distribution**, **scores_computed_on**, **avg_score_source**, **distribution** (noise_penalty_applied_count, noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes, hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
-13. **Persist** — RunRepository.updateRetrievalTrace; RunContext: raw_hits + retrieval_trace.
-14. **Enqueue U5** — Gate.
+3. **ActTaxonomyStore** — getTaxonomyCandidates(query, domainHint, entities). Джерело: Supabase legislation_documents (aliases, keywords, topics, category). TTL refresh; tolerant normalizer (NFC, trim, lower, dedup) for aliases/keywords/topics. getActMeta, scoreActCandidate, findCandidatesByAliasTokens. **Domain-based injection:** якщо domainHint від U2 є і не unknown — snap.byCategory(domainHint) додає до 15 актів категорії (без словників тема→акт).
+4. **Domain bootstrap (multi-goal only)** — коли domainHint від U2 слабкий (порожній/general/unknown) і taxonomy candidates слабкі: один додатковий Qdrant acts search (limit 20), гістограма категорій по PRIMARY_LAW з taxonomy; якщо top1_support ≥ 2 і gap ≥ 1 → effective_domain_hint для goal; потім getTaxonomyCandidates(subquery, chosen_family_key). Trace: meta.domain_bootstrap (attempted, used, chosen_family_key, top_categories, reason_codes). Метрики: u4_domain_bootstrap_attempted_total, u4_domain_bootstrap_used_total, u4_domain_bootstrap_conflict_total. Бюджет: максимум 1 acts search на goal.
+5. **Query shaping** — NFC, whitespace, typo fix; **anchors тільки з taxonomy**. Без hardcode домен→акт.
+6. **Effective query** — нормалізація: короткий query ≤12k; довгий — head+tail (6k+6k).
+7. **Embed** — embedQuery(effective) через OpenRouter (openai/text-embedding-3-small, 1536d). При помилці — degraded_sources.lldbi=true, 0 hits.
+8. **Qdrant search** — за steps: lldbi_chunks (основне), lldbi_acts (опційно). Timeout + 1 retry.
+9. **Within-act retrieval** — якщо є act candidates (taxonomy або acts search): для кожного з top 5 acts — окремий Qdrant search по chunks з filter rada_nreg = act, limit 35. Merge + dedupe. Це дає релевантну статтю в межах акту (act→article).
+10. **Hybrid re-score** — ordering без LLM. hit.score у trace залишається векторний.
+11. **Diversity cap** — у топ 25 не більше 16 hits з одного акту (generalizable).
+12. **RawHits** — з payload: r2_key, json_path, score, rada_nreg, article_number, title, source.
+13. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_goal_splitter, used_llm_planner, per_goal_act_retrieval, used_global_fallback), **goals_summary**, **fusion** (coverage_enforced, per_goal_min_hits, topN, per_goal_counts_in_topN), **planner** (tier_selected, called, call_failed_reason, tier, model_id, duration_ms, degraded, reason_codes), **qdrant_calls_count_total**, **hits_total_before_cap**, **hits_total_after_cap**, **hits_cap_applied**, **topN_used_for_distribution**, **scores_computed_on**, **avg_score_source**, **distribution** (noise_penalty_applied_count, noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes, hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
+14. **Persist** — RunRepository.updateRetrievalTrace; RunContext: raw_hits + retrieval_trace.
+15. **Enqueue U5** — Gate.
 
 ## Схема
 
