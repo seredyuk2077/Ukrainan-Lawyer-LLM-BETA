@@ -89,7 +89,13 @@ export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean 
     (triggers.goals_count ?? 1) === 1 &&
     triggers.selected_acts_confidence_below_055 === true;
   if (medium) return true;
-  return triggers.reason_codes_include_coverage_guard_failed === true && (triggers.goals_count ?? 1) === 1;
+  const coverageWithEvidence =
+    triggers.reason_codes_include_coverage_guard_failed === true &&
+    (triggers.goals_count ?? 1) === 1 &&
+    (triggers.family_weak_evidence === true ||
+      triggers.family_conflict === true ||
+      triggers.confident_family_mismatch === true);
+  return coverageWithEvidence;
 }
 
 function mapFamilyKeyToAllowed(key: string, allowed: string[]): string {
