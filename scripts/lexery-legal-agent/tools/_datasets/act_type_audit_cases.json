@@ -1,0 +1,545 @@
+{
+  "generated_at": "2026-02-14T14:09:25.610Z",
+  "cases": [
+    {
+      "id": "act_type_audit_0_explicit",
+      "query": "Що регулює Постанова про митний реєстр ІВ?",
+      "rada_nreg": "1127-2022-п",
+      "act_kind": "PRIMARY_LAW",
+      "category": "tax_customs",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_0_implicit",
+      "query": "Питання з галузі: митний реєстр",
+      "rada_nreg": "1127-2022-п",
+      "act_kind": "PRIMARY_LAW",
+      "category": "tax_customs",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_0_within",
+      "query": "Що сказано про митний реєстр?",
+      "rada_nreg": "1127-2022-п",
+      "act_kind": "PRIMARY_LAW",
+      "category": "tax_customs",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_1_explicit",
+      "query": "КАС",
+      "rada_nreg": "2747-15",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_1_implicit",
+      "query": "Питання з галузі: адміністративне судочинство",
+      "rada_nreg": "2747-15",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_1_within",
+      "query": "Що сказано про адміністративне судочинство?",
+      "rada_nreg": "2747-15",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_2_explicit",
+      "query": "КЗпП",
+      "rada_nreg": "322-08",
+      "act_kind": "PRIMARY_LAW",
+      "category": "labor_social",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_2_implicit",
+      "query": "Питання з галузі: трудові відносини",
+      "rada_nreg": "322-08",
+      "act_kind": "PRIMARY_LAW",
+      "category": "labor_social",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_2_within",
+      "query": "Що сказано про трудові відносини?",
+      "rada_nreg": "322-08",
+      "act_kind": "PRIMARY_LAW",
+      "category": "labor_social",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_3_explicit",
+      "query": "КУзПБ",
+      "rada_nreg": "2597-19",
+      "act_kind": "PRIMARY_LAW",
+      "category": "business_corporate",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_3_implicit",
+      "query": "Питання з галузі: банкрутство",
+      "rada_nreg": "2597-19",
+      "act_kind": "PRIMARY_LAW",
+      "category": "business_corporate",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_3_within",
+      "query": "Що сказано про банкрутство?",
+      "rada_nreg": "2597-19",
+      "act_kind": "PRIMARY_LAW",
+      "category": "business_corporate",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_4_explicit",
+      "query": "КУпАП",
+      "rada_nreg": "80731-10",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative_offenses",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_4_implicit",
+      "query": "Питання з галузі: адміністративне правопорушення",
+      "rada_nreg": "80731-10",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative_offenses",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_4_within",
+      "query": "Що сказано про адміністративне правопорушення?",
+      "rada_nreg": "80731-10",
+      "act_kind": "PRIMARY_LAW",
+      "category": "administrative_offenses",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_5_explicit",
+      "query": "Що регулює Наказ про скасування Правил торгівлі транспортними засобами?",
+      "rada_nreg": "z0147-10",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "business_corporate",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_5_implicit",
+      "query": "Питання з галузі: втрата чинності",
+      "rada_nreg": "z0147-10",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "business_corporate",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_5_within",
+      "query": "Що сказано про втрата чинності?",
+      "rada_nreg": "z0147-10",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "business_corporate",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_6_explicit",
+      "query": "Що регулює Указ про призначення Кубракова?",
+      "rada_nreg": "66/2026",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "other",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_6_implicit",
+      "query": "Питання з галузі: Указ Президента",
+      "rada_nreg": "66/2026",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "other",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_6_within",
+      "query": "Що сказано про Указ Президента?",
+      "rada_nreg": "66/2026",
+      "act_kind": "SECONDARY_ORDER",
+      "category": "other",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_7_explicit",
+      "query": "Що регулює Третя Женевська конвенція?",
+      "rada_nreg": "995_153",
+      "act_kind": "UNKNOWN",
+      "category": "international_eu",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_7_implicit",
+      "query": "Питання з галузі: військовополонені",
+      "rada_nreg": "995_153",
+      "act_kind": "UNKNOWN",
+      "category": "international_eu",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_7_within",
+      "query": "Що сказано про військовополонені?",
+      "rada_nreg": "995_153",
+      "act_kind": "UNKNOWN",
+      "category": "international_eu",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_8_explicit",
+      "query": "Рішення КСУ щодо ГПК",
+      "rada_nreg": "v001p710-24",
+      "act_kind": "PRIMARY_LAW",
+      "category": "judiciary_justice",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_8_implicit",
+      "query": "Питання з галузі: конституційна скарга",
+      "rada_nreg": "v001p710-24",
+      "act_kind": "PRIMARY_LAW",
+      "category": "judiciary_justice",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_8_within",
+      "query": "Що сказано про конституційна скарга?",
+      "rada_nreg": "v001p710-24",
+      "act_kind": "PRIMARY_LAW",
+      "category": "judiciary_justice",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_9_explicit",
+      "query": "Що регулює Декларація про суверенітет?",
+      "rada_nreg": "55-12",
+      "act_kind": "UNKNOWN",
+      "category": "constitutional",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_9_implicit",
+      "query": "Питання з галузі: державний суверенітет",
+      "rada_nreg": "55-12",
+      "act_kind": "UNKNOWN",
+      "category": "constitutional",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_9_within",
+      "query": "Що сказано про державний суверенітет?",
+      "rada_nreg": "55-12",
+      "act_kind": "UNKNOWN",
+      "category": "constitutional",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_10_explicit",
+      "query": "Що регулює Розпорядження про мобільну генерацію?",
+      "rada_nreg": "43-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_10_implicit",
+      "query": "Питання з галузі: мобільна генерація",
+      "rada_nreg": "43-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_10_within",
+      "query": "Що сказано про мобільна генерація?",
+      "rada_nreg": "43-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_11_explicit",
+      "query": "Що регулює Постанова про доплати чорнобильцям-пенсіонерам?",
+      "rada_nreg": "48-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "labor_social",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_11_implicit",
+      "query": "Питання з галузі: доплата пенсіонерам",
+      "rada_nreg": "48-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "labor_social",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_11_within",
+      "query": "Що сказано про доплата пенсіонерам?",
+      "rada_nreg": "48-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "labor_social",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_12_explicit",
+      "query": "Що регулює Постанова про ліквідацію консультативних органів?",
+      "rada_nreg": "38-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_12_implicit",
+      "query": "Питання з галузі: консультативні органи",
+      "rada_nreg": "38-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_12_within",
+      "query": "Що сказано про консультативні органи?",
+      "rada_nreg": "38-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_13_explicit",
+      "query": "Що регулює Постанова про субвенцію на харчування учнів?",
+      "rada_nreg": "16-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "education_science",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_13_implicit",
+      "query": "Питання з галузі: субвенція",
+      "rada_nreg": "16-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "education_science",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_13_within",
+      "query": "Що сказано про субвенція?",
+      "rada_nreg": "16-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "education_science",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_14_explicit",
+      "query": "Що регулює Розпорядження про передачу активів?",
+      "rada_nreg": "22-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "defense_mobilization",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_14_implicit",
+      "query": "Питання з галузі: передача активів",
+      "rada_nreg": "22-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "defense_mobilization",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_14_within",
+      "query": "Що сказано про передача активів?",
+      "rada_nreg": "22-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "defense_mobilization",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_15_explicit",
+      "query": "Що регулює Постанова про надзвичайну ситуацію в енергетиці?",
+      "rada_nreg": "39-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_15_implicit",
+      "query": "Питання з галузі: надзвичайна ситуація",
+      "rada_nreg": "39-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_15_within",
+      "query": "Що сказано про надзвичайна ситуація?",
+      "rada_nreg": "39-2026-п",
+      "act_kind": "UNKNOWN",
+      "category": "energy_utilities",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_16_explicit",
+      "query": "Що регулює Постанова про дизельне паливо?",
+      "rada_nreg": "545-2007-п",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_16_implicit",
+      "query": "Питання з галузі: дизельне паливо",
+      "rada_nreg": "545-2007-п",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_16_within",
+      "query": "Що сказано про дизельне паливо?",
+      "rada_nreg": "545-2007-п",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_17_explicit",
+      "query": "Що регулює Розпорядження про адмінзбори?",
+      "rada_nreg": "21-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_17_implicit",
+      "query": "Питання з галузі: адміністративний збір",
+      "rada_nreg": "21-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_17_within",
+      "query": "Що сказано про адміністративний збір?",
+      "rada_nreg": "21-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "administrative",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_18_explicit",
+      "query": "Що регулює Розпорядження КМУ №42-2026-р?",
+      "rada_nreg": "42-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "property_real_estate",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_18_implicit",
+      "query": "Питання з галузі: єдині майнові комплекси",
+      "rada_nreg": "42-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "property_real_estate",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_18_within",
+      "query": "Що сказано про єдині майнові комплекси?",
+      "rada_nreg": "42-2026-р",
+      "act_kind": "UNKNOWN",
+      "category": "property_real_estate",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_19_explicit",
+      "query": "Директива 2001/18/ЄС",
+      "rada_nreg": "984_011-01",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "A_explicit_act",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_19_implicit",
+      "query": "Питання з галузі: генетично модифіковані організми",
+      "rada_nreg": "984_011-01",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "B_implicit_category",
+      "expect_in_selected_or_evidence": true
+    },
+    {
+      "id": "act_type_audit_19_within",
+      "query": "Що сказано про генетично модифіковані організми?",
+      "rada_nreg": "984_011-01",
+      "act_kind": "UNKNOWN",
+      "category": "environment",
+      "assertion": "C_within_act",
+      "expect_in_selected_or_evidence": true
+    }
+  ]
+}
