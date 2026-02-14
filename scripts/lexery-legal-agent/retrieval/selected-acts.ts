@@ -138,7 +138,11 @@ export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenc
       avg_score_in_top30: v.sumScore / v.count,
       max_score: v.maxScore,
     }))
-    .sort((a, b) => b.count_in_top30 - a.count_in_top30 || b.max_score - a.max_score)
+    .sort((a, b) => {
+      if (b.count_in_top30 !== a.count_in_top30) return b.count_in_top30 - a.count_in_top30;
+      if (b.max_score !== a.max_score) return b.max_score - a.max_score;
+      return (a.rada_nreg ?? '').localeCompare(b.rada_nreg ?? '');
+    })
     .slice(0, 10);
 }
 
@@ -174,13 +178,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   } = input;
 
   const chunks_evidence_top_acts = inputChunksEvidence ?? computeChunksEvidenceTopActs(finalHits);
+  // Hysteresis: only "strong" (count >= 3) are must-include; avoids flakiness when score/count wobble near threshold
   const chunksEvidenceNregs = new Set(
     chunks_evidence_top_acts
-      .filter(
-        (a) =>
-          a.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD ||
-          a.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
-      )
+      .filter((a) => a.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD)
       .map((a) => a.rada_nreg)
   );
 

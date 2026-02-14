@@ -7,6 +7,7 @@
  */
 import { createServer } from 'net';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { config as loadEnv } from 'dotenv';
 
@@ -72,6 +73,30 @@ const QUALITY_CASES: QualityCase[] = [
   { q: 'Договір оренди. Перевір на відповідність ЦКУ.', tenant: UUID(24), user: UUID(124), expectNonEmptyOrLowConfidence: true },
   { q: 'умисне вбивство та строки давності', tenant: UUID(25), user: UUID(125), expectNonEmptyOrLowConfidence: true },
 ];
+
+type VerifyPack = { retrieval_quality?: { smoke?: number[]; full?: string }; retrieval_real_dev?: { smoke?: number[] }; retrieval_multigoal?: { smoke?: number[] } };
+
+function getOnlyIndices(scriptKey: keyof VerifyPack): number[] | 'all' {
+  const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+  const onlyValue = onlyArg?.slice('--only='.length)?.toUpperCase();
+  const onlyCasesEnv = process.env.ONLY_CASES?.trim();
+  if (onlyCasesEnv) {
+    const indices = onlyCasesEnv.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n));
+    if (indices.length) return indices;
+  }
+  if (onlyValue === 'SMOKE' || onlyValue === 'FAST') {
+    try {
+      const path = resolve(process.cwd(), 'scripts/lexery-legal-agent/tools/_datasets/verify_packs.json');
+      const raw = readFileSync(path, 'utf8');
+      const packs = JSON.parse(raw) as VerifyPack;
+      const pack = packs[scriptKey] as { smoke?: number[] } | undefined;
+      if (pack?.smoke?.length) return pack.smoke;
+    } catch {
+      // no pack or invalid
+    }
+  }
+  return 'all';
+}
 
 function getFreePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -172,9 +197,13 @@ function percentile(sorted: number[], p: number): number {
 }
 
 async function main(): Promise<void> {
+  const onlyIndices = getOnlyIndices('retrieval_quality');
+  const caseIndices = onlyIndices === 'all' ? QUALITY_CASES.map((_, i) => i) : onlyIndices.filter((i) => i >= 0 && i < QUALITY_CASES.length);
+  const casesToRun = caseIndices.map((i) => ({ index: i, c: QUALITY_CASES[i] }));
+
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[verify_retrieval_quality] port', port, 'cases', QUALITY_CASES.length);
+  console.log('[verify_retrieval_quality] port', port, 'cases', casesToRun.length, onlyIndices !== 'all' ? `(--only pack: ${caseIndices.length} cases)` : '');
 
   const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
   const child = spawn(
@@ -193,8 +222,7 @@ async function main(): Promise<void> {
     if (!healthOk) {
       console.error('[verify_retrieval_quality] Health failed');
     } else {
-      for (let i = 0; i < QUALITY_CASES.length; i++) {
-        const c = QUALITY_CASES[i];
+      for (const { index: i, c } of casesToRun) {
         const run = await runQuery(baseUrl, c.q, c.tenant, c.user);
         const rt = run.retrievalTrace;
         const hitsCount = rt?.meta?.hits_count ?? rt?.hits?.length ?? 0;
@@ -281,7 +309,8 @@ async function main(): Promise<void> {
   }
 
   const passed = results.filter((r) => r.pass).length;
-  const allPass = healthOk && results.length === QUALITY_CASES.length && passed === QUALITY_CASES.length;
+  const totalCases = casesToRun.length;
+  const allPass = healthOk && results.length === totalCases && passed === totalCases;
   const latencies = results.map((r) => r.latencyMs).filter((n) => n > 0).sort((a, b) => a - b);
   const lowConfPct = results.length > 0 ? Math.round((results.filter((r) => r.lowConf).length / results.length) * 100) : 0;
   const filteredPct = results.length > 0 ? Math.round((results.filter((r) => r.usedFiltered).length / results.length) * 100) : 0;
@@ -291,7 +320,7 @@ async function main(): Promise<void> {
 
   console.log('\n--- Summary ---');
   console.log('Health:', healthOk ? 'PASS' : 'FAIL');
-  console.log('Cases:', `${passed}/${QUALITY_CASES.length}`, allPass ? 'PASS' : 'FAIL');
+  console.log('Cases:', `${passed}/${totalCases}`, allPass ? 'PASS' : 'FAIL');
   console.log('Latency median ms:', Math.round(percentile(latencies, 50)));
   console.log('Latency p95 ms:', Math.round(percentile(latencies, 95)));
   console.log('low_confidence %:', lowConfPct);

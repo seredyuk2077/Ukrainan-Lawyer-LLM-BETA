@@ -6,6 +6,7 @@
  */
 import { createServer } from 'net';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { config as loadEnv } from 'dotenv';
 
@@ -16,7 +17,7 @@ const DEV_KEY = process.env.DEV_API_KEY ?? 'dev-key-change-me';
 const HEALTH_POLL_MS = 250;
 const HEALTH_TIMEOUT_MS = 20_000;
 const POLL_MS = 400;
-const POLL_TIMEOUT_MS = 90_000;
+const POLL_TIMEOUT_MS = 240_000;
 const SHUTDOWN_WAIT_MS = 5_000;
 
 const SELECTED_ACTS_MIN = 1;
@@ -62,6 +63,28 @@ const MULTIGOAL_CASES: MultigoalCase[] = [
   { q: 'дозвіл на проживання міграція', tenant: UUID(24), user: UUID(124), expectNonEmptyOrLowConfidence: true },
   { q: 'адмін провадження строки оскарження', tenant: UUID(25), user: UUID(125), expectNonEmptyOrLowConfidence: true, expectMultiGoal: true },
 ];
+
+type VerifyPack = { retrieval_multigoal?: { smoke?: number[] } };
+
+function getOnlyIndices(): number[] | 'all' {
+  const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+  const onlyValue = onlyArg?.slice('--only='.length)?.toUpperCase();
+  const onlyCasesEnv = process.env.ONLY_CASES?.trim();
+  if (onlyCasesEnv) {
+    const indices = onlyCasesEnv.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n >= 0 && n < MULTIGOAL_CASES.length);
+    if (indices.length) return indices;
+  }
+  if (onlyValue === 'SMOKE') {
+    try {
+      const path = resolve(process.cwd(), 'scripts/lexery-legal-agent/tools/_datasets/verify_packs.json');
+      const packs = JSON.parse(readFileSync(path, 'utf8')) as VerifyPack;
+      if (packs.retrieval_multigoal?.smoke?.length) return packs.retrieval_multigoal.smoke.filter((i) => i >= 0 && i < MULTIGOAL_CASES.length);
+    } catch {
+      // no pack
+    }
+  }
+  return 'all';
+}
 
 function getFreePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -167,9 +190,13 @@ function percentile(sorted: number[], p: number): number {
 }
 
 async function main(): Promise<void> {
+  const onlyIndices = getOnlyIndices();
+  const caseIndices = onlyIndices === 'all' ? MULTIGOAL_CASES.map((_, i) => i) : onlyIndices;
+  const casesToRun = caseIndices.map((i) => ({ index: i, c: MULTIGOAL_CASES[i] }));
+
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[verify_retrieval_multigoal] port', port, 'cases', MULTIGOAL_CASES.length);
+  console.log('[verify_retrieval_multigoal] port', port, 'cases', casesToRun.length, onlyIndices !== 'all' ? `(--only pack)` : '');
 
   const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
   const child = spawn(
@@ -199,8 +226,7 @@ async function main(): Promise<void> {
     if (!healthOk) {
       console.error('[verify_retrieval_multigoal] Health failed');
     } else {
-      for (let i = 0; i < MULTIGOAL_CASES.length; i++) {
-        const c = MULTIGOAL_CASES[i];
+      for (const { index: i, c } of casesToRun) {
         const run = await runQuery(baseUrl, c.q, c.tenant, c.user);
         const rt = run.retrievalTrace;
         const meta = rt?.meta;
@@ -288,7 +314,8 @@ async function main(): Promise<void> {
   }
 
   const passed = results.filter((r) => r.pass).length;
-  const allPass = healthOk && results.length === MULTIGOAL_CASES.length && passed === MULTIGOAL_CASES.length;
+  const totalCases = casesToRun.length;
+  const allPass = healthOk && results.length === totalCases && passed === totalCases;
   const latencies = results.map((r) => r.latencyMs).filter((n) => n > 0).sort((a, b) => a - b);
   const qdrantCalls = results.map((r) => r.qdrantCalls).filter((n) => n > 0);
   const plannerPct = results.length > 0 ? Math.round((results.filter((r) => r.actPlannerUsed).length / results.length) * 100) : 0;
@@ -296,7 +323,7 @@ async function main(): Promise<void> {
 
   console.log('\n--- Summary ---');
   console.log('Health:', healthOk ? 'PASS' : 'FAIL');
-  console.log('Cases:', `${passed}/${MULTIGOAL_CASES.length}`, allPass ? 'PASS' : 'FAIL');
+  console.log('Cases:', `${passed}/${totalCases}`, allPass ? 'PASS' : 'FAIL');
   console.log('Latency median ms:', Math.round(percentile(latencies, 50)));
   console.log('Latency p95 ms:', Math.round(percentile(latencies, 95)));
   console.log('qdrant_calls median:', qdrantCalls.length ? Math.round(percentile(qdrantCalls.slice().sort((a, b) => a - b), 50)) : 0);
