@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-02-14T00:00:00.000Z",
+  "cases": [
+    {"id": "u2_domain_0", "query": "ККУ ст. 115 умисне вбивство", "expect_primary": "criminal", "expect_confidence_min": 0.55, "type": "clean"},
+    {"id": "u2_domain_1", "query": "Цивільний кодекс договір купівлі-продажу", "expect_primary": "civil", "expect_confidence_min": 0.55, "type": "clean"},
+    {"id": "u2_domain_2", "query": "Податкове право порушення строків подачі декларації", "expect_primary": "tax_customs", "expect_confidence_min": 0.55, "type": "clean"},
+    {"id": "u2_domain_3", "query": "Трудовий кодекс звільнення за прогул", "expect_primary": "labor_social", "expect_confidence_min": 0.55, "type": "clean"},
+    {"id": "u2_domain_4", "query": "КАС оскарження рішення податкової", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_5", "query": "тероризм та санкції фінмоніторинг", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_6", "query": "спадщина квартира поділ", "expect_primary": "civil", "expect_confidence_min": 0.55, "type": "clean"},
+    {"id": "u2_domain_7", "query": "кримінальна відповідальність та адмінправопорушення за одне діяння", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_8", "query": "податковий спор та апеляція", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_9", "query": "трудові відносини та компенсація при звільненні", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_10", "query": "полетіти на Марс права космонавтів", "expect_primary_unknown_or_low": true, "type": "out_of_domain"},
+    {"id": "u2_domain_11", "query": "NASA договір з Україною", "expect_primary_unknown_or_low": true, "type": "out_of_domain"},
+    {"id": "u2_domain_12", "query": "рецепт борщу та податки", "expect_primary_unknown_or_low": true, "type": "out_of_domain"},
+    {"id": "u2_domain_13", "query": "банкрутство фізичних осіб", "expect_primary_not_unknown": true, "type": "mixed"},
+    {"id": "u2_domain_14", "query": "адмінправопорушення за порушення ПДР", "expect_primary": "administrative_offenses", "expect_confidence_min": 0.5, "type": "clean"}
+  ]
+}

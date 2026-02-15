@@ -1,18 +1,1 @@
-{
-  "retrieval_quality": {
-    "smoke": [0, 1, 2, 3, 4, 5, 6],
-    "full": "all"
-  },
-  "retrieval_real_dev": {
-    "smoke": [0, 1, 2, 3, 4, 5, 6],
-    "real_dev_fast": {
-      "pass_sample_size": 10,
-      "use_stable_fail_list": true
-    },
-    "full": "all"
-  },
-  "retrieval_multigoal": {
-    "smoke": [0, 1, 2, 3, 4, 5],
-    "full": "all"
-  }
-}
+{"retrieval_quality":{"smoke":[0,1,2,3,4,5,6],"full":"all"},"retrieval_real_dev":{"smoke":[0,1,2,3,4,5,6],"real_dev_fast":{"pass_sample_size":10,"use_stable_fail_list":true},"full":"all"},"retrieval_multigoal":{"smoke":[0,1,2,3,4,5],"full":"all"},"act_type_audit":{"smoke":[0,1,2,3,4,5,6,7],"fast":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],"full":"all"},"u2_domain_audit":{"smoke":[0,1,2,3,4,5,6],"fast":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]}}

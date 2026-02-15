@@ -29,6 +29,8 @@
     "brain:verify:act-type-audit": "tsx scripts/lexery-legal-agent/tools/verify_retrieval_act_type_audit.ts",
     "brain:verify:act-type-audit:smoke": "tsx scripts/lexery-legal-agent/tools/verify_retrieval_act_type_audit.ts --only=SMOKE",
     "brain:verify:act-type-audit:fast": "tsx scripts/lexery-legal-agent/tools/verify_retrieval_act_type_audit.ts --only=FAST",
+    "brain:verify:u2-domain:smoke": "tsx scripts/lexery-legal-agent/tools/verify_u2_domain_audit.ts --only=SMOKE",
+    "brain:verify:u2-domain:fast": "tsx scripts/lexery-legal-agent/tools/verify_u2_domain_audit.ts --only=FAST",
     "brain:audit:runs-retrieval-quality": "tsx scripts/lexery-legal-agent/tools/audit_runs_retrieval_quality.ts",
     "brain:label:retrieval-expectations": "tsx scripts/lexery-legal-agent/tools/label_retrieval_expectations.ts",
     "brain:report:retrieval-real-failures": "tsx scripts/lexery-legal-agent/tools/report_retrieval_real_failures.ts",
