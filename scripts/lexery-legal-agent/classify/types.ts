@@ -106,12 +106,26 @@ export interface QueryProfileMeta {
   input_source?: 'db_query' | 'snapshot_preview' | 'r2_full';
   /** Where final ambiguity came from (rules override vs LLM) */
   ambiguity_source?: 'llm' | 'rules_soft' | 'rules_hard_override' | 'merged';
+  /** U2 domain source (heuristic vs AI) for audit */
+  u2_domain?: { primary: string; secondary?: string; confidence?: number; source: 'heuristic' | 'ai' };
+  /** U2 AI domain classifier (Phase 6) */
+  u2_ai_domain?: {
+    called: boolean;
+    used: boolean;
+    not_used_reason?: string;
+    attempts?: number;
+    parse_mode?: string;
+  };
 }
 
 export interface QueryProfile {
   query_profile_version: number;
   intent: Intent;
   domain: LegalDomain;
+  /** Taxonomy family key for U4 (when set by AI domain or heuristic mapping). */
+  domainHint?: string;
+  domain_confidence?: number;
+  domain_candidates_top2?: string[];
   entities: ExtractedEntity[];
   ambiguity: AmbiguityResult;
   computed_flags: {

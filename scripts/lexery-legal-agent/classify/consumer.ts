@@ -5,6 +5,7 @@
  */
 import type { RunEvent } from '../gateway/types.js';
 import { RunRepository } from '../gateway/storage.js';
+import { getTaskQueue } from '../gateway/handler.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../lib/config.js';
 import { runContextSet } from '../lib/run-context.js';
@@ -22,6 +23,11 @@ import {
   incrementU2GatingLlmSkipped,
   incrementU2GatingLlmCalled,
   incrementU2GatingReason,
+  incrementU2AiDomainCalled,
+  incrementU2AiDomainUsed,
+  incrementU2AiDomainInvalidJson,
+  incrementU2AiDomainConfTooLow,
+  incrementU2AiDomainDisagreesWithHeuristic,
 } from '../gateway/observability.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { isCircuitOpen, recordLlmFailure } from './circuit-breaker.js';
@@ -32,6 +38,7 @@ import { extractEntities } from './entity-extractor.js';
 import { detectAmbiguity } from './ambiguity-detector.js';
 import { classifyWithLLM } from './llm-classifier.js';
 import { normalizeInput } from './input-normalizer.js';
+import { classifyDomainWithAi } from './ai-domain-classifier.js';
 import type {
   QueryProfile,
   ExtractedEntity,
@@ -41,6 +48,18 @@ import type {
   LegalDomain,
   AmbiguityResult,
 } from './types.js';
+
+/** Map taxonomy family key to LegalDomain for query_profile.domain (backward compat). */
+function taxonomyKeyToLegalDomain(key: string): LegalDomain {
+  const k = key.trim().toLowerCase();
+  if (k === 'criminal' || k === 'criminal_procedure') return 'criminal';
+  if (k === 'civil' || k === 'civil_procedure') return 'civil';
+  if (k === 'tax_customs') return 'tax';
+  if (k === 'labor_social') return 'labor';
+  if (k === 'administrative' || k === 'judiciary_justice' || k === 'administrative_offenses') return 'admin';
+  if (k === 'corporate') return 'corporate';
+  return 'general';
+}
 
 const runRepo = new RunRepository();
 const llmSemaphore = new Semaphore(config.u2LlmConcurrency);
@@ -160,7 +179,7 @@ function buildRulesProfile(
     rules_confidence?: RulesConfidence;
     llm_used_reason?: string[];
     input_source?: 'db_query' | 'snapshot_preview' | 'r2_full';
-    ambiguity_source?: QueryProfile['meta']['ambiguity_source'];
+    ambiguity_source?: 'llm' | 'rules_soft' | 'rules_hard_override' | 'merged';
   }
 ): QueryProfile {
   const now = new Date().toISOString();
@@ -201,7 +220,7 @@ function buildDegradedProfile(
     rules_confidence?: RulesConfidence;
     llm_used_reason?: string[];
     input_source?: 'db_query' | 'snapshot_preview' | 'r2_full';
-    ambiguity_source?: QueryProfile['meta']['ambiguity_source'];
+    ambiguity_source?: 'llm' | 'rules_soft' | 'rules_hard_override' | 'merged';
   }
 ): QueryProfile {
   const now = new Date().toISOString();
@@ -454,6 +473,80 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
       }
     }
 
+    const finalDomain = queryProfile.domain;
+    const triggerAiDomain =
+      config.u2AiDomainEnabled &&
+      !!config.openRouterApiKey &&
+      (finalDomain === 'general' ||
+        (queryProfile.meta?.classifier_mode === 'rules' && rulesConfidence.domain < 0.55));
+    if (triggerAiDomain) {
+      try {
+        incrementU2AiDomainCalled();
+        const aiResult = await classifyDomainWithAi(
+          {
+            openRouterApiKey: config.openRouterApiKey,
+            u2AiDomainModel: config.u2AiDomainModel,
+            u2AiDomainMaxTokens: config.u2AiDomainMaxTokens,
+            u2AiDomainTimeoutMs: config.u2AiDomainTimeoutMs,
+            u2AiDomainMaxCallsPerRun: config.u2AiDomainMaxCallsPerRun,
+            u2AiDomainMinConfidence: config.u2AiDomainMinConfidence,
+          },
+          {
+            query: effectiveQuery,
+            heuristic_domain: finalDomain,
+            heuristic_confidence: rulesConfidence.domain,
+            run_id,
+          }
+        );
+        if (queryProfile.meta) {
+          queryProfile.meta.u2_domain = {
+            primary: aiResult.meta.used ? aiResult.domain_primary : finalDomain,
+            secondary: aiResult.domain_secondary,
+            confidence: aiResult.confidence,
+            source: aiResult.meta.used ? 'ai' : 'heuristic',
+          };
+          queryProfile.meta.u2_ai_domain = {
+            called: aiResult.meta.called,
+            used: aiResult.meta.used,
+            not_used_reason: aiResult.meta.not_used_reason,
+            attempts: aiResult.meta.attempts,
+            parse_mode: aiResult.meta.parse_mode,
+          };
+        }
+        if (aiResult.meta.used) {
+          incrementU2AiDomainUsed();
+          queryProfile.domainHint = aiResult.domain_primary;
+          queryProfile.domain_confidence = aiResult.confidence;
+          queryProfile.domain_candidates_top2 = [aiResult.domain_primary, aiResult.domain_secondary].filter(
+            (s): s is string => !!s && s !== 'unknown'
+          );
+          if (aiResult.domain_primary !== 'unknown') {
+            queryProfile.domain = taxonomyKeyToLegalDomain(aiResult.domain_primary);
+          }
+        } else {
+          if (aiResult.meta.parse_mode === 'failed') incrementU2AiDomainInvalidJson();
+          else if (aiResult.confidence < config.u2AiDomainMinConfidence) incrementU2AiDomainConfTooLow();
+          else if (
+            aiResult.domain_primary !== 'unknown' &&
+            aiResult.domain_primary !== finalDomain
+          ) {
+            incrementU2AiDomainDisagreesWithHeuristic();
+          }
+        }
+      } catch (aiErr) {
+        if (queryProfile.meta) {
+          queryProfile.meta.u2_ai_domain = {
+            called: true,
+            used: false,
+            not_used_reason: aiErr instanceof Error ? aiErr.message : String(aiErr),
+            attempts: 1,
+            parse_mode: 'failed',
+          };
+        }
+        incrementU2AiDomainInvalidJson();
+      }
+    }
+
     const persistOnce = async (): Promise<void> => {
       await runContextSet(
         run_id,
@@ -481,13 +574,22 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
 
     incrementU2Processed();
 
+    const now = new Date().toISOString();
+    const taskQueue = getTaskQueue();
+    await taskQueue.enqueue({
+      run_id,
+      step: 'U3',
+      created_at: now,
+      trace_id,
+    });
+
     logger.info('U2 finished', {
       ...ctx,
       duration_ms: Date.now() - start,
       next_step: 'U3',
       classifier_mode: queryProfile.meta?.classifier_mode ?? 'rules',
     });
-    logger.info('would enqueue U3', { run_id, trace_id });
+    logger.info('U3 enqueued', { run_id, trace_id });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error('U2 failed', { ...ctx, error: msg });

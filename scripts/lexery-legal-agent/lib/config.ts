@@ -91,6 +91,14 @@ export const config = {
   u2GatingConfidenceThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U2_GATING_CONFIDENCE_THRESHOLD || '0.75'))),
   u2GatingEnabled: process.env.U2_GATING_ENABLED !== 'false',
 
+  // U2 AI Domain Classifier (Phase 6): optional, only when heuristic low/unknown; max 1 call/run
+  u2AiDomainEnabled: process.env.U2_AI_DOMAIN_ENABLED === 'true',
+  u2AiDomainModel: process.env.U2_AI_DOMAIN_MODEL || 'anthropic/claude-3.5-haiku',
+  u2AiDomainMaxTokens: Math.max(64, Math.min(256, parseInt(process.env.U2_AI_DOMAIN_MAX_TOKENS || '160', 10))),
+  u2AiDomainTimeoutMs: Math.max(2000, Math.min(10000, parseInt(process.env.U2_AI_DOMAIN_TIMEOUT_MS || '4500', 10))),
+  u2AiDomainMaxCallsPerRun: Math.max(1, Math.min(2, parseInt(process.env.U2_AI_DOMAIN_MAX_CALLS_PER_RUN || '1', 10))),
+  u2AiDomainMinConfidence: Math.min(1, Math.max(0, parseFloat(process.env.U2_AI_DOMAIN_MIN_CONFIDENCE || '0.55'))),
+
   // U4 CacheRAG (LEX-114, LEX-117): Qdrant + embeddings
   qdrantUrl:
     process.env.QDRANT_URL ||
@@ -167,6 +175,12 @@ export const config = {
   u4RoutingHintsConcurrency: Math.max(1, parseInt(process.env.U4_ROUTING_HINTS_CONCURRENCY || '1', 10)),
   u4RoutingHintsTimeoutSec: Math.max(3, Math.min(15, parseInt(process.env.U4_ROUTING_HINTS_TIMEOUT_SEC || '8', 10))),
   u4RoutingHintsCacheByRunId: process.env.U4_ROUTING_HINTS_CACHE_BY_RUN_ID !== 'false',
+
+  // U4 Reference expansion: extract refs from top chunks, resolve via taxonomy, add hits (budgeted)
+  u4ReferenceExpansionEnabled: process.env.U4_REFERENCE_EXPANSION_ENABLED !== 'false',
+  u4ReferenceExpansionMaxReferencedActs: Math.min(4, Math.max(1, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_ACTS || '2', 10))),
+  u4ReferenceExpansionMaxAddedHits: Math.min(20, Math.max(5, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_HITS || '10', 10))),
+  u4ReferenceExpansionMaxQdrantCalls: Math.min(8, Math.max(2, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_QDRANT_CALLS || '4', 10))),
 } as const;
 
 export function requireEnv(name: string): string {

@@ -29,6 +29,19 @@ import type { SearchPlan, SearchStep } from '../plan/types.js';
 const runRepo = new RunRepository();
 const RUN_CONTEXT_TTL_SEC = 3600;
 
+/** Map U2 LegalDomain to taxonomy category key for getTaxonomyCandidates. */
+function legalDomainToTaxonomyKey(domain: string): string | undefined {
+  const d = domain.trim().toLowerCase();
+  if (d === 'criminal') return 'criminal';
+  if (d === 'civil') return 'civil';
+  if (d === 'labor') return 'labor_social';
+  if (d === 'admin') return 'administrative';
+  if (d === 'tax') return 'tax_customs';
+  if (d === 'corporate') return 'corporate';
+  if (d === 'general') return undefined;
+  return undefined;
+}
+
 export async function handleU4Event(event: RunEvent): Promise<void> {
   if (event.step !== 'U4') return;
 
@@ -63,14 +76,18 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     const query = run.query ?? (run.snapshot?.request as { query?: string } | undefined)?.query ?? '';
     const queryProfile = run.query_profile as {
       domain?: string;
+      domainHint?: string;
       entities?: { act_abbrev?: string; article_ref?: string }[];
       routing_flags?: import('../classify/types.js').RoutingFlags;
     } | null | undefined;
+    const domainHint =
+      queryProfile?.domainHint ??
+      (queryProfile?.domain ? legalDomainToTaxonomyKey(queryProfile.domain) : undefined);
     const { rawHits, retrievalTrace } = await runCacheRag({
       query,
       searchPlan: plan,
       steps,
-      domainHint: queryProfile?.domain,
+      domainHint,
       entities: queryProfile?.entities,
       routing_flags: queryProfile?.routing_flags,
       run_id,

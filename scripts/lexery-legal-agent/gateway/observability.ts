@@ -62,6 +62,11 @@ const metrics: Record<string, number> = {
   u5_failed_total: 0,
   u5_expand_total: 0,
   u5_no_expand_total: 0,
+  u2_ai_domain_called_total: 0,
+  u2_ai_domain_used_total: 0,
+  u2_ai_domain_invalid_json_total: 0,
+  u2_ai_domain_conf_too_low_total: 0,
+  u2_ai_domain_disagrees_with_heuristic_total: 0,
 };
 
 const u2IntentCounts: Record<string, number> = {};
@@ -143,6 +148,22 @@ export function incrementU2GatingLlmCalled() {
 export function incrementU2GatingReason(reason: string) {
   const key = reason.replace(/\s+/g, '_').slice(0, 64);
   u2GatingReasonCounts[key] = (u2GatingReasonCounts[key] || 0) + 1;
+}
+
+export function incrementU2AiDomainCalled() {
+  metrics.u2_ai_domain_called_total += 1;
+}
+export function incrementU2AiDomainUsed() {
+  metrics.u2_ai_domain_used_total += 1;
+}
+export function incrementU2AiDomainInvalidJson() {
+  metrics.u2_ai_domain_invalid_json_total += 1;
+}
+export function incrementU2AiDomainConfTooLow() {
+  metrics.u2_ai_domain_conf_too_low_total += 1;
+}
+export function incrementU2AiDomainDisagreesWithHeuristic() {
+  metrics.u2_ai_domain_disagrees_with_heuristic_total += 1;
 }
 
 // U3 / U3a (LEX-112, LEX-113)
