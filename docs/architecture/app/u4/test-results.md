@@ -115,6 +115,21 @@ pnpm brain:audit:runs-retrieval-quality
 
 **Останній прогін:** 0 runs with issues (reason_codes extended to policy codes).
 
+## U2 domain audit (Phase 6)
+
+**Команди:**
+
+```bash
+pnpm brain:verify:u2-domain:smoke  # 7 cases, SMOKE gate pass >= 4
+pnpm brain:verify:u2-domain:fast   # 15 cases
+```
+
+- Кейси: clean (civil/tax/labor/criminal/admin), mixed (criminal+sanctions, tax+appeal), out-of-domain (unknown/low conf).
+- Assertions: output schema valid; out-of-domain → domain_primary=unknown or confidence < 0.55; mixed → primary not unknown. No act names.
+- **U2 AI domain classifier:** OFF by default (U2_AI_DOMAIN_ENABLED=true to enable); max 1 call/run; taxonomy family keys only; trace meta.u2_domain, meta.u2_ai_domain; metrics u2_ai_domain_called_total, u2_ai_domain_used_total.
+
+**Останній прогін (U2 AI domain OFF):** 6/7 pass, SMOKE gate PASS.
+
 ## Останній повний прогін
 
 - `pnpm brain:verify:u3` — smoke + U3/U3a plan test

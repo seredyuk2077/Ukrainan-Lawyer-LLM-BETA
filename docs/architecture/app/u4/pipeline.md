@@ -2,7 +2,7 @@
 
 ## Stages (A–E)
 
-- **A. Query understanding** — NFC, whitespace, typo fix; anchors from taxonomy only. Intent/domain from query_profile.
+- **A. Query understanding** — NFC, whitespace, typo fix; anchors from taxonomy only. Intent/domain from query_profile. **U2 domain source:** heuristic (rules) or LLM; optional **U2 AI domain classifier** (Phase 6, OFF by default): when heuristic confidence < 0.55 or domain === general, max 1 call/run, returns taxonomy family keys only; query_profile.domainHint + domain_confidence + domain_candidates_top2; trace meta.u2_domain, meta.u2_ai_domain.
 - **B. Act candidate generation** — Taxonomy (alias/keyword/topic) + Qdrant acts search → top 5 acts → act_candidates_top in trace.
 - **C. Within-act chunks** — First pass: unfiltered chunks + acts. When act candidates exist: **per-act retrieval** (top N chunks per act, e.g. 35 per act) so relevant article can appear within act. No hardcode act names.
 - **D. Hybrid scoring + anti-noise + diversity** — w_vec*vector + alias + article_ref + category + title_overlap. **Anti-noise penalty** (патерни "окрема думка", "порядок торгівлі") з **guard**: penalty тільки якщо в top N є primary-law-like документ у межах DELTA і noisy hit не єдине джерело для goal. Trace: noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes (NO_PRIMARY_ALTERNATIVE, ONLY_SOURCE_FOR_GOAL). Diversity cap: в top 25 не більше 16 з одного акту.
