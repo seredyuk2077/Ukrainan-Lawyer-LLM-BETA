@@ -16,6 +16,16 @@ pnpm brain:verify:u4
 
 Ручних кроків не потрібно.
 
+## Ручний audit workflow (manual_query_run + manual_run_inspect)
+
+Рекомендований інженерний цикл для швидкої перевірки retrieval без повного verify:
+
+1. **Запустити сервер** (в одному терміналі): `pnpm brain:dev`.
+2. **Один запит** (в іншому терміналі): `pnpm brain:manual:query "Ваш запит"` — повертає `run_id`, status, latency_ms; друкує команду для inspect.
+3. **Inspect run (read-only Supabase):** `pnpm brain:inspect:run <run_id>` — компактний консольний звіт: query, query_profile (domain/domainHint/domain_confidence/domain_candidates_top2), retrieval_trace.meta (selected_acts, chunks_evidence_top_acts, act_candidates_top, reference_expansion, low_confidence, reason_codes, qdrant_calls_count_total, latency_ms).
+
+Опційно: `BRAIN_BASE_URL=http://127.0.0.1:3081 pnpm brain:manual:query "Запит"` якщо сервер вже на іншому порту. Supabase runs — тільки read; для inspect потрібні `SUPABASE_LEXERY_LEGAL_AGENT_DB_URL` та `SUPABASE_LEXERY_LEGAL_AGENT_DB_SERVICE_ROLE_KEY`.
+
 ## Retrieval quality (25 cases)
 
 **Команда:**
