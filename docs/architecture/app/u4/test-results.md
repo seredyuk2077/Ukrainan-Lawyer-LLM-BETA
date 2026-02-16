@@ -26,6 +26,8 @@ pnpm brain:verify:u4
 
 Опційно: `BRAIN_BASE_URL=http://127.0.0.1:3081 pnpm brain:manual:query "Запит"` якщо сервер вже на іншому порту. Supabase runs — тільки read; для inspect потрібні `SUPABASE_LEXERY_LEGAL_AGENT_DB_URL` та `SUPABASE_LEXERY_LEGAL_AGENT_DB_SERVICE_ROLE_KEY`.
 
+**Known issues (MCP audit 2026-02-16):** P1 — act_family_miss на окремих запитах (напр. «податкова санкція») у real-dev fast; P2 — окремі runs з selected_acts=0 та low_confidence (ORDER_DOMINANCE_BLOCKED, NO_STRONG_ACT_EVIDENCE). Фікси — тільки політики/інваріанти (domain → taxonomy, coverage guard), без словників.
+
 ## Retrieval quality (25 cases)
 
 **Команда:**
@@ -70,7 +72,7 @@ pnpm brain:verify:retrieval-real-dev
 ```
 
 - 43 кейси (DEV split з retrieval_real_labeled.json): очікування act families, multi-goal, multi-act; без article-level assertions.
-- **Quality gate:** `RETRIEVAL_REAL_DEV_MIN_HARD_PASS` (default 30), `RETRIEVAL_REAL_DEV_MAX_HARD_FAIL` (default 13). Exit 0 when hard_pass ≥ MIN and hard_fail ≤ MAX; exit 1 below threshold. Summary prints thresholds and gate PASS/FAIL.
+- **Quality gate:** `RETRIEVAL_REAL_DEV_MIN_HARD_PASS` (default 30), `RETRIEVAL_REAL_DEV_MAX_HARD_FAIL` (default 13). Exit 0 when hard_pass ≥ MIN and hard_fail ≤ MAX; exit 1 below threshold. **FAST/limited run** (--only=FAST): пропорційний gate — MIN = 60% від N, MAX fail = 30% від N (N = кількість кейсів у прогоні). Summary prints thresholds and gate PASS/FAIL.
 - HOLDOUT verifier залишається строгим (100%); запускати фінально окремо.
 
 **Останній прогін (2026-02-11, baseline routing OFF):**

@@ -503,14 +503,17 @@ async function main(): Promise<void> {
   console.log('multi_goal_miss:', multiGoalMissStable);
   console.log('multi_act_miss:', multiActMissStable);
 
-  const minHardPass = parseInt(process.env.RETRIEVAL_REAL_DEV_MIN_HARD_PASS ?? '30', 10);
-  const maxHardFail = parseInt(process.env.RETRIEVAL_REAL_DEV_MAX_HARD_FAIL ?? '13', 10);
+  const minHardPassFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MIN_HARD_PASS ?? '30', 10);
+  const maxHardFailFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MAX_HARD_FAIL ?? '13', 10);
+  const isLimitedRun = Array.isArray(onlyIndices) && onlyIndices.length > 0;
+  const minHardPass = isLimitedRun ? Math.max(1, Math.floor(total * 0.6)) : minHardPassFull;
+  const maxHardFail = isLimitedRun ? Math.min(total, Math.max(1, Math.ceil(total * 0.3))) : maxHardFailFull;
   const gatePass = hardPass >= minHardPass && hardFailCount <= maxHardFail;
   console.log('--- Quality gate ---');
+  if (isLimitedRun) console.log('(limited run: proportional gate 60% pass / 30% max fail)');
   console.log('thresholds: MIN_HARD_PASS=', minHardPass, 'MAX_HARD_FAIL=', maxHardFail);
   console.log('gate:', gatePass ? 'PASS' : 'FAIL', `(hard_pass=${hardPass} >= ${minHardPass} && hard_fail_stable=${hardFailCount} <= ${maxHardFail})`);
 
-  const isLimitedRun = Array.isArray(onlyIndices);
   if (isLimitedRun) {
     const reportsDir = resolve(process.cwd(), 'scripts/lexery-legal-agent/tools/_reports');
     try {
