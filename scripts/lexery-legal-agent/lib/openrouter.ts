@@ -1,14 +1,45 @@
 /**
- * OpenRouter chat completions — lightweight wrapper for U2 Classify (and future U6/U10).
- * Timeout, 1 retry, structured errors. Does not log API key or full response body.
+ * OpenRouter chat completions — lightweight wrapper for U2/U4 LLM calls.
+ * Timeout, 1 retry, structured errors. Caller id for OpenRouter attribution (Referer path).
+ *
+ * Concurrency limiter: MAX 8 simultaneous LLM calls (OPENROUTER_MAX_CONCURRENT env).
+ * Under 50 concurrent users, without this all 50 fire LLM calls at once → OpenRouter 429/slow.
+ * With limiter: burst serialized, p95 improves significantly for later requests.
  */
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const LEXERY_REFERER_BASE = 'https://lexery-legal-agent';
+
+// ── Concurrency semaphore ──────────────────────────────────────────────────
+const MAX_CONCURRENT_LLM = parseInt(process.env.OPENROUTER_MAX_CONCURRENT ?? '8', 10);
+let _activeLlmCalls = 0;
+const _llmWaitQueue: Array<() => void> = [];
+
+function _acquireLlmSlot(): Promise<void> {
+  if (_activeLlmCalls < MAX_CONCURRENT_LLM) {
+    _activeLlmCalls++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    _llmWaitQueue.push(() => {
+      _activeLlmCalls++;
+      resolve();
+    });
+  });
+}
+
+function _releaseLlmSlot(): void {
+  _activeLlmCalls--;
+  const next = _llmWaitQueue.shift();
+  if (next) next();
+}
 
 export interface OpenRouterChatOptions {
   model: string;
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   temperature?: number;
   max_tokens?: number;
+  /** Caller id for OpenRouter attribution: e.g. 'u2-classify', 'u4-query-rewrite'. Sets HTTP-Referer to base/caller. */
+  caller?: string;
 }
 
 export interface OpenRouterResult {
@@ -34,19 +65,35 @@ export async function openRouterChat(
   options: OpenRouterChatOptions,
   timeoutSec: number
 ): Promise<OpenRouterResult> {
+  await _acquireLlmSlot();
+  try {
+    return await _openRouterChatInner(apiKey, options, timeoutSec);
+  } finally {
+    _releaseLlmSlot();
+  }
+}
+
+async function _openRouterChatInner(
+  apiKey: string,
+  options: OpenRouterChatOptions,
+  timeoutSec: number
+): Promise<OpenRouterResult> {
   const url = `${OPENROUTER_BASE}/chat/completions`;
   const started = Date.now();
   const timeoutMs = Math.max(1000, timeoutSec * 1000);
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
 
+  const referer = options.caller
+    ? `${LEXERY_REFERER_BASE}/${options.caller}`
+    : LEXERY_REFERER_BASE;
   const doFetch = async (): Promise<Response> => {
     return fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://lexery-legal-agent',
+        'HTTP-Referer': referer,
       },
       body: JSON.stringify({
         model: options.model,
@@ -70,7 +117,7 @@ export async function openRouterChat(
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://lexery-legal-agent',
+          'HTTP-Referer': referer,
         },
         body: JSON.stringify({
           model: options.model,
