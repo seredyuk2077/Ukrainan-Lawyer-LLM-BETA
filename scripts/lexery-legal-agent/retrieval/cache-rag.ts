@@ -29,10 +29,17 @@ import {
   findActByTitleFragment,
   findActByAlias,
   type TaxonomyCandidatesResult,
+  type TaxonomyHintsUsed,
 } from './act-taxonomy-store.js';
 import { getFragmentFromR2 } from './r2-fragment.js';
 import { expandReferences, type ReferenceExpansionMeta } from './reference-expander.js';
-import { buildSelectedActs, computeChunksEvidenceTopActs, classifyActKind, SELECTED_ACTS_MAX_OUT } from './selected-acts.js';
+import {
+  buildSelectedActs,
+  computeChunksEvidenceTopActs,
+  classifyActKind,
+  SELECTED_ACTS_MAX_OUT,
+  type SelectedActOutput,
+} from './selected-acts.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
 import {
   shouldCallRoutingHints,
@@ -40,15 +47,111 @@ import {
   type RoutingHintsTriggers,
   type RoutingHintsInput,
 } from './routing-hints-llm.js';
+import { callQueryRewriter } from './query-rewriter-llm.js';
+import { getLldbiVocabulary } from './lldbi-vocabulary.js';
+import { rrfMerge } from './rrf-merge.js';
 import {
   incrementU4RoutingHintsNotUsed,
   incrementU4RoutingHintsUsed,
+  incrementU4QueryRewriteUsed,
   incrementU4DomainBootstrapAttempted,
   incrementU4DomainBootstrapUsed,
   incrementU4DomainBootstrapConflict,
 } from '../gateway/observability.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
+
+/** Compact lldbi hints usage for trace meta (audit). */
+function toLldbiHintsUsed(
+  hu: TaxonomyHintsUsed | undefined
+): { categories_used_count: number; doc_types_used_count: number; injected_acts_count: number } | undefined {
+  if (!hu) return undefined;
+  const categories_used_count = hu.categories_used?.length ?? 0;
+  const doc_types_used_count = hu.document_types_used?.length ?? 0;
+  const injected_acts_count =
+    (hu.injected_counts?.by_category_hints ?? 0) + (hu.injected_counts?.by_doc_type_hints ?? 0);
+  if (categories_used_count === 0 && doc_types_used_count === 0 && injected_acts_count === 0) return undefined;
+  return { categories_used_count, doc_types_used_count, injected_acts_count };
+}
+
+/**
+ * Hydrate selected_acts with complete LLDBI metadata (document_type, category, storage_category, act_kind).
+ * O(1) per act via ActTaxonomyStore.getActMeta cache; NEVER hardcodes enums beyond UNKNOWN.
+ */
+async function hydrateSelectedActsMeta(
+  acts: SelectedActOutput[],
+  confidence: number | undefined
+): Promise<
+  Array<{
+    rada_nreg: string;
+    act_title?: string;
+    score?: number;
+    why_selected?: string;
+    reason_tag?: string;
+    source_tags?: string[];
+    document_type?: string | null;
+    category?: string | null;
+    storage_category?: string | null;
+    act_kind?: string;
+    flags?: SelectedActOutput['flags'];
+    confidence?: number;
+  }>
+> {
+  const out: Array<{
+    rada_nreg: string;
+    act_title?: string;
+    score?: number;
+    why_selected?: string;
+    reason_tag?: string;
+    source_tags?: string[];
+    document_type?: string | null;
+    category?: string | null;
+    storage_category?: string | null;
+    act_kind?: string;
+    flags?: SelectedActOutput['flags'];
+    confidence?: number;
+  }> = [];
+
+  for (const a of acts) {
+    let document_type: string | null | undefined = a.document_type;
+    let category: string | null | undefined = a.category;
+    let storage_category: string | null | undefined = a.storage_category;
+    let act_kind = a.act_kind;
+
+    if (!document_type || !category || storage_category == null || !act_kind || act_kind === 'UNKNOWN') {
+      const meta = await getActMeta(a.rada_nreg);
+      if (meta) {
+        const m = meta as { document_type?: string | null; category?: string | null; storage_category?: string | null; title?: string };
+        if (!document_type) document_type = m.document_type ?? null;
+        if (!category) category = m.category ?? null;
+        if (storage_category == null) storage_category = m.storage_category ?? null;
+        if (!act_kind || act_kind === 'UNKNOWN') {
+          act_kind = classifyActKind(m.title ?? a.act_title ?? '', m.document_type, m.category);
+        }
+      } else {
+        if (storage_category == null) storage_category = null;
+        if (!act_kind) act_kind = 'UNKNOWN';
+      }
+    }
+
+    out.push({
+      rada_nreg: a.rada_nreg,
+      act_title: a.act_title,
+      score: a.score,
+      why_selected: a.why_selected,
+      reason_tag: (a as any).reason_tag,
+      source_tags: a.source_tags,
+      document_type,
+      category,
+      storage_category,
+      act_kind,
+      flags: a.flags,
+      confidence,
+    });
+  }
+
+  return out;
+}
 
 /** Domain hint is weak when absent or generic/unknown (no strong signal for category injection). */
 function isDomainWeak(domainHint: string | undefined): boolean {
@@ -286,6 +389,8 @@ export interface RunCacheRagInput {
   steps?: SearchStep[];
   /** Optional domain from query_profile (hint only; no hardcoded mapping). */
   domainHint?: string;
+  /** Optional U2 lldbi routing: categories_ranked_top3, document_types_ranked_top3 → taxonomy hints. */
+  lldbi?: { categories_ranked_top3?: string[]; document_types_ranked_top3?: string[] } | null;
   /** Optional U2 entities for taxonomy scoring (act_abbrev, article_ref). */
   entities?: { act_abbrev?: string; article_ref?: string }[];
   /** Optional routing flags for multi-goal (contract/table/large input). */
@@ -348,7 +453,12 @@ function applyCoverageFusion(
 }
 
 /** Heuristic noise: title patterns that are not primary legal content (e.g. separate opinion, trade order). */
-const NOISE_TITLE_PATTERNS = [/окрем[ауі]\s+думк/i, /порядок\s+торгівл/i];
+/** Titles often irrelevant when query is topic-specific (e.g. healthcare, МОЗ). Penalty applied only when primary-law alternative exists. */
+const NOISE_TITLE_PATTERNS = [
+  /окрем[ауі]\s+думк/i,
+  /порядок\s+торгівл/i,
+  /статус\s+народного\s+депутата|про\s+статус\s+народного\s+депутата/i,
+];
 const NOISE_PENALTY = 0.15;
 const NOISE_PENALTY_DELTA = 0.1;
 const NOISE_PENALTY_POLICY_VERSION = 1;
@@ -494,7 +604,8 @@ async function runOneGoal(
   searchPlan: SearchPlan,
   steps: SearchStep[] | undefined,
   collections: { chunks: string; acts: string },
-  callCounter?: { count: number }
+  callCounter?: { count: number },
+  lldbiHints?: { categoryHints: string[]; documentTypeHints: string[] }
 ): Promise<{
   hits: RawHit[];
   actNregsForSummary: string[];
@@ -513,6 +624,8 @@ async function runOneGoal(
   let taxonomyResult = await getTaxonomyCandidates({
     query: goal.subquery,
     domainHint: goal.domain_hint,
+    categoryHints: lldbiHints?.categoryHints,
+    documentTypeHints: lldbiHints?.documentTypeHints,
     entities,
   });
   if (goal.required_categories?.length && taxonomyResult.alias_hits?.length) {
@@ -571,6 +684,8 @@ async function runOneGoal(
         taxonomyResult = await getTaxonomyCandidates({
           query: goal.subquery,
           domainHint: domainBootstrap.chosen_family_key,
+          categoryHints: lldbiHints?.categoryHints,
+          documentTypeHints: lldbiHints?.documentTypeHints,
           entities,
         });
       }
@@ -684,7 +799,37 @@ async function runOneGoal(
 const RUN_CONTEXT_TTL_SEC = 3600;
 
 export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagResult> {
-  const { query, searchPlan, steps, domainHint, entities, routing_flags, run_id } = input;
+  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id } = input;
+  const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  if (query.length === 0) {
+    const emptyTrace: RetrievalTrace = {
+      version: 1,
+      hits: [],
+      top_score: null,
+      latency_ms: 0,
+      degraded_sources: undefined,
+      meta: {
+        collections_used: [],
+        steps_latency_ms: [],
+        steps_requested: [],
+        steps_executed: [],
+        query_used: '',
+        hits_count: 0,
+        qdrant_calls_count_total: 0,
+        hits_total_before_cap: 0,
+        hits_total_after_cap: 0,
+        hits_cap_applied: false,
+        low_confidence: true,
+        reason_codes: ['EMPTY_QUERY'],
+      },
+    };
+    return { rawHits: [], retrievalTrace: emptyTrace };
+  }
+  const categoryHints = lldbi?.categories_ranked_top3 ?? [];
+  const documentTypeHints = lldbi?.document_types_ranked_top3 ?? [];
+  const lldbiHints = { categoryHints, documentTypeHints };
+  const lldbiHintsPresent = categoryHints.length > 0 || documentTypeHints.length > 0;
+
   const collections = getQdrantCollections();
   const qdrantCallCounter = { count: 0 };
   const allHits: RawHit[] = [];
@@ -699,7 +844,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   let goalSplit = heuristicGoalSplit(query, domainHint, routing_flags ?? undefined);
   let taxonomyResultEarly: TaxonomyCandidatesResult | null = null;
   if (goalSplit.goals.length === 1) {
-    taxonomyResultEarly = await getTaxonomyCandidates({ query, domainHint, entities });
+    taxonomyResultEarly = await getTaxonomyCandidates({
+      query,
+      domainHint,
+      categoryHints: categoryHints.length ? categoryHints : undefined,
+      documentTypeHints: documentTypeHints.length ? documentTypeHints : undefined,
+      entities,
+    });
     const clusterSplit = tryCategoryClusterSplitV2(
       taxonomyResultEarly,
       query,
@@ -791,6 +942,82 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     return { rawHits: [], retrievalTrace: trace };
   }
 
+  // U4 Query Rewriter: hoisted before multi-goal/single-goal branch so BOTH paths benefit from the
+  // enriched query and variants. Multi-goal variant searches run after the per-goal loop (below).
+  let queryForEmbed = query;
+  let queryRewriteMeta: {
+    enabled: boolean;
+    called: boolean;
+    used?: boolean;
+    model_id?: string;
+    attempts?: number;
+    parse_mode?: 'strict' | 'extract';
+    rewritten_query?: string;
+    variants?: string[];
+    negative_terms?: string[];
+    categories_top3?: string[];
+    doc_types_top3?: string[];
+    confidence?: number;
+    not_used_reason_codes?: string[];
+  };
+  if (config.u4QueryRewriteEnabled && config.openRouterApiKey && !isCircuitOpen()) {
+    const taxonomySnapshotSummary = taxonomyResultEarly
+      ? `Categories: ${(taxonomyResultEarly.category_hints ?? []).slice(0, 10).join(', ')}. ` +
+        `Aliases: ${[...new Set((taxonomyResultEarly.alias_hits ?? []).map((h) => h.alias))].slice(0, 15).join(', ')}.`
+      : '(multi-goal query — taxonomy computed per-goal)';
+    const vocabulary = await getLldbiVocabulary();
+    const queryRewriteResult = await callQueryRewriter({
+      original_query: query,
+      goals_summary: goalSplit.goals.map((g) => ({ goal_id: g.id, subquery: g.subquery })),
+      domainHint,
+      lldbi:
+        categoryHints.length > 0 || documentTypeHints.length > 0
+          ? { categories_ranked_top3: categoryHints, document_types_ranked_top3: documentTypeHints }
+          : undefined,
+      taxonomy_snapshot_summary: taxonomySnapshotSummary,
+      lldbi_vocabulary: vocabulary,
+      run_id,
+    });
+    const minRewriteConfidence = config.u4QueryRewriteMinConfidence;
+    const hasRewrite =
+      queryRewriteResult.output?.rewritten_query?.trim() &&
+      (queryRewriteResult.output.overall_confidence ?? 0) >= minRewriteConfidence;
+    if (hasRewrite) {
+      queryForEmbed = queryRewriteResult.output!.rewritten_query!.trim();
+      const used =
+        queryForEmbed !== query ||
+        (queryRewriteResult.output!.query_variants?.length ?? 0) > 0 ||
+        (queryRewriteResult.output!.negative_terms?.length ?? 0) > 0;
+      if (used) incrementU4QueryRewriteUsed();
+    }
+    const notUsedReasons: string[] = [];
+    if (queryRewriteResult.called && !queryRewriteResult.output) {
+      notUsedReasons.push(queryRewriteResult.call_failed_reason ?? 'FAILED');
+    } else if (
+      queryRewriteResult.output?.rewritten_query?.trim() &&
+      (queryRewriteResult.output.overall_confidence ?? 0) < minRewriteConfidence
+    ) {
+      notUsedReasons.push('LOW_CONFIDENCE');
+    }
+    queryRewriteMeta = {
+      enabled: true,
+      called: Boolean(queryRewriteResult.called),
+      used: Boolean(hasRewrite),
+      model_id: queryRewriteResult.model_id,
+      attempts: queryRewriteResult.attempts,
+      parse_mode: queryRewriteResult.parse_mode,
+      rewritten_query: queryRewriteResult.output?.rewritten_query?.slice(0, 300),
+      variants: queryRewriteResult.output?.query_variants,
+      negative_terms: queryRewriteResult.output?.negative_terms,
+      categories_top3: queryRewriteResult.output?.categories_ranked_top3,
+      doc_types_top3: queryRewriteResult.output?.document_types_ranked_top3,
+      confidence: queryRewriteResult.output?.overall_confidence,
+      not_used_reason_codes: notUsedReasons.length > 0 ? notUsedReasons : undefined,
+    };
+  } else {
+    queryRewriteMeta = { enabled: false, called: false };
+  }
+
   // Multi-goal path: per-goal retrieval → merge → coverage fusion → diversity cap
   if (isMultiGoal) {
     const multiHits: RawHit[] = [];
@@ -811,7 +1038,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     let totalLatencyMulti = 0;
     let domainBootstrapAgg: DomainBootstrapResult | undefined;
     for (const goal of goalSplit.goals) {
-      const one = await runOneGoal(goal, entities, searchPlan, steps, collections, qdrantCallCounter);
+      const one = await runOneGoal(goal, entities, searchPlan, steps, collections, qdrantCallCounter, lldbiHints);
       for (const h of one.hits) multiHits.push(h);
       allCollectionsUsed.push(...one.collectionsUsed);
       totalLatencyMulti += one.stepsLatencyMs.reduce((a, b) => a + b, 0);
@@ -834,6 +1061,35 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         act_pool_size: poolSize,
       });
     }
+    // QR variants for multi-goal: additional chunk searches for substantive acts missed by per-goal
+    // subquery embeddings. E.g. procedural query → КПК dominates; variant "ст.121 КК тяжке тілесне
+    // ушкодження" surfaces ккУ chunks that goal.subquery embedding misses.
+    if (queryRewriteMeta.called && queryRewriteMeta.used && queryRewriteMeta.variants?.length && qdrantCallCounter.count < 20) {
+      const varTopK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
+      for (const variant of queryRewriteMeta.variants.slice(0, 2)) {
+        const varEff = effectiveQuery(shapeQueryForRetrieval(variant, domainHint, []).shapedQuery);
+        try {
+          const varEmb = await embedQuery(varEff);
+          if (!varEmb.embedding?.length) continue;
+          const varHits = await qdrantSearch({
+            collection: collections.chunks,
+            vector: varEmb.embedding,
+            limit: varTopK,
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
+          for (const h of varHits) {
+            const raw = payloadToRawHit(h, 'lldbi_chunks');
+            if (raw.r2_key && raw.json_path) {
+              multiHits.push(raw);
+            }
+          }
+        } catch {
+          /* variant search failure is non-fatal */
+        }
+      }
+    }
+
     const mergedMulti = dedupeHits(multiHits);
     const fused = applyCoverageFusion(
       mergedMulti,
@@ -867,6 +1123,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           why_tag: 'TAXONOMY',
           source_tier: 'ACTS_2' as const,
           category: meta?.category ?? undefined,
+          document_type: meta?.document_type ?? undefined,
         };
       })
     );
@@ -881,16 +1138,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
+      documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,
       chunks_evidence_top_acts: chunksEvidenceMulti,
       familyEvidence: toFamilyEvidenceSummary(familyEvidenceMulti),
     });
-    const selected_acts_multi = selectedActsMulti.selected_acts.map((a) => ({
-      rada_nreg: a.rada_nreg,
-      act_title: a.act_title,
-      score: a.score,
-      why_selected: a.why_selected,
-      reason_tag: a.reason_tag,
-    }));
+    const selected_acts_multi = await hydrateSelectedActsMeta(
+      selectedActsMulti.selected_acts,
+      selectedActsMulti.selected_acts_confidence
+    );
 
     const multiTrace: RetrievalTrace = {
       version: 1,
@@ -926,6 +1181,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         selected_acts_decision: selectedActsMulti.selected_acts_decision,
         selected_acts_confidence: selectedActsMulti.selected_acts_confidence,
         selected_acts_kinds_count: selectedActsMulti.selected_acts_kinds_count,
+        selected_acts_document_types_top: selectedActsMulti.selected_acts_document_types_top,
         family_evidence_summary: toFamilyEvidenceSummary(familyEvidenceMulti),
         family_evidence_reason_codes:
           familyEvidenceMulti.reason_codes.length ? familyEvidenceMulti.reason_codes : undefined,
@@ -960,7 +1216,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                 supports: '(from taxonomy alias_hits)',
               }
             : undefined,
+        query_rewrite: queryRewriteMeta,
         reason_codes: multiReasonCodes.length ? multiReasonCodes : undefined,
+        lldbi_hints_present: lldbiHintsPresent,
+        lldbi_hints_used: toLldbiHintsUsed(taxonomyResultEarly?.taxonomy_hints_used),
         qdrant_calls_count_total: qdrantCallCounter.count,
         planner: {
           tier_selected: plannerMeta.tier,
@@ -1005,6 +1264,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     (await getTaxonomyCandidates({
       query,
       domainHint,
+      categoryHints: categoryHints.length ? categoryHints : undefined,
+      documentTypeHints: documentTypeHints.length ? documentTypeHints : undefined,
       entities,
     }));
   taxonomySnapshotVersion = taxonomyResult.debug.taxonomy_snapshot_version ?? null;
@@ -1073,7 +1334,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
 
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
-    query,
+    queryForEmbed,
     domainHint,
     taxonomyResult.anchor_tokens
   );
@@ -1083,11 +1344,27 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const topK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
   const minScore = searchPlan.thresholds?.min_score ?? config.minScoreThreshold;
 
+  // Build query list for multi-query retrieval (RRF): main + distinct variants for semantic expansion
+  const effectiveNorm = effective.trim().toLowerCase();
+  const variants =
+    config.u4MultiQueryEnabled && queryRewriteMeta?.variants?.length
+      ? queryRewriteMeta.variants
+          .map((v) => (typeof v === 'string' ? v.trim() : ''))
+          .filter((v) => v.length > 0 && v.toLowerCase() !== effectiveNorm)
+          .slice(0, config.u4MultiQueryMaxVariants)
+      : [];
+  const queriesToSearch = [effective, ...variants];
+  const useMultiQuery = queriesToSearch.length > 1;
+
   let vector: number[] | null = null;
+  const vectorsByQuery: number[][] = [];
   const embedStart = Date.now();
   try {
-    const emb = await embedQuery(effective);
-    vector = emb.embedding;
+    for (const q of queriesToSearch) {
+      const emb = await embedQuery(q.slice(0, 12000));
+      vectorsByQuery.push(emb.embedding);
+    }
+    vector = vectorsByQuery[0] ?? null;
     stepsLatencyMs.push(Date.now() - embedStart);
   } catch (err) {
     degraded.lldbi = true;
@@ -1153,23 +1430,43 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const usedActsSearch = stepsToRun.some((s) => s.kind === 'lldbi_acts');
 
   const rawPerStep: RawHit[] = [];
+  const hitKey = (r: RawHit) => `${r.r2_key ?? ''}:${r.json_path ?? ''}`;
   for (const { kind, collection } of stepsToRun) {
     const stepStart = Date.now();
+    const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
     try {
-      const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
-      const hits = await qdrantSearch({
-        collection,
-        vector,
-        limit,
-        timeoutMs: config.qdrantTimeoutSec * 1000,
-        callCounter: qdrantCallCounter,
-      });
+      if (useMultiQuery && vectorsByQuery.length > 1) {
+        const lists: RawHit[][] = [];
+        for (const v of vectorsByQuery) {
+          const hits = await qdrantSearch({
+            collection,
+            vector: v,
+            limit,
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
+          const rawList = hits
+            .map((h) => payloadToRawHit(h, kind))
+            .filter((r) => r.r2_key && r.json_path);
+          lists.push(rawList);
+        }
+        const merged = rrfMerge(lists, hitKey, (r) => r.score ?? 0);
+        rawPerStep.push(...merged);
+      } else {
+        const hits = await qdrantSearch({
+          collection,
+          vector: vector!,
+          limit,
+          timeoutMs: config.qdrantTimeoutSec * 1000,
+          callCounter: qdrantCallCounter,
+        });
+        for (const h of hits) {
+          const raw = payloadToRawHit(h, kind);
+          if (raw.r2_key && raw.json_path) rawPerStep.push(raw);
+        }
+      }
       stepsLatencyMs.push(Date.now() - stepStart);
       collectionsUsed.push(collection);
-      for (const h of hits) {
-        const raw = payloadToRawHit(h, kind);
-        if (raw.r2_key && raw.json_path) rawPerStep.push(raw);
-      }
     } catch (err) {
       degraded.lldbi = true;
       stepsLatencyMs.push(Date.now() - stepStart);
@@ -1406,6 +1703,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     rada_nreg: string;
     title: string | undefined;
     category: string | null;
+    document_type: string | null;
     score: number;
     reasons: string[];
     priorApplied: boolean;
@@ -1443,6 +1741,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       rada_nreg: nreg,
       title: meta?.title ?? undefined,
       category: meta?.category ?? null,
+      document_type: meta?.document_type ?? null,
       score: totalScore,
       reasons,
       priorApplied,
@@ -1552,6 +1851,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     why_tag: a.whyTag,
     source_tier: a.source_tier,
     category: a.category ?? undefined,
+    document_type: a.document_type ?? undefined,
   }));
 
   // Distribution: hits by act in top 3 acts (by hit count in top 30 of returned list)
@@ -1610,17 +1910,16 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     taxonomyNregs: taxonomyNregSet,
     actsSearchNregs: actNregsFromSearch,
     domainHint,
+    documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,
     actSelectionLowConfidence: actSelectionLowConfidence || familyWeakOrNoPrimary,
     chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
     familyEvidence: toFamilyEvidenceSummary(familyEvidence),
   });
-  const selected_acts = selectedActsResult.selected_acts.map((a) => ({
-    rada_nreg: a.rada_nreg,
-    act_title: a.act_title,
-    score: a.score,
+  const selected_acts_raw = selectedActsResult.selected_acts.map((a) => ({
+    ...a,
     why_selected: plannerRationaleByNreg.get(a.rada_nreg) ?? a.why_selected,
-    reason_tag: a.reason_tag,
   }));
+  const selected_acts = await hydrateSelectedActsMeta(selected_acts_raw, selectedActsResult.selected_acts_confidence);
   const selected_acts_sources_breakdown = selectedActsResult.selected_acts_sources_breakdown;
   const chunks_evidence_top_acts = selectedActsResult.chunks_evidence_top_acts;
   const selected_acts_decision = selectedActsResult.selected_acts_decision;
@@ -1663,11 +1962,21 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   };
   let selected_acts_final = selected_acts;
   let selected_acts_sources_breakdown_final = selected_acts_sources_breakdown;
+  const recoveredEmptySelected =
+    selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE') ||
+    selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY');
   let low_confidence_final =
     useLowConfidenceFallback ||
     actSelectionLowConfidence ||
     familyWeakOrNoPrimary ||
-    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED');
+    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
+    recoveredEmptySelected;
+
+  // E.3: ensure low_confidence has an explicit reason (OUT_OF_SCOPE / NO_STRONG_ACT_EVIDENCE / LOW_EVIDENCE / ACT_SELECTION_LOW_CONFIDENCE)
+  const lowConfReasonCodes = ['OUT_OF_SCOPE', 'NO_STRONG_ACT_EVIDENCE', 'LOW_EVIDENCE', 'ACT_SELECTION_LOW_CONFIDENCE'];
+  if (low_confidence_final && !reasonCodes.some((r) => lowConfReasonCodes.includes(r))) {
+    reasonCodes.push('ACT_SELECTION_LOW_CONFIDENCE');
+  }
 
   const allowedFamilyKeysSet = new Set<string>(['unknown']);
   for (const f of familyEvidence.debug.top_families) allowedFamilyKeysSet.add(f.family_key);
@@ -1911,6 +2220,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                 score: best.score ?? 0,
                 why_selected: expandOnlyMode ? 'routing_hints_family_boost' : 'routing_hints',
                 reason_tag: 'from_routing_hints' as const,
+                source_tags: ['ROUTING_HINTS'],
+                document_type: (best as { document_type?: string }).document_type ?? undefined,
+                category: (best as { category?: string }).category ?? undefined,
+                act_kind: classifyActKind(best.title ?? '', (best as { document_type?: string }).document_type, (best as { category?: string }).category),
+                flags: {},
               },
             ];
             (breakdown.from_routing_hints ??= []).push(best.rada_nreg);
@@ -1959,6 +2273,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                       score: (h.score as number) ?? 0,
                       why_selected: 'routing_hints_family_boost',
                       reason_tag: 'from_routing_hints' as const,
+                      source_tags: ['ROUTING_HINTS'],
+                      document_type: meta?.document_type ?? undefined,
+                      category: meta?.category ?? undefined,
+                      act_kind: classifyActKind(title, meta?.document_type, meta?.category),
+                      flags: {},
                     },
                   ];
                   (breakdown.from_routing_hints ??= []).push(nreg);
@@ -2044,9 +2363,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           ? 'all_hits_below_min_score_fallback_to_top_k'
           : reasonCodes.includes('ROUTING_HINTS_LOW_CONF')
             ? 'ROUTING_HINTS_LOW_CONF'
-            : actSelectionLowConfidence
-              ? 'ACT_SELECTION_LOW_CONFIDENCE'
-              : undefined,
+            : recoveredEmptySelected
+              ? 'EMPTY_SELECTED_ACTS_RECOVERED'
+              : actSelectionLowConfidence
+                ? 'ACT_SELECTION_LOW_CONFIDENCE'
+                : undefined,
       selected_acts: selected_acts_final,
       family_hints: familyHints.length ? familyHints.slice(0, 5).map((h) => h.family) : undefined,
       prior_applied:
@@ -2063,18 +2384,24 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           : undefined,
       used_act_planner: actPlannerCalledThisRun,
       query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
+      multi_query_variants_count: useMultiQuery ? variants.length : undefined,
       used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
       anchors_used: anchorsUsed.length ? anchorsUsed : undefined,
       taxonomy_snapshot_version: taxonomySnapshotVersion ?? undefined,
+      lldbi_hints_present: lldbiHintsPresent,
+      lldbi_hints_used: toLldbiHintsUsed(taxonomyResult.taxonomy_hints_used),
+      taxonomy_hints_used: taxonomyResult.taxonomy_hints_used,
       hybrid_rescore_used: taxonomyResult.debug.source === 'supabase' ? true : undefined,
       thesaurus_version: 1,
       act_candidates_top: actCandidatesTop,
+      query_rewrite: queryRewriteMeta,
       stage_decisions: {
         used_taxonomy: taxonomyResult.debug.source === 'supabase',
         used_acts_search: usedActsSearch,
         used_filtered_chunks: usedFilteredChunksSearch,
-        used_llm_rewrite: false,
+        used_llm_rewrite: queryForEmbed !== query,
         used_llm_rerank: false,
+        used_multi_query: useMultiQuery,
         used_goal_splitter: true,
         used_llm_planner: goalSplit.used_llm_planner,
         used_act_planner: actPlannerCalledThisRun,
@@ -2112,6 +2439,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selected_acts_decision,
       selected_acts_confidence: selectedActsResult.selected_acts_confidence,
       selected_acts_kinds_count: selectedActsResult.selected_acts_kinds_count,
+      selected_acts_document_types_top: selectedActsResult.selected_acts_document_types_top,
       family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       routing_hints: routingHintsMeta,

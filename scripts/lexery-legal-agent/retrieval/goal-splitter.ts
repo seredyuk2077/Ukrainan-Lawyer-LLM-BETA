@@ -51,7 +51,10 @@ function detectMultiQuestion(query: string): boolean {
   return false;
 }
 
-/** Multi-topic: markers of different subdomains (criminal + procedure, tax + admin, labor + civil). */
+/**
+ * Multi-topic: coarse markers for subdomains. Primary domain should come from U2 (domainHint).
+ * Do not add word lists here—new topics (e.g. antisemitism, terrorism) belong in a classifier (U2 or a light AI), not in retrieval heuristics.
+ */
 function detectMultiTopic(query: string, domainHint?: string): { multi: boolean; domains: string[] } {
   const q = query.normalize('NFC').toLowerCase();
   const domains: string[] = [];
@@ -135,7 +138,12 @@ export function heuristicGoalSplit(
   if (inputLikeTable) reasonCodes.push('input_looks_like_table');
 
   const subqueries = splitIntoSubqueries(query);
-  const useMultiGoal = subqueries.length >= 2 || (multiT && domains.length >= 2) || (inputLikeContract && query.length > 100);
+  // "?" split requires multiQ (≥2 "?") to avoid spurious 2-goal split for single questions like
+  // "...задоволенню? Відповідь обґрунтуйте." where second "subquery" is a trivial instruction phrase.
+  const useMultiGoal =
+    (multiQ && subqueries.length >= 2) ||
+    (multiT && domains.length >= 2) ||
+    (inputLikeContract && query.length > 100);
 
   if (!useMultiGoal || subqueries.length === 0) {
     const single: EvidenceGoal = {
