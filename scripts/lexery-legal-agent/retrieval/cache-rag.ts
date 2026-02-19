@@ -243,7 +243,9 @@ const SELECTED_ACTS_MAX = 9;
 const TWO_STAGE_CHUNKS_PER_ACT = 35;
 /** Diversity cap: max hits from same act in top N (avoids one act dominating). */
 const DIVERSITY_TOP_N = 25;
-const DIVERSITY_MAX_SAME_ACT = 16;
+// Limit same-act dominance: max 8/25 in top positions (~27% of evidence window).
+// Reduced from 16 which allowed 16/30=53% slots to one act (КПК dominated task12, 2790-12 dominated task1).
+const DIVERSITY_MAX_SAME_ACT = 8;
 
 /** Stable tie-breaker: score desc → rada_nreg asc → r2_key asc → json_path asc. Same input => same order. */
 function compareRawHitByScore(a: RawHit, b: RawHit): number {
@@ -493,16 +495,11 @@ function applyNoisePenalty(hits: RawHit[], topNForGuard: number = 30): NoisePena
     const isNoise = NOISE_TITLE_PATTERNS.some((re) => re.test(title));
     if (!isNoise) return { hit: h, effectiveScore: h.score ?? 0 };
     const score = h.score ?? 0;
-    const hasPrimaryInDelta = topHits.some(
-      (o) => o !== h && isPrimaryLawLike(o) && (o.score ?? 0) >= score - NOISE_PENALTY_DELTA
-    );
     const gid = h.goal_id ?? '_single';
     const onlySourceForGoal = (goalCountInTopN.get(gid) ?? 0) <= 1;
-    if (!hasPrimaryInDelta) {
-      guardBlockedCount += 1;
-      if (!guardReasonCodes.includes('NO_PRIMARY_ALTERNATIVE')) guardReasonCodes.push('NO_PRIMARY_ALTERNATIVE');
-      return { hit: h, effectiveScore: score };
-    }
+    // NOISE_TITLE_PATTERNS acts always get penalized — no hasPrimaryInDelta guard needed,
+    // because known noise acts (e.g. "Про статус народного депутата") semantically match
+    // many unrelated queries and pollute top-30 even without a competing primary law.
     if (onlySourceForGoal) {
       guardBlockedCount += 1;
       if (!guardReasonCodes.includes('ONLY_SOURCE_FOR_GOAL')) guardReasonCodes.push('ONLY_SOURCE_FOR_GOAL');
@@ -1642,6 +1639,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     } catch {
       referenceExpansionMeta.skipped_reason_codes.push('EXPANSION_ERROR');
     }
+  }
+
+  // Re-apply noise penalty + diversity cap after reference expansion so that
+  // ref-expanded hits from known noise acts (e.g. 2790-12) are also penalized and capped.
+  if (referenceExpansionMeta.added_count > 0) {
+    const noiseAfterExp = applyNoisePenalty(allHits, config.u4FusionTopN);
+    allHits.length = 0;
+    allHits.push(...noiseAfterExp.hits);
+    const cappedAfterExp = applyDiversityCap(allHits);
+    allHits.length = 0;
+    allHits.push(...cappedAfterExp);
   }
 
   const totalLatency = stepsLatencyMs.reduce((a, b) => a + b, 0);
