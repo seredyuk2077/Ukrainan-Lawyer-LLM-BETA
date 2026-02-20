@@ -9,8 +9,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(process.cwd(), '.env') });
 dotenv.config({ path: resolve(__dirname, '../.env') });
 
+function parsePort(value: string, defaultPort: number): number {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 && n < 65536 ? n : defaultPort;
+}
+
 export const config = {
-  port: parseInt(process.env.BRAIN_PORT || '3081', 10),
+  port: parsePort(process.env.BRAIN_PORT || '3081', 3081),
   nodeEnv: process.env.NODE_ENV || 'development',
   isDev: process.env.NODE_ENV !== 'production',
 
@@ -71,11 +76,8 @@ export const config = {
   u2DomainLlmEnabled: process.env.U2_DOMAIN_LLM_ENABLED !== 'false',
   u2EntityExtractorStrict: process.env.U2_ENTITY_EXTRACTOR_STRICT === 'true',
 
-  // OpenRouter for U2 Classify (CLF_*). Canonical key: OPENROUTER_API_KEY_ONLINE.
-  openRouterApiKey:
-    process.env.OPENROUTER_API_KEY_ONLINE ||
-    process.env.OPENROUTER_API_KEY ||
-    '',
+  // OpenRouter for U2 Classify (CLF_*). Canonical key only.
+  openRouterApiKey: process.env.OPENROUTER_API_KEY_ONLINE || '',
   clfModelId: process.env.CLF_MODEL_ID || 'openai/gpt-4o-mini',
   clfFallbackModelId: process.env.CLF_FALLBACK_MODEL_ID || '',
   clfTimeoutSec: Math.max(1, parseInt(process.env.CLF_TIMEOUT_SEC || '5', 10)),
@@ -102,6 +104,7 @@ export const config = {
   // U4 CacheRAG (LEX-114, LEX-117): Qdrant + embeddings
   qdrantUrl:
     process.env.QDRANT_URL ||
+    process.env.QDRANT_CLUSTER_ENDPOINT_LEXERY_LEGISLATION_DB ||
     process.env.qdrant_clusterENDPOINT_LEXERY_LEGISLATION_DB ||
     '',
   qdrantApiKey:
@@ -119,11 +122,8 @@ export const config = {
   // U4 Embeddings (aligned with LLDBI index: 1536d, openai/text-embedding-3-small)
   lldbiEmbedModelId: process.env.LLDBI_EMBED_MODEL_ID || 'openai/text-embedding-3-small',
   lldbiEmbedTimeoutSec: Math.max(1, parseInt(process.env.LLDBI_EMBED_TIMEOUT_SEC || '5', 10)),
-  openRouterApiKeyRag:
-    process.env.OPEN_ROUTER_API_RAG ||
-    process.env.OPENROUTER_API_KEY_ONLINE ||
-    process.env.OPENROUTER_API_KEY ||
-    '',
+  // U4 uses the same canonical OpenRouter key.
+  openRouterApiKeyRag: process.env.OPENROUTER_API_KEY_ONLINE || '',
 
   // U5 Gate (LEX-118)
   gateMinHitsThreshold: Math.max(0, parseInt(process.env.GATE_MIN_HITS_THRESHOLD || '3', 10)),
@@ -181,6 +181,35 @@ export const config = {
   u4ReferenceExpansionMaxReferencedActs: Math.min(4, Math.max(1, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_ACTS || '2', 10))),
   u4ReferenceExpansionMaxAddedHits: Math.min(20, Math.max(5, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_HITS || '10', 10))),
   u4ReferenceExpansionMaxQdrantCalls: Math.min(8, Math.max(2, parseInt(process.env.U4_REFERENCE_EXPANSION_MAX_QDRANT_CALLS || '4', 10))),
+
+  // U4 Always-on Query Rewriter (Phase 7): budgeted, every run; enriches short/raw queries for retrieval
+  u4QueryRewriteEnabled: process.env.U4_QUERY_REWRITE_ENABLED !== 'false',
+  // gpt-4o-mini надійніше дотримується "return ONLY JSON" ніж haiku; 600 токенів достатньо для
+  // rewritten_query + 3 variants + negative_terms у Ukrainian без truncation.
+  u4QueryRewriteModel: process.env.U4_QUERY_REWRITE_MODEL || 'openai/gpt-4o-mini',
+  u4QueryRewriteMaxTokens: Math.max(300, Math.min(800, parseInt(process.env.U4_QUERY_REWRITE_MAX_TOKENS || '600', 10))),
+  u4QueryRewriteTimeoutSec: Math.max(3, Math.min(15, parseInt(process.env.U4_QUERY_REWRITE_TIMEOUT_SEC || '8', 10))),
+  u4QueryRewriteMaxCallsPerRun: Math.max(1, Math.min(2, parseInt(process.env.U4_QUERY_REWRITE_MAX_CALLS_PER_RUN || '1', 10))),
+  /** Min overall_confidence to use rewritten_query; below this keep original (trace not_used_reason_codes: LOW_CONFIDENCE). */
+  u4QueryRewriteMinConfidence: Math.min(1, Math.max(0, parseFloat(process.env.U4_QUERY_REWRITE_MIN_CONFIDENCE || '0.5'))),
+
+  // U4 Multi-query retrieval (RRF): use query_variants for semantic expansion; improves recall for synonyms/paraphrases
+  u4MultiQueryEnabled: process.env.U4_MULTI_QUERY_ENABLED !== 'false',
+  u4MultiQueryMaxVariants: Math.min(3, Math.max(1, parseInt(process.env.U4_MULTI_QUERY_MAX_VARIANTS || '2', 10))),
+
+  // U4 LLDBI Soft Prior: boost act candidates whose category/doc_type matches U2 LLDBI hints (data-driven, no wordlists)
+  u4LldbiSoftPriorEnabled: process.env.U4_LLDBI_SOFT_PRIOR_ENABLED !== 'false',
+  /** Category match boost: 0.08 for top hint, 0.04 for 2nd/3rd. Capped at 0.1. */
+  u4LldbiSoftPriorCategoryBoost: Math.min(0.2, Math.max(0, parseFloat(process.env.U4_LLDBI_SOFT_PRIOR_CATEGORY_BOOST || '0.08'))),
+  /** Document type match boost (soft, separate from category). */
+  u4LldbiSoftPriorDocTypeBoost: Math.min(0.15, Math.max(0, parseFloat(process.env.U4_LLDBI_SOFT_PRIOR_DOC_TYPE_BOOST || '0.06'))),
+
+  // U4 OOD Confidence Guard: force low_confidence=true when evidence is weak + domain unknown + no hints
+  u4OodGuardEnabled: process.env.U4_OOD_GUARD_ENABLED !== 'false',
+  /** top_score threshold below which OOD guard may fire (combined with other conditions). */
+  u4OodGuardTopScoreThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U4_OOD_GUARD_TOP_SCORE_THRESHOLD || '0.55'))),
+  /** avg_score threshold (of finalHits) below which OOD guard may fire. */
+  u4OodGuardAvgScoreThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U4_OOD_GUARD_AVG_SCORE_THRESHOLD || '0.52'))),
 } as const;
 
 export function requireEnv(name: string): string {

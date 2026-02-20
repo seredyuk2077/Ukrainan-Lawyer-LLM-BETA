@@ -288,6 +288,13 @@ const FAMILY_PRIOR_BOOST = 0.15;
 const FAMILY_PRIOR_BOOST_WEAK = 0.05;
 const ANTI_FAMILY_PENALTY = 0.05;
 
+/**
+ * LLDBI soft prior policy version (bump when constants change).
+ * Boosts act candidates whose category/doc_type matches U2 LLDBI hints.
+ * Data-driven: no hardcoded category names; works via vocabulary values from Supabase.
+ */
+const LLDBI_SOFT_PRIOR_POLICY_VERSION = 1;
+
 /** family_id -> regex to match act title (Ukrainian). Order: more specific first for actTitleToFamily. */
 const FAMILY_TITLE_SIGNALS: Record<string, RegExp> = {
   administrative_offenses: /купап|адмін.*правопоруш|кодекс.*адмін/i,
@@ -746,7 +753,13 @@ async function runOneGoal(
     .filter((h) => h.rada_nreg)
     .map((h) => (h.rada_nreg as string).trim())
     .filter(Boolean);
-  const allActNregs = [...new Set([...bootstrapActNregs, ...actNregsFromStep, ...(taxonomyResult.rada_nreg_candidates ?? [])])];
+  // LLDBI soft prior: when category hints are present, prefer taxonomy (category-aligned) acts
+  // for within-act retrieval so that hint-aligned acts get higher chunk evidence priority.
+  // Without hints, keep original order (bootstrap first, then vector search, then taxonomy).
+  const taxonomyCandidatesNregs = taxonomyResult.rada_nreg_candidates ?? [];
+  const allActNregs = lldbiHints && lldbiHints.categoryHints.length > 0
+    ? [...new Set([...taxonomyCandidatesNregs, ...bootstrapActNregs, ...actNregsFromStep])]
+    : [...new Set([...bootstrapActNregs, ...actNregsFromStep, ...taxonomyCandidatesNregs])];
   const topNregs = allActNregs.slice(0, TWO_STAGE_ACTS_TOP);
 
   if (hasActCandidates && topNregs.length > 0) {
@@ -1505,7 +1518,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           .map((h) => (h.payload?.rada_nreg as string)?.trim())
           .filter((n): n is string => !!n);
         const taxonomyNregs = taxonomyResult.rada_nreg_candidates ?? [];
-        let mergedNregs = [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
+        // LLDBI soft prior: when category hints present, prefer taxonomy (category-aligned) acts for
+        // within-act retrieval so hint-aligned acts get higher chunk evidence priority.
+        let mergedNregs = (categoryHints.length > 0)
+          ? [...new Set([...taxonomyNregs, ...actNregs])].slice(0, TWO_STAGE_ACTS_TOP)
+          : [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
         if (actPlannerOutput?.goals?.[0]?.act_candidates?.length) {
           const preferred = actPlannerOutput.goals[0].act_candidates
             .filter((c) => c.rada_nreg)
@@ -1743,8 +1760,37 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     if (querySignals.administrative && actFamily === 'criminal') {
       antiPenalty = ANTI_FAMILY_PENALTY;
     }
-    const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty;
-    const whyTag = priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
+
+    // LLDBI soft prior: data-driven boost for category/doc_type alignment with U2 hints.
+    // Vocabulary values from Supabase; never hardcoded category names in code.
+    let lldbiCategoryBoost = 0;
+    let lldbiDocTypeBoost = 0;
+    if (config.u4LldbiSoftPriorEnabled) {
+      if (meta?.category && categoryHints.length > 0) {
+        const catKey = (meta.category).normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
+        for (let i = 0; i < Math.min(categoryHints.length, 3); i++) {
+          const hintKey = categoryHints[i].normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
+          if (catKey && hintKey && (catKey === hintKey || catKey.startsWith(hintKey) || hintKey.startsWith(catKey))) {
+            lldbiCategoryBoost = i === 0 ? config.u4LldbiSoftPriorCategoryBoost : config.u4LldbiSoftPriorCategoryBoost * 0.5;
+            break;
+          }
+        }
+      }
+      if (meta?.document_type && documentTypeHints.length > 0) {
+        const dtKey = (meta.document_type).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+        for (const hint of documentTypeHints) {
+          const hintKey = hint.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+          if (dtKey && hintKey && (dtKey === hintKey || dtKey.includes(hintKey) || hintKey.includes(dtKey))) {
+            lldbiDocTypeBoost = config.u4LldbiSoftPriorDocTypeBoost;
+            break;
+          }
+        }
+      }
+    }
+
+    const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty + lldbiCategoryBoost + lldbiDocTypeBoost;
+    const lldbiPriorApplied = lldbiCategoryBoost > 0 || lldbiDocTypeBoost > 0;
+    const whyTag = lldbiPriorApplied ? 'LLDBI_SOFT_PRIOR' : priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
     return {
       rada_nreg: nreg,
       title: meta?.title ?? undefined,
@@ -1752,8 +1798,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       document_type: meta?.document_type ?? null,
       score: totalScore,
       reasons,
-      priorApplied,
-      priorBoost: familyPriorBoost,
+      priorApplied: priorApplied || lldbiPriorApplied,
+      priorBoost: familyPriorBoost + lldbiCategoryBoost + lldbiDocTypeBoost,
       antiPenalty,
       whyTag,
       source_tier: tier,
@@ -1851,6 +1897,24 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const priorBoostUsed = priorAppliedAny
     ? Math.max(...scoredPool.filter((a) => a.priorApplied).map((a) => a.priorBoost), 0)
     : 0;
+
+  // LLDBI soft prior trace: count acts that received a boost from U2 LLDBI hints
+  const lldbiSoftPriorAppliedActs = config.u4LldbiSoftPriorEnabled
+    ? scoredPool.filter((a) => a.whyTag === 'LLDBI_SOFT_PRIOR').length
+    : 0;
+  const lldbiSoftPriorMeta = config.u4LldbiSoftPriorEnabled && lldbiHintsPresent
+    ? {
+        enabled: true,
+        categories_top3: categoryHints.slice(0, 3),
+        doc_types_top3: documentTypeHints.slice(0, 3),
+        applied_acts_count: lldbiSoftPriorAppliedActs,
+        max_category_boost: config.u4LldbiSoftPriorCategoryBoost,
+        max_doc_type_boost: config.u4LldbiSoftPriorDocTypeBoost,
+        taxonomy_first_reorder: categoryHints.length > 0,
+        policy_version: LLDBI_SOFT_PRIOR_POLICY_VERSION,
+      }
+    : { enabled: config.u4LldbiSoftPriorEnabled, applied_acts_count: 0 };
+
   const actCandidatesTop = diversityOrdered.slice(0, SELECTED_ACTS_MAX).map((a) => ({
     rada_nreg: a.rada_nreg,
     title: a.title,
@@ -1979,6 +2043,41 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     familyWeakOrNoPrimary ||
     selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
     recoveredEmptySelected;
+
+  // OOD Confidence Guard: force low_confidence when evidence is globally weak + domain unknown + no U2 hints.
+  // Detects out-of-domain queries without hardcoded "banned topics" lists.
+  // Conditions (all must hold):
+  //   1. top_score below threshold (weak vector match overall)
+  //   2. domainHint absent/general (no clear domain signal from U2)
+  //   3. no U2 LLDBI category hints (no vocabulary-based signal)
+  //   4. avg_score of all hits below threshold (confirming weak global relevance)
+  type OodGuardResult = { fired: boolean; why: string[]; thresholds: { top_score: number; avg_score: number } };
+  let oodGuardResult: OodGuardResult = {
+    fired: false,
+    why: [],
+    thresholds: {
+      top_score: config.u4OodGuardTopScoreThreshold,
+      avg_score: config.u4OodGuardAvgScoreThreshold,
+    },
+  };
+  if (config.u4OodGuardEnabled && !low_confidence_final) {
+    const oodWhy: string[] = [];
+    const topScoreWeak = topScore == null || topScore < config.u4OodGuardTopScoreThreshold;
+    const domainWeak = isDomainWeak(domainHint);
+    const noCategoryHints = categoryHints.length === 0;
+    const avgScoreWeak = avgScore == null || avgScore < config.u4OodGuardAvgScoreThreshold;
+    if (topScoreWeak) oodWhy.push('TOP_SCORE_WEAK');
+    if (domainWeak) oodWhy.push('DOMAIN_WEAK');
+    if (noCategoryHints) oodWhy.push('NO_CATEGORY_HINTS');
+    if (avgScoreWeak) oodWhy.push('AVG_SCORE_WEAK');
+    // All 4 conditions must hold to avoid false positives on legitimate weak-score queries
+    if (oodWhy.length === 4) {
+      low_confidence_final = true;
+      oodGuardResult = { fired: true, why: oodWhy, thresholds: oodGuardResult.thresholds };
+      if (!reasonCodes.includes('OUT_OF_SCOPE')) reasonCodes.push('OUT_OF_SCOPE');
+      if (!reasonCodes.includes('LOW_EVIDENCE')) reasonCodes.push('LOW_EVIDENCE');
+    }
+  }
 
   // E.3: ensure low_confidence has an explicit reason (OUT_OF_SCOPE / NO_STRONG_ACT_EVIDENCE / LOW_EVIDENCE / ACT_SELECTION_LOW_CONFIDENCE)
   const lowConfReasonCodes = ['OUT_OF_SCOPE', 'NO_STRONG_ACT_EVIDENCE', 'LOW_EVIDENCE', 'ACT_SELECTION_LOW_CONFIDENCE'];
@@ -2382,6 +2481,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         familyHints.length > 0
           ? { applied: priorAppliedAny, boost_used: priorBoostUsed }
           : undefined,
+      lldbi_soft_prior: lldbiSoftPriorMeta,
       acts2_used: acts2Used,
       acts2_trigger: acts2Trigger.length ? acts2Trigger : undefined,
       acts2_queries: acts2Queries.length ? acts2Queries : undefined,
@@ -2452,6 +2552,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       routing_hints: routingHintsMeta,
       reference_expansion: referenceExpansionMeta,
+      ood_guard: oodGuardResult,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,

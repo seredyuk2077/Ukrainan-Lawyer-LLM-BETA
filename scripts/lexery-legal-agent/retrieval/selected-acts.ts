@@ -11,35 +11,58 @@ export const CHUNKS_EVIDENCE_SCORE_THRESHOLD = 0.55;
 export const SELECTED_ACTS_MIN = 2;
 export const SELECTED_ACTS_MAX_OUT = 8;
 
-/** Act kind by document type (title/category heuristics only; not "word → act" map). */
-export type ActKind = 'PRIMARY_LAW' | 'SECONDARY_ORDER' | 'CASELAW_OPINION' | 'UNKNOWN';
+/** Act kind by document type (title/document_type/category; best-effort, no "word → act" map). */
+export type ActKind =
+  | 'PRIMARY_LAW'
+  | 'SECONDARY_ORDER'
+  | 'CASELAW_OPINION'
+  | 'KSU_DECISION'
+  | 'INTERNATIONAL_TREATY'
+  | 'BILL_DRAFT'
+  | 'UNKNOWN';
 
 /**
- * Lightweight classifier: document type from title (+ optional document_type/category).
- * Uses tolerant stem-like matching (Ukrainian); no hardcoded act IDs.
+ * Lightweight classifier: document type from title + optional document_type/category.
+ * Best-effort: unknown document_type/category never break; fallback UNKNOWN.
  */
 export function classifyActKind(
   title: string,
-  _document_type?: string,
-  _category?: string
+  document_type?: string | null,
+  _category?: string | null
 ): ActKind {
-  const t = (title ?? '').toLowerCase();
-  // PRIMARY_LAW: codes, main laws, procedural codes
+  const t = (title ?? '').normalize('NFC').toLowerCase();
+  const dt = (document_type ?? '').normalize('NFC').toLowerCase();
+
+  // Prefer document_type when present (data-driven from LLDBI)
+  // Title "Про проект Закону..." must be BILL_DRAFT even if document_type is "Закон"
+  if (/проєкт|проект/i.test(t)) return 'BILL_DRAFT';
+  if (dt) {
+    if (/проєкт|проект/i.test(dt)) return 'BILL_DRAFT';
+    if (/окрем[ауі]\s+думк/i.test(dt)) return 'CASELAW_OPINION';
+    if (/рішення конституційного суду|рішення ксу/i.test(dt)) return 'KSU_DECISION';
+    if (/конвенція|договір|угода/i.test(dt)) return 'INTERNATIONAL_TREATY';
+    if (/кодекс|закон|конституція/i.test(dt)) return 'PRIMARY_LAW';
+    if (
+      /постанова|розпорядження|наказ|інструкція|порядок|правила/i.test(dt)
+    ) {
+      return 'SECONDARY_ORDER';
+    }
+  }
+
+  // Fallback: title-based
   if (
     /кодекс|закон|конституц|процесуальн|кодекс україни про|податковий кодекс|кзпп|цк\s|ск\s|цік|кпк|цпк|ципк|кримінальний кодекс|цивільний кодекс|кку|пкку/i.test(t)
   ) {
     return 'PRIMARY_LAW';
   }
-  // SECONDARY_ORDER: resolutions, orders, personnel
   if (
     /постанова|порядок|розпоряджен|наказ|про звільнення|про призначення|про затвердження порядку/i.test(t)
   ) {
     return 'SECONDARY_ORDER';
   }
-  // CASELAW_OPINION
-  if (/окрема думка|рішення ксу/i.test(t)) {
-    return 'CASELAW_OPINION';
-  }
+  if (/окрема думка|рішення ксу/i.test(t)) return 'CASELAW_OPINION';
+  if (/конвенція|договір|угода/i.test(t)) return 'INTERNATIONAL_TREATY';
+  if (/проєкт|проект/i.test(t)) return 'BILL_DRAFT';
   return 'UNKNOWN';
 }
 
@@ -61,6 +84,14 @@ export type ChunksEvidenceItem = {
   max_score: number;
 };
 
+/** Flags for Writer (recovered/keep-one/draft/opinion). */
+export type SelectedActFlags = {
+  recovered?: boolean;
+  keep_one?: boolean;
+  draft?: boolean;
+  opinion?: boolean;
+};
+
 export type SelectedActOutput = {
   rada_nreg: string;
   act_title?: string;
@@ -69,6 +100,12 @@ export type SelectedActOutput = {
   why_selected?: string;
   reason_tag?: string;
   source_tags?: string[];
+  /** Для Writer: document_type, category, act_kind з LLDBI/taxonomy. */
+  document_type?: string | null;
+  category?: string | null;
+  storage_category?: string | null;
+  act_kind?: ActKind;
+  flags?: SelectedActFlags;
 };
 
 /** Family evidence summary (from family-evidence module) for coverage guard v3. */
@@ -89,6 +126,8 @@ export type BuildSelectedActsInput = {
   taxonomyNregs: Set<string>;
   actsSearchNregs: string[];
   domainHint?: string;
+  /** U2 lldbi.document_types_ranked_top3 — allow BILL_DRAFT/CASELAW_OPINION from taxonomy when type matches. */
+  documentTypeHints?: string[];
   actSelectionLowConfidence?: boolean;
   /** Precomputed chunks evidence (when provided, used instead of computing from finalHits). */
   chunks_evidence_top_acts?: ChunksEvidenceItem[];
@@ -117,6 +156,8 @@ export type BuildSelectedActsOutput = {
     reason_codes: string[];
   };
   selected_acts_kinds_count: SelectedActsKindsCount;
+  /** Top 5 document_type values among selected acts (for trace). */
+  selected_acts_document_types_top?: string[];
 };
 
 export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenceItem[] {
@@ -154,6 +195,25 @@ function categoryToFamilyKey(category: string | undefined | null): string {
     .trim() || 'unknown';
 }
 
+function toKey(s: string): string {
+  return (s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** True if act's document_type matches any U2 document_type hint (contains or is contained). */
+function documentTypeHintMatches(docType: string | undefined | null, hints: string[]): boolean {
+  if (!docType || !hints.length) return false;
+  const k = toKey(docType);
+  return hints.some((h) => {
+    const hk = toKey(h);
+    return hk && (k.includes(hk) || hk.includes(k));
+  });
+}
+
+/** True if U2 hints explicitly mention project/draft (allow BILL_DRAFT from taxonomy only then). */
+function hintsAllowDraft(hints: string[]): boolean {
+  return hints.some((h) => /проєкт|проект/i.test((h ?? '').normalize('NFC')));
+}
+
 /** Min distinct act_kinds in chunks evidence to enforce diversity in selected_acts. */
 const DIVERSITY_EVIDENCE_KINDS_MIN = 2;
 /** Min support (count) for an act in chunks to count toward "evidence kind". */
@@ -166,12 +226,16 @@ const DIVERSITY_EVIDENCE_COUNT_MIN = 2;
 const FAMILY_GUARD_CONFIDENCE_THRESHOLD = 0.55;
 const FAMILY_CONFLICT_TOP2_MIN = 0.45;
 
+/** Kinds that need evidence or doc_type hint when adding from taxonomy (noise control). */
+const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION', 'UNKNOWN'];
+
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
   const {
     finalHits,
     actCandidatesTop,
     taxonomyNregs,
     actsSearchNregs,
+    documentTypeHints,
     actSelectionLowConfidence,
     chunks_evidence_top_acts: inputChunksEvidence,
     familyEvidence,
@@ -209,9 +273,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     fromChunksEvidence.push(e.rada_nreg);
   }
 
-  // B) Add 1–2 from taxonomy/acts_search not yet covered by chunks (support)
+  // B) Add 1–2 from taxonomy/acts_search not yet covered by chunks (support). Noise control: BILL_DRAFT/CASELAW_OPINION/UNKNOWN only with evidence or doc_type hint.
   const cap = actSelectionLowConfidence ? Math.min(7, SELECTED_ACTS_MAX_OUT) : Math.min(5, SELECTED_ACTS_MAX_OUT);
   let wantMore = Math.max(SELECTED_ACTS_MIN, Math.min(cap, selected.length + 2)) - selected.length;
+  let docTypeHintAllowedUsed = false;
   if (wantMore > 0) {
     for (const a of actCandidatesTop) {
       if (selected.length >= SELECTED_ACTS_MAX_OUT) break;
@@ -220,6 +285,32 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (taxonomyNregs.has(a.rada_nreg)) source.push('TAXONOMY');
       if (actsSearchNregs.includes(a.rada_nreg)) source.push('ACTS_SEARCH');
       if (source.length === 0) continue;
+      const kind = classifyActKind(a.title ?? '', a.document_type, a.category);
+      const hasEvidence = chunksEvidenceNregs.has(a.rada_nreg);
+      const allowedByHint = documentTypeHintMatches(a.document_type, documentTypeHints ?? []);
+      if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
+        if (kind === 'BILL_DRAFT') reasonCodes.push('DRAFT_BLOCKED_NO_EVIDENCE');
+        else if (kind === 'CASELAW_OPINION') reasonCodes.push('OPINION_BLOCKED_NO_EVIDENCE');
+        continue;
+      }
+      // BILL_DRAFT: allow only when query/hints are project-related (or has evidence).
+      if (kind === 'BILL_DRAFT' && !hasEvidence && (!allowedByHint || !hintsAllowDraft(documentTypeHints ?? []))) {
+        reasonCodes.push('DRAFT_BLOCKED_NO_EVIDENCE');
+        continue;
+      }
+      // CASELAW_OPINION: allow only with strong evidence (count>=3) or when no PRIMARY_LAW in candidates.
+      if (kind === 'CASELAW_OPINION') {
+        const ev = chunks_evidence_top_acts.find((e) => e.rada_nreg === a.rada_nreg);
+        const strongEvidence = ev && ev.count_in_top30 >= 3;
+        const hasPrimaryInCandidates = actCandidatesTop.some(
+          (x) => classifyActKind(x.title ?? '', x.document_type, x.category) === 'PRIMARY_LAW'
+        );
+        if (!strongEvidence && hasPrimaryInCandidates) {
+          reasonCodes.push('OPINION_BLOCKED_NO_EVIDENCE');
+          continue;
+        }
+      }
+      if (NOISE_KINDS.includes(kind) && allowedByHint && !hasEvidence) docTypeHintAllowedUsed = true;
       selected.push({
         rada_nreg: a.rada_nreg,
         act_title: a.title,
@@ -233,6 +324,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       wantMore -= 1;
       if (wantMore <= 0) break;
     }
+    if (docTypeHintAllowedUsed) reasonCodes.push('DOC_TYPE_HINT_ALLOWED');
   }
 
   // Enforce minimum: if we have fewer than SELECTED_ACTS_MIN, fill from actCandidatesTop
@@ -259,30 +351,40 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   const primaryLawSupport = chunks_evidence_top_acts
     .filter((e) => {
       const cand = candidateByNreg.get(e.rada_nreg);
-      return classifyActKind(cand?.title ?? '') === 'PRIMARY_LAW';
+      return classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category) === 'PRIMARY_LAW';
     })
     .reduce((s, e) => s + e.count_in_top30, 0);
   const orderSupport = chunks_evidence_top_acts
     .filter((e) => {
       const cand = candidateByNreg.get(e.rada_nreg);
-      return classifyActKind(cand?.title ?? '') === 'SECONDARY_ORDER';
+      return classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category) === 'SECONDARY_ORDER';
     })
     .reduce((s, e) => s + e.count_in_top30, 0);
   const primaryLawDominates = primaryLawSupport >= 2 && primaryLawSupport >= orderSupport * 1.5;
 
   const ordersInSelected = selected.filter((s) => {
     const cand = candidateByNreg.get(s.rada_nreg);
-    return classifyActKind(cand?.title ?? s.act_title ?? '') === 'SECONDARY_ORDER';
+    return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) === 'SECONDARY_ORDER';
   });
   const ordersWithEvidence = ordersInSelected.filter((s) => chunksEvidenceNregs.has(s.rada_nreg));
   const toRemoveOrders = new Set<string>();
   if (ordersInSelected.length > 1 || (ordersInSelected.length === 1 && primaryLawDominates && !chunksEvidenceNregs.has(ordersInSelected[0].rada_nreg))) {
     if (ordersWithEvidence.length > 0 && !primaryLawDominates) {
-      let kept = false;
+      // Keep ALL orders with strong evidence (count ≥ threshold) — multiple relevant orders
+      // can serve different regulatory purposes (e.g., energy rules + banking rules).
+      // Only drop orders that are in chunksEvidenceNregs with weak count (< threshold).
+      let keptCount = 0;
       for (const o of ordersInSelected) {
-        if (chunksEvidenceNregs.has(o.rada_nreg) && !kept) {
-          kept = true;
+        const ev = chunks_evidence_top_acts.find((e) => e.rada_nreg === o.rada_nreg);
+        const strongEvidence = ev && ev.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD;
+        if (chunksEvidenceNregs.has(o.rada_nreg) && strongEvidence) {
+          // Strong evidence: keep regardless of how many orders
+          if (keptCount === 0) reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
+          keptCount += 1;
+        } else if (chunksEvidenceNregs.has(o.rada_nreg) && keptCount === 0) {
+          // Weak evidence (not in chunksEvidenceNregs by threshold) but only one with any evidence: keep first
           reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
+          keptCount += 1;
         } else {
           toRemoveOrders.add(o.rada_nreg);
         }
@@ -306,11 +408,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   for (const e of chunks_evidence_top_acts) {
     if (e.count_in_top30 < DIVERSITY_EVIDENCE_COUNT_MIN) continue;
     const cand = candidateByNreg.get(e.rada_nreg);
-    kindsInChunks.add(classifyActKind(cand?.title ?? ''));
+    kindsInChunks.add(classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category));
   }
   const kindsInSelected = new Set(selected.map((s) => {
     const cand = candidateByNreg.get(s.rada_nreg);
-    return classifyActKind(cand?.title ?? s.act_title ?? '');
+    return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
   }));
   if (kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN && kindsInSelected.size < 2) {
     // Add one act from candidates with a different kind if possible
@@ -318,7 +420,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     for (const a of actCandidatesTop) {
       if (selected.some((s) => s.rada_nreg === a.rada_nreg)) continue;
       if (selected.length >= SELECTED_ACTS_MAX_OUT) break;
-      const k = classifyActKind(a.title ?? '');
+      const k = classifyActKind(a.title ?? '', a.document_type, a.category);
       if (existingKinds.has(k)) continue;
       const source: string[] = [];
       if (taxonomyNregs.has(a.rada_nreg)) source.push('TAXONOMY');
@@ -350,13 +452,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     ) {
       const hasDominantFamily = selected.some((s) => {
         const cand = candidateByNreg.get(s.rada_nreg);
-        if (classifyActKind(cand?.title ?? s.act_title ?? '') !== 'PRIMARY_LAW') return false;
+        if (classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) !== 'PRIMARY_LAW') return false;
         return categoryToFamilyKey(cand?.category) === familyEvidence.dominant_family_key;
       });
       if (!hasDominantFamily) {
         const candidate = actCandidatesTop.find((a) => {
           if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
-          if (classifyActKind(a.title ?? '') !== 'PRIMARY_LAW') return false;
+          if (classifyActKind(a.title ?? '', a.document_type, a.category) !== 'PRIMARY_LAW') return false;
           return categoryToFamilyKey(a.category) === familyEvidence.dominant_family_key;
         });
         if (candidate) {
@@ -388,12 +490,12 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       for (const fam of familiesToCover) {
         const hasFam = selected.some((s) => {
           const cand = candidateByNreg.get(s.rada_nreg);
-          return classifyActKind(cand?.title ?? s.act_title ?? '') === 'PRIMARY_LAW' && categoryToFamilyKey(cand?.category) === fam;
+          return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) === 'PRIMARY_LAW' && categoryToFamilyKey(cand?.category) === fam;
         });
         if (!hasFam) {
           const candidate = actCandidatesTop.find((a) => {
             if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
-            if (classifyActKind(a.title ?? '') !== 'PRIMARY_LAW') return false;
+            if (classifyActKind(a.title ?? '', a.document_type, a.category) !== 'PRIMARY_LAW') return false;
             return categoryToFamilyKey(a.category) === fam;
           });
           if (candidate && selected.length < SELECTED_ACTS_MAX_OUT) {
@@ -415,6 +517,135 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  // --- Safety net: if selected is empty but we have evidence or taxonomy, recover one act ---
+  // Anti-order keep-one: if all candidates were SECONDARY_ORDER only, allow 1 best (by evidence then score).
+  if (selected.length === 0) {
+    const ordersOnly = actCandidatesTop.filter(
+      (a) => classifyActKind(a.title ?? '', a.document_type, a.category) === 'SECONDARY_ORDER'
+    );
+    const hasPrimaryCandidate = actCandidatesTop.some(
+      (a) => classifyActKind(a.title ?? '', a.document_type, a.category) === 'PRIMARY_LAW'
+    );
+    if (ordersOnly.length > 0 && !hasPrimaryCandidate) {
+      const evidenceByNreg = new Map(chunks_evidence_top_acts.map((e) => [e.rada_nreg, e]));
+      const bestOrder = [...ordersOnly].sort((a, b) => {
+        const evA = evidenceByNreg.get(a.rada_nreg);
+        const evB = evidenceByNreg.get(b.rada_nreg);
+        const cA = evA?.count_in_top30 ?? 0;
+        const cB = evB?.count_in_top30 ?? 0;
+        if (cB !== cA) return cB - cA;
+        const sA = evA?.max_score ?? a.score ?? 0;
+        const sB = evB?.max_score ?? b.score ?? 0;
+        return sB - sA;
+      })[0];
+      if (bestOrder) {
+        const source: string[] = [];
+        if (taxonomyNregs.has(bestOrder.rada_nreg)) source.push('TAXONOMY');
+        if (actsSearchNregs.includes(bestOrder.rada_nreg)) source.push('ACTS_SEARCH');
+        if (chunksEvidenceNregs.has(bestOrder.rada_nreg)) {
+          source.push('CHUNKS_EVIDENCE');
+          fromChunksEvidence.push(bestOrder.rada_nreg);
+        }
+        selected.push({
+          rada_nreg: bestOrder.rada_nreg,
+          act_title: bestOrder.title,
+          score: bestOrder.score,
+          why_selected: bestOrder.why_tag ?? 'ALL_SECONDARY_ORDER_ALLOWED_ONE',
+          reason_tag: source[0] ?? 'TAXONOMY',
+          source_tags: [...source, 'ALL_SECONDARY_ORDER_ALLOWED_ONE'],
+        });
+        if (taxonomyNregs.has(bestOrder.rada_nreg)) fromTaxonomy.push(bestOrder.rada_nreg);
+        if (actsSearchNregs.includes(bestOrder.rada_nreg)) fromActsSearch.push(bestOrder.rada_nreg);
+        reasonCodes.push('ALL_SECONDARY_ORDER_ALLOWED_ONE');
+      }
+    }
+    if (selected.length === 0) {
+      const sortedEvidence = [...chunks_evidence_top_acts].sort(
+        (a, b) => (b.count_in_top30 - a.count_in_top30) || ((b.max_score ?? 0) - (a.max_score ?? 0))
+      );
+      const bestFromEvidence = sortedEvidence[0];
+      if (bestFromEvidence) {
+        const cand = candidateByNreg.get(bestFromEvidence.rada_nreg);
+        selected.push({
+          rada_nreg: bestFromEvidence.rada_nreg,
+          act_title: cand?.title,
+          score: bestFromEvidence.max_score,
+          why_selected: `count_in_top30=${bestFromEvidence.count_in_top30} max_score=${bestFromEvidence.max_score?.toFixed(2)} (recovered)`,
+          reason_tag: 'CHUNKS_EVIDENCE',
+          source_tags: ['CHUNKS_EVIDENCE', 'EMPTY_RECOVERED'],
+        });
+        fromChunksEvidence.push(bestFromEvidence.rada_nreg);
+        reasonCodes.push('EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE');
+      } else {
+        const primaryFromTaxonomy = actCandidatesTop.find((a) => {
+          if (!taxonomyNregs.has(a.rada_nreg) && !actsSearchNregs.includes(a.rada_nreg)) return false;
+          return classifyActKind(a.title ?? '', a.document_type, a.category) === 'PRIMARY_LAW';
+        });
+        if (primaryFromTaxonomy) {
+          const source: string[] = [];
+          if (taxonomyNregs.has(primaryFromTaxonomy.rada_nreg)) source.push('TAXONOMY');
+          if (actsSearchNregs.includes(primaryFromTaxonomy.rada_nreg)) source.push('ACTS_SEARCH');
+          selected.push({
+            rada_nreg: primaryFromTaxonomy.rada_nreg,
+            act_title: primaryFromTaxonomy.title,
+            score: primaryFromTaxonomy.score,
+            why_selected: primaryFromTaxonomy.why_tag ?? 'TAXONOMY (recovered)',
+            reason_tag: source[0] ?? 'TAXONOMY',
+            source_tags: [...source, 'EMPTY_RECOVERED'],
+          });
+          if (taxonomyNregs.has(primaryFromTaxonomy.rada_nreg)) fromTaxonomy.push(primaryFromTaxonomy.rada_nreg);
+          if (actsSearchNregs.includes(primaryFromTaxonomy.rada_nreg)) fromActsSearch.push(primaryFromTaxonomy.rada_nreg);
+          reasonCodes.push('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY');
+        }
+      }
+    }
+  }
+
+  // --- Policy 4.3: drop BILL_DRAFT when PRIMARY_LAW present and user didn't ask for draft ---
+  const hasPrimaryInSelected = selected.some((s) => {
+    const cand = candidateByNreg.get(s.rada_nreg);
+    return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) === 'PRIMARY_LAW';
+  });
+  if (hasPrimaryInSelected && !hintsAllowDraft(documentTypeHints ?? [])) {
+    const draftNregs = new Set<string>();
+    for (let i = selected.length - 1; i >= 0; i--) {
+      const s = selected[i];
+      const cand = candidateByNreg.get(s.rada_nreg);
+      const k = classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
+      if (k === 'BILL_DRAFT') {
+        draftNregs.add(s.rada_nreg);
+        selected.splice(i, 1);
+      }
+    }
+    if (draftNregs.size > 0) {
+      reasonCodes.push('DRAFT_DROPPED_PRIMARY_PRESENT');
+      for (const nreg of draftNregs) {
+        const idxF = fromChunksEvidence.indexOf(nreg);
+        if (idxF >= 0) fromChunksEvidence.splice(idxF, 1);
+        const idxT = fromTaxonomy.indexOf(nreg);
+        if (idxT >= 0) fromTaxonomy.splice(idxT, 1);
+        const idxA = fromActsSearch.indexOf(nreg);
+        if (idxA >= 0) fromActsSearch.splice(idxA, 1);
+      }
+    }
+  }
+
+  // Enrich selected items for Writer: document_type, category, act_kind, flags (E.2)
+  for (const s of selected) {
+    const cand = candidateByNreg.get(s.rada_nreg);
+    s.document_type = cand?.document_type ?? null;
+    s.category = cand?.category ?? null;
+    s.act_kind = classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
+    s.flags = {
+      recovered: s.source_tags?.includes('EMPTY_RECOVERED') ?? false,
+      keep_one: s.source_tags?.includes('ALL_SECONDARY_ORDER_ALLOWED_ONE') ?? false,
+      draft: false,
+      opinion: false,
+    };
+    if (s.act_kind === 'BILL_DRAFT') s.flags.draft = true;
+    if (s.act_kind === 'CASELAW_OPINION') s.flags.opinion = true;
+  }
+
   // Cap total for harness invariant (≤9)
   const selectedCapped = selected.slice(0, SELECTED_ACTS_MAX_OUT);
 
@@ -425,7 +656,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   // Confidence: do NOT lower only because we trimmed orders. Use evidence strength.
   let selected_acts_confidence = 0.5;
-  if (fromChunksEvidence.length > 0) {
+  const recoveredEmpty =
+    reasonCodes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE') ||
+    reasonCodes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY');
+  const allSecondaryOrderAllowedOne = reasonCodes.includes('ALL_SECONDARY_ORDER_ALLOWED_ONE');
+  if (recoveredEmpty || allSecondaryOrderAllowedOne) {
+    selected_acts_confidence = 0.5;
+  } else if (fromChunksEvidence.length > 0) {
     const strong = chunks_evidence_top_acts.filter(
       (e) =>
         e.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD ||
@@ -458,11 +695,18 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   // selected_acts_kinds_count for trace
   const selected_acts_kinds_count: SelectedActsKindsCount = {};
+  const docTypeCounts = new Map<string, number>();
   for (const s of selectedCapped) {
     const cand = candidateByNreg.get(s.rada_nreg);
-    const k = classifyActKind(cand?.title ?? s.act_title ?? '');
+    const k = classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
     selected_acts_kinds_count[k] = (selected_acts_kinds_count[k] ?? 0) + 1;
+    const dt = cand?.document_type?.trim();
+    if (dt) docTypeCounts.set(dt, (docTypeCounts.get(dt) ?? 0) + 1);
   }
+  const selected_acts_document_types_top = [...docTypeCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([docType]) => docType);
 
   return {
     selected_acts: selectedCapped,
@@ -476,5 +720,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     chunks_evidence_top_acts,
     selected_acts_decision,
     selected_acts_kinds_count,
+    selected_acts_document_types_top:
+      selected_acts_document_types_top.length > 0 ? selected_acts_document_types_top : undefined,
   };
 }
