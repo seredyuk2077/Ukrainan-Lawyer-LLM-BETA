@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 // --- RawHit (U4 output: pointer to R2 fragment, no full text in RunRecord) ---
 
-export const RawHitSourceSchema = z.enum(['lldbi_chunks', 'lldbi_acts', 'memory']);
+export const RawHitSourceSchema = z.enum(['lldbi_chunks', 'lldbi_acts', 'memory', 'REFERENCE_EXPANSION']);
 export type RawHitSource = z.infer<typeof RawHitSourceSchema>;
 
 export const RawHitSchema = z.object({
@@ -68,6 +68,7 @@ export const RetrievalTraceSchema = z.object({
       avg_score: z.number().optional(),
       low_confidence: z.boolean().optional(),
       query_variants_used: z.array(z.string()).optional(),
+      multi_query_variants_count: z.number().int().min(0).optional(),
       used_filtered_chunks_search: z.boolean().optional(),
       anchors_used: z.array(z.string()).optional(),
       taxonomy_snapshot_version: z.number().nullable().optional(),
@@ -91,6 +92,7 @@ export const RetrievalTraceSchema = z.object({
           used_filtered_chunks: z.boolean().optional(),
           used_llm_rewrite: z.boolean().optional(),
           used_llm_rerank: z.boolean().optional(),
+          used_multi_query: z.boolean().optional(),
           used_goal_splitter: z.boolean().optional(),
           used_llm_planner: z.boolean().optional(),
           used_act_planner: z.boolean().optional(),
@@ -147,6 +149,25 @@ export const RetrievalTraceSchema = z.object({
             family: z.string().optional(),
             score: z.number().optional(),
             why_selected: z.string().max(200).optional(),
+            /** Source tags for this act (CHUNKS_EVIDENCE, TAXONOMY, ACTS_SEARCH, FAMILY_GUARD, ROUTING_HINTS, etc.). */
+            source_tags: z.array(z.string()).optional(),
+            /** LLDBI/taxonomy metadata, hydrated by rada_nreg when missing. */
+            document_type: z.string().nullable().optional(),
+            category: z.string().nullable().optional(),
+            storage_category: z.string().nullable().optional(),
+            /** Act kind classifier output (PRIMARY_LAW / SECONDARY_ORDER / ... / UNKNOWN). */
+            act_kind: z.string().optional(),
+            /** Flags for Writer (e.g. recovered/keep_one/draft/opinion). */
+            flags: z
+              .object({
+                recovered: z.boolean().optional(),
+                keep_one: z.boolean().optional(),
+                draft: z.boolean().optional(),
+                opinion: z.boolean().optional(),
+              })
+              .optional(),
+            /** Per-act confidence (usually selected_acts_confidence copied per item). */
+            confidence: z.number().optional(),
           })
         )
         .optional(),
@@ -176,6 +197,60 @@ export const RetrievalTraceSchema = z.object({
           policy_version: z.number().optional(),
           included_from_chunks_evidence: z.boolean().optional(),
           reason_codes: z.array(z.string()).optional(),
+        })
+        .optional(),
+      /** U4 Reference expansion: extract refs from top chunks, resolve via taxonomy, add hits. */
+      reference_expansion: z
+        .object({
+          enabled: z.boolean().optional(),
+          attempted: z.boolean().optional(),
+          added_count: z.number().optional(),
+          referenced_acts: z.array(z.string()).optional(),
+          parse_hits_used: z.number().optional(),
+          skipped_reason_codes: z.array(z.string()).optional(),
+        })
+        .optional(),
+      /** U4 LLDBI Soft Prior: data-driven boost trace (policy_version, categories, doc_types, applied count). */
+      lldbi_soft_prior: z
+        .object({
+          enabled: z.boolean().optional(),
+          categories_top3: z.array(z.string()).optional(),
+          doc_types_top3: z.array(z.string()).optional(),
+          applied_acts_count: z.number().optional(),
+          max_category_boost: z.number().optional(),
+          max_doc_type_boost: z.number().optional(),
+          taxonomy_first_reorder: z.boolean().optional(),
+          policy_version: z.number().optional(),
+        })
+        .optional(),
+      /** U4 OOD Confidence Guard: fired, why, thresholds. */
+      ood_guard: z
+        .object({
+          fired: z.boolean().optional(),
+          why: z.array(z.string()).optional(),
+          thresholds: z
+            .object({
+              top_score: z.number().optional(),
+              avg_score: z.number().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+      /** U4 Always-on Query Rewriter: trace per run. */
+      query_rewrite: z
+        .object({
+          enabled: z.boolean().optional(),
+          called: z.boolean().optional(),
+          model_id: z.string().optional(),
+          attempts: z.number().optional(),
+          parse_mode: z.enum(['strict', 'extract']).optional(),
+          rewritten_query: z.string().optional(),
+          variants: z.array(z.string()).optional(),
+          negative_terms: z.array(z.string()).optional(),
+          categories_top3: z.array(z.string()).optional(),
+          doc_types_top3: z.array(z.string()).optional(),
+          confidence: z.number().optional(),
+          not_used_reason_codes: z.array(z.string()).optional(),
         })
         .optional(),
     })
