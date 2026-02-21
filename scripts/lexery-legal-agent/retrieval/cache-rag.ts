@@ -2001,9 +2001,29 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   if (familyEvidence.reason_codes.length) {
     reasonCodes.push(...familyEvidence.reason_codes);
   }
-  if (selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED')) {
-    // low_confidence already set via actSelectionLowConfidence when family weak; also set when guard failed
-  }
+  // Fix A: Specialized-domain suppression of NO_PRIMARY_LAW_EVIDENCE from triggering low_confidence.
+  // In domains like healthcare, border_migration, procurement, international_eu — SECONDARY_ORDER /
+  // INTERNATIONAL_TREATY / KSU_DECISION ARE the authoritative source, not PRIMARY_LAW (Закон/Кодекс).
+  // Detection: data-driven via act_kind of hydrated selected_acts (no hardcoded domain names).
+  // Condition: NO_PRIMARY_LAW_EVIDENCE fires BUT at least 1 selected act is a non-primary authoritative
+  // kind with strong chunks evidence (count >= 5). If so, suppress low_confidence for this signal only.
+  const NON_PRIMARY_AUTHORITATIVE_KINDS = new Set(['SECONDARY_ORDER', 'INTERNATIONAL_TREATY', 'KSU_DECISION']);
+  const specializedDomainNoPrimary =
+    familyEvidence.reason_codes.includes('NO_PRIMARY_LAW_EVIDENCE') &&
+    chunks_evidence_top_acts_pre.some((e) => {
+      if (e.count_in_top30 < 5) return false;
+      const hydratedAct = selected_acts.find((sa) => sa.rada_nreg === e.rada_nreg);
+      return hydratedAct && NON_PRIMARY_AUTHORITATIVE_KINDS.has(hydratedAct.act_kind ?? '');
+    });
+
+  // Fix B: COVERAGE_GUARD_FAILED + FAMILY_DOMINANT_OK coexistence — guard fires due to missing
+  // candidateByNreg metadata for acts added via chunks evidence that are not in actCandidatesTop.
+  // FAMILY_DOMINANT_OK already guarantees that PRIMARY_LAW evidence IS present and strong.
+  // The guard's purpose (ensure PRIMARY_LAW in selected) is effectively already met: the act IS in
+  // selected (via CHUNKS_EVIDENCE section A), just not re-detected due to metadata lookup gap.
+  const coverageGuardFiredButFamilyOk =
+    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') &&
+    familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK');
 
   // Phase 6.1: Routing-hints LLM (budgeted, rare) — only when triggers fire
   type RoutingHintsUsedEffect = {
@@ -2040,8 +2060,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   let low_confidence_final =
     useLowConfidenceFallback ||
     actSelectionLowConfidence ||
-    familyWeakOrNoPrimary ||
-    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
+    // familyWeakOrNoPrimary is suppressed in specialized domains where non-primary acts are authoritative
+    (familyWeakOrNoPrimary && !specializedDomainNoPrimary) ||
+    // COVERAGE_GUARD_FAILED is suppressed when FAMILY_DOMINANT_OK already confirms strong PRIMARY_LAW evidence
+    (selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') && !coverageGuardFiredButFamilyOk) ||
     recoveredEmptySelected;
 
   // OOD Confidence Guard: force low_confidence when evidence is globally weak + domain unknown + no U2 hints.
