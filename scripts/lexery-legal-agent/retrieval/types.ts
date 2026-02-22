@@ -98,6 +98,8 @@ export const RetrievalTraceSchema = z.object({
           used_act_planner: z.boolean().optional(),
           per_goal_act_retrieval: z.boolean().optional(),
           used_global_fallback: z.boolean().optional(),
+          /** Multi-goal: whether taxonomy cluster split v2 was used for goal decomposition. */
+          goal_split_v2: z.boolean().optional(),
         })
         .optional(),
       goals_summary: z
@@ -126,6 +128,10 @@ export const RetrievalTraceSchema = z.object({
         .object({
           /** 0 = no LLM, 1 = cheap/short, 2 = full planner */
           tier: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+          /** Alias for tier (legacy field, same value). */
+          tier_selected: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+          called: z.boolean().optional(),
+          call_failed_reason: z.string().optional(),
           model_id: z.string().optional(),
           duration_ms: z.number().optional(),
           degraded: z.boolean().optional(),
@@ -137,6 +143,9 @@ export const RetrievalTraceSchema = z.object({
           hits_by_act_top3: z.record(z.number()).optional(),
           avg_score_by_act_top3: z.record(z.number()).optional(),
           noise_penalty_applied_count: z.number().optional(),
+          noise_penalty_policy_version: z.number().optional(),
+          noise_penalty_guard_blocked: z.boolean().optional(),
+          noise_penalty_guard_reason_codes: z.array(z.string()).optional(),
         })
         .optional(),
       reason_codes: z.array(z.string()).optional(),
@@ -234,6 +243,17 @@ export const RetrievalTraceSchema = z.object({
               avg_score: z.number().optional(),
             })
             .optional(),
+        })
+        .optional(),
+      /**
+       * U4 low_confidence suppression trace: set when Fix A (specialized domain, no PRIMARY_LAW needed)
+       * or Fix B (COVERAGE_GUARD_FAILED + FAMILY_DOMINANT_OK coexistence) suppresses low_confidence.
+       * Allows writer/trace consumers to see that low_confidence WOULD have fired but was correctly suppressed.
+       */
+      low_confidence_suppressed: z
+        .object({
+          fired: z.boolean(),
+          suppressed_reasons: z.array(z.string()),
         })
         .optional(),
       /** U4 Always-on Query Rewriter: trace per run. */

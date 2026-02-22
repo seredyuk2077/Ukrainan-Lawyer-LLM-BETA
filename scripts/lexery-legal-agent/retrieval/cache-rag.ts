@@ -2021,9 +2021,22 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   // FAMILY_DOMINANT_OK already guarantees that PRIMARY_LAW evidence IS present and strong.
   // The guard's purpose (ensure PRIMARY_LAW in selected) is effectively already met: the act IS in
   // selected (via CHUNKS_EVIDENCE section A), just not re-detected due to metadata lookup gap.
+  //
+  // OOD safety: do NOT suppress if the query rewriter signals OOD (called but not used due to low
+  // overall_confidence). In that case, COVERAGE_GUARD_FAILED is a genuine uncertainty signal for a
+  // borderline OOD query that accidentally matched legal vocabulary.
+  // Detection: data-driven via QR overall_confidence (LLM signal) — no hardcoded topics.
+  // Low confidence means the LLM rewriter itself deems the query non-legal/out-of-scope.
+  // Note: U2 rules path may give a plausible-looking domain for OOD queries (false classification);
+  // QR confidence is more reliable as it's specifically prompted to score legal domain relevance.
+  const qrSignaledOod =
+    queryRewriteMeta.called &&
+    queryRewriteMeta.used === false &&
+    queryRewriteMeta.not_used_reason_codes?.includes('LOW_CONFIDENCE');
   const coverageGuardFiredButFamilyOk =
     selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') &&
-    familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK');
+    familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK') &&
+    !qrSignaledOod;
 
   // Phase 6.1: Routing-hints LLM (budgeted, rare) — only when triggers fire
   type RoutingHintsUsedEffect = {
@@ -2575,6 +2588,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       routing_hints: routingHintsMeta,
       reference_expansion: referenceExpansionMeta,
       ood_guard: oodGuardResult,
+      low_confidence_suppressed:
+        specializedDomainNoPrimary || coverageGuardFiredButFamilyOk
+          ? {
+              fired: true,
+              suppressed_reasons: [
+                ...(specializedDomainNoPrimary ? ['SPECIALIZED_DOMAIN_NO_PRIMARY_LAW'] : []),
+                ...(coverageGuardFiredButFamilyOk ? ['COVERAGE_GUARD_FAMILY_OK'] : []),
+                ...(qrSignaledOod ? [] : []),
+              ],
+            }
+          : undefined,
       qdrant_calls_count_total: qdrantCallCounter.count,
       planner: {
         tier_selected: plannerMeta.tier,
