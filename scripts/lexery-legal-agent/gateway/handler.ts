@@ -62,7 +62,16 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
   const ctx = { request_id: requestId, trace_id: traceId };
 
   try {
-    const parseResult = CreateRunRequestSchema.safeParse(req.body);
+    const rawBody = req.body;
+    if (rawBody == null || typeof rawBody !== 'object') {
+      incrementRunsRejected('validation');
+      res.status(400).json({
+        error: 'Invalid request body',
+        code: 'VALIDATION_ERROR',
+      });
+      return;
+    }
+    const parseResult = CreateRunRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
       incrementRunsRejected('validation');
       res.status(400).json({

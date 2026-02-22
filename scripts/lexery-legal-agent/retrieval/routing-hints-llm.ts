@@ -195,6 +195,7 @@ async function doOneCall(
       messages,
       temperature: 0.1,
       max_tokens: config.u4RoutingHintsMaxTokens,
+      caller: 'u4-routing-hints',
     },
     config.u4RoutingHintsTimeoutSec
   );

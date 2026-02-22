@@ -28,7 +28,21 @@ import {
   incrementU2AiDomainInvalidJson,
   incrementU2AiDomainConfTooLow,
   incrementU2AiDomainDisagreesWithHeuristic,
+  incrementU2AiRoutingCalled,
+  incrementU2AiRoutingUsed,
+  incrementU2AiRoutingInvalidJson,
+  incrementU2AiRoutingConfTooLow,
+  incrementU2AiRoutingDisagreesWithHeuristic,
+  incrementU2RulesRoutingDerived,
+  incrementU2RulesDocTypeNonempty,
+  incrementU2RulesCategoryNonempty,
 } from '../gateway/observability.js';
+import { getLldbiVocabulary, type LldbiVocabularyResult } from '../retrieval/lldbi-vocabulary.js';
+import {
+  deriveLldbiHintsFromVocabulary,
+  legalDomainToTaxonomyKey,
+  type DerivedLldbiHintsResult,
+} from './lldbi-hints-from-vocabulary.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { isCircuitOpen, recordLlmFailure } from './circuit-breaker.js';
 import { OpenRouterError } from '../lib/openrouter.js';
@@ -57,8 +71,24 @@ function taxonomyKeyToLegalDomain(key: string): LegalDomain {
   if (k === 'tax_customs') return 'tax';
   if (k === 'labor_social') return 'labor';
   if (k === 'administrative' || k === 'judiciary_justice' || k === 'administrative_offenses') return 'admin';
-  if (k === 'corporate') return 'corporate';
+  if (k === 'healthcare') return 'health';
+  if (k === 'corporate' || k === 'business_corporate') return 'corporate';
+  if (k === 'education_science') return 'education';
   return 'general';
+}
+
+/** Attach LLDBI vocabulary metadata до query_profile.meta (для MCP-аудиту та forward-compat debug). */
+function attachLldbiVocabularyMeta(queryProfile: QueryProfile, vocabulary: LldbiVocabularyResult): void {
+  if (!queryProfile.meta) {
+    queryProfile.meta = {
+      classifier_mode: 'rules',
+      latency_ms: 0,
+      warnings: [],
+    };
+  }
+  queryProfile.meta.lldbi_vocabulary_source = vocabulary.source;
+  queryProfile.meta.lldbi_vocabulary_fetched_at = new Date(vocabulary.fetchedAt).toISOString();
+  queryProfile.meta.lldbi_vocab_stats = vocabulary.stats;
 }
 
 const runRepo = new RunRepository();
@@ -77,6 +107,30 @@ function computeRulesConfidence(
     : 1;
   const overall = (intentScore + domainScore + ambiguityScore) / 3;
   return { intent: intentScore, domain: domainScore, ambiguity: ambiguityScore, overall };
+}
+
+/** Чи є в запиті явний структурний сигнал галузі (назва/абревіатура акту, явне посилання). Кирилиця: не використовувати \b (не працює для не-ASCII). */
+function hasExplicitDomainCue(query: string): boolean {
+  const q = (query ?? '').trim();
+  if (!q || q.length < 3) return false;
+  const cues = [
+    /(?:^|[\s\W])ККУ(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])КК\s+України(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])ПКУ(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])ЦКУ(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])КЗпП(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])КАС(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])КПК(?:[\s\W]|$)/i,
+    /кримінальний\s+кодекс/i,
+    /податковий\s+кодекс/i,
+    /цивільний\s+кодекс/i,
+    /ст\.\s*\d+\s*(?:ККУ|КК\s+України)/i,
+    /закон\s+про\s+(освіту|охорону\s+здоров'я)/i,
+    /(?:^|[\s\W])МОЗ(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])ТОВ(?:[\s\W]|$)/i,
+    /(?:^|[\s\W])АТ\s+[«""\w]/i,
+  ];
+  return cues.some((re) => re.test(q));
 }
 
 /** Decide gating reason when we call LLM (for meta.llm_used_reason) */
@@ -180,13 +234,29 @@ function buildRulesProfile(
     llm_used_reason?: string[];
     input_source?: 'db_query' | 'snapshot_preview' | 'r2_full';
     ambiguity_source?: 'llm' | 'rules_soft' | 'rules_hard_override' | 'merged';
-  }
+  },
+  lldbiDerived?: DerivedLldbiHintsResult,
+  domainHintForU4?: string
 ): QueryProfile {
   const now = new Date().toISOString();
+  const lldbi = lldbiDerived
+    ? {
+        categories_ranked_top3: lldbiDerived.categories_ranked_top3,
+        document_types_ranked_top3: lldbiDerived.document_types_ranked_top3,
+        routing_confidence: lldbiDerived.routing_confidence,
+        routing_source: lldbiDerived.routing_source,
+      }
+    : {
+        categories_ranked_top3: [] as string[],
+        document_types_ranked_top3: [] as string[],
+        routing_confidence: metaExtra?.rules_confidence?.overall ?? 0.5,
+        routing_source: 'heuristic' as const,
+      };
   return {
     query_profile_version: 1,
     intent: intent as QueryProfile['intent'],
     domain: domain as QueryProfile['domain'],
+    domainHint: domainHintForU4,
     entities,
     ambiguity,
     computed_flags: {
@@ -194,11 +264,15 @@ function buildRulesProfile(
       profile_generation: 'rules',
     },
     routing_flags: routing_flags ?? {},
+    lldbi,
     meta: {
       classifier_mode: 'rules',
       latency_ms: latencyMs,
       warnings: [],
       ...metaExtra,
+      ...(lldbiDerived && {
+        u2_lldbi_hints: { derived: true, reasons: lldbiDerived.meta.reasons },
+      }),
     },
     pipeline_step: 'U2d_done',
     updated_at: now,
@@ -221,13 +295,29 @@ function buildDegradedProfile(
     llm_used_reason?: string[];
     input_source?: 'db_query' | 'snapshot_preview' | 'r2_full';
     ambiguity_source?: 'llm' | 'rules_soft' | 'rules_hard_override' | 'merged';
-  }
+  },
+  lldbiDerived?: DerivedLldbiHintsResult,
+  domainHintForU4?: string
 ): QueryProfile {
   const now = new Date().toISOString();
+  const lldbi = lldbiDerived
+    ? {
+        categories_ranked_top3: lldbiDerived.categories_ranked_top3,
+        document_types_ranked_top3: lldbiDerived.document_types_ranked_top3,
+        routing_confidence: lldbiDerived.routing_confidence,
+        routing_source: lldbiDerived.routing_source,
+      }
+    : {
+        categories_ranked_top3: [] as string[],
+        document_types_ranked_top3: [] as string[],
+        routing_confidence: 0.5,
+        routing_source: 'heuristic' as const,
+      };
   return {
     query_profile_version: 1,
     intent: 'question',
     domain: 'general',
+    domainHint: domainHintForU4,
     entities,
     ambiguity,
     computed_flags: {
@@ -235,10 +325,14 @@ function buildDegradedProfile(
       profile_generation: 'degraded',
     },
     routing_flags: routing_flags ?? {},
+    lldbi,
     meta: {
       classifier_mode: 'degraded',
       warnings,
       ...metaExtra,
+      ...(lldbiDerived && {
+        u2_lldbi_hints: { derived: true, reasons: lldbiDerived.meta.reasons },
+      }),
     },
     pipeline_step: 'U2d_done',
     updated_at: now,
@@ -265,10 +359,23 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     // Resolve query: R2 overflow → use snapshot.input.query_preview (head + tail); else run.query
     const snapshotInput = (run.snapshot as { input?: { query_preview?: { head?: string; tail?: string }; query_overflow?: boolean } })?.input;
     const queryPreview = snapshotInput?.query_preview;
-    const query =
+    let query =
       queryPreview?.head != null && queryPreview?.tail != null
         ? queryPreview.head + '\n...\n' + queryPreview.tail
         : run.query ?? (run.snapshot?.request as { query?: string })?.query ?? '';
+    if (typeof query !== 'string') query = '';
+    query = query.trim();
+    if (query.length === 0) {
+      logger.error('U2 empty query', { ...ctx, error: 'empty_query' });
+      incrementU2Failed();
+      try {
+        await runRepo.markFailed(run_id, 'U2_EMPTY_QUERY');
+      } catch (_) {
+        // ignore
+      }
+      decrementU2Inflight();
+      return;
+    }
     const inputSource: 'db_query' | 'snapshot_preview' | 'r2_full' = queryPreview ? 'snapshot_preview' : 'db_query';
 
     const tenant_id = run.tenant_id ?? null;
@@ -320,9 +427,13 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     const rulesMs = Date.now() - t2a;
     const rulesConfidence = computeRulesConfidence(intent, domain, ambiguity);
 
+    // Домен за типом питання визначає LLM, якщо в запиті немає явного структурного сигналу (ККУ, ПКУ, ст. N ККУ тощо). Без евристик за довжиною/словами.
+    const explicitCue = hasExplicitDomainCue(effectiveQuery);
     const skipLlmByGating =
       !useRulesOnlyConfig &&
       config.u2GatingEnabled &&
+      domain !== 'general' &&
+      explicitCue &&
       rulesConfidence.overall >= config.u2GatingConfidenceThreshold &&
       !normalizer.isComplexInput &&
       !ambiguity.is_ambiguous;
@@ -347,6 +458,19 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
       incrementU2Intent(intent);
       incrementU2Domain(domain);
       if (ambiguity.is_ambiguous) incrementU2Ambiguous();
+      const vocabulary = await getLldbiVocabulary();
+      const domainHintForU4 = legalDomainToTaxonomyKey(domain) ?? undefined;
+      const lldbiDerived = deriveLldbiHintsFromVocabulary({
+        queryText: effectiveQuery,
+        domainHint: domainHintForU4,
+        legalDomain: domain,
+        heuristicConfidence: rulesConfidence.overall,
+        vocabulary,
+      });
+      const resolvedDomainHintForU4 = domainHintForU4 ?? lldbiDerived.categories_ranked_top3[0] ?? undefined;
+      incrementU2RulesRoutingDerived();
+      if (lldbiDerived.document_types_ranked_top3.length > 0) incrementU2RulesDocTypeNonempty();
+      if (lldbiDerived.categories_ranked_top3.length > 0) incrementU2RulesCategoryNonempty();
       queryProfile = buildRulesProfile(
         query,
         intent,
@@ -362,11 +486,14 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
           rules_confidence: rulesConfidence,
           llm_used_reason: skipLlmByGating ? [] : [gatingDecision],
           ambiguity_source: ambiguity.strength === 'hard' ? 'rules_hard_override' : 'rules_soft',
-        }
+        },
+        lldbiDerived,
+        resolvedDomainHintForU4
       );
       if (circuitOpen && queryProfile.meta) {
         queryProfile.meta.warnings = [...(queryProfile.meta.warnings ?? []), 'circuit_open'];
       }
+      attachLldbiVocabularyMeta(queryProfile, vocabulary);
     } else {
       incrementU2GatingLlmCalled();
       incrementU2GatingReason(gatingDecision);
@@ -413,6 +540,12 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             profile_generation: 'llm',
           },
           routing_flags,
+          lldbi: {
+            categories_ranked_top3: [],
+            document_types_ranked_top3: [],
+            routing_confidence: rulesConfidence.overall,
+            routing_source: 'heuristic',
+          },
           meta: {
             classifier_mode: 'llm',
             prompt_version: llmResult.meta.prompt_version,
@@ -430,6 +563,28 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
           pipeline_step: 'U2d_done',
           updated_at: now,
         };
+        // Навіть на LLM path: derive LLDBI hints із vocabulary (data-driven, без хардкод-словників).
+        const vocabulary = await getLldbiVocabulary();
+        const domainHintForU4 = legalDomainToTaxonomyKey(llmResult.domain) ?? undefined;
+        const lldbiDerived = deriveLldbiHintsFromVocabulary({
+          queryText: effectiveQuery,
+          domainHint: domainHintForU4,
+          legalDomain: llmResult.domain,
+          heuristicConfidence: rulesConfidence.overall,
+          vocabulary,
+        });
+        // Keep U4 contract invariant on LLM path; fallback to strongest vocabulary category.
+        queryProfile.domainHint = domainHintForU4 ?? lldbiDerived.categories_ranked_top3[0] ?? undefined;
+        queryProfile.lldbi = {
+          categories_ranked_top3: lldbiDerived.categories_ranked_top3,
+          document_types_ranked_top3: lldbiDerived.document_types_ranked_top3,
+          routing_confidence: lldbiDerived.routing_confidence,
+          routing_source: lldbiDerived.routing_source,
+        };
+        if (queryProfile.meta) {
+          queryProfile.meta.u2_lldbi_hints = { derived: true, reasons: lldbiDerived.meta.reasons };
+        }
+        attachLldbiVocabularyMeta(queryProfile, vocabulary);
         logger.info('U2 LLM path', {
           ...ctx,
           intent: llmResult.intent,
@@ -452,6 +607,19 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
           preEntities
         );
         const warnings = ['llm_timeout_fallback_rules', warnMsg.slice(0, 100)];
+        const vocabulary = await getLldbiVocabulary();
+        const domainHintForU4 = legalDomainToTaxonomyKey(domain) ?? undefined;
+        const lldbiDerived = deriveLldbiHintsFromVocabulary({
+          queryText: effectiveQuery,
+          domainHint: domainHintForU4,
+          legalDomain: domain,
+          heuristicConfidence: 0.5,
+          vocabulary,
+        });
+        const resolvedDomainHintForU4 = domainHintForU4 ?? lldbiDerived.categories_ranked_top3[0] ?? undefined;
+        incrementU2RulesRoutingDerived();
+        if (lldbiDerived.document_types_ranked_top3.length > 0) incrementU2RulesDocTypeNonempty();
+        if (lldbiDerived.categories_ranked_top3.length > 0) incrementU2RulesCategoryNonempty();
         queryProfile = buildDegradedProfile(
           query,
           preEntities,
@@ -465,8 +633,11 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             rules_confidence: rulesConfidence,
             llm_used_reason: ['llm_fallback'],
             ambiguity_source: ambiguity.strength === 'hard' ? 'rules_hard_override' : 'rules_soft',
-          }
+          },
+          lldbiDerived,
+          resolvedDomainHintForU4
         );
+        attachLldbiVocabularyMeta(queryProfile, vocabulary);
         if (ambiguity.is_ambiguous) incrementU2Ambiguous();
         incrementU2Intent('question');
         incrementU2Domain('general');
@@ -482,6 +653,10 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     if (triggerAiDomain) {
       try {
         incrementU2AiDomainCalled();
+        const vocabulary = await getLldbiVocabulary();
+        const hasVocabulary =
+          (vocabulary.categories.length > 0 || vocabulary.documentTypes.length > 0);
+        if (hasVocabulary) incrementU2AiRoutingCalled();
         const aiResult = await classifyDomainWithAi(
           {
             openRouterApiKey: config.openRouterApiKey,
@@ -496,6 +671,7 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             heuristic_domain: finalDomain,
             heuristic_confidence: rulesConfidence.domain,
             run_id,
+            vocabulary: hasVocabulary ? vocabulary : undefined,
           }
         );
         if (queryProfile.meta) {
@@ -512,9 +688,38 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             attempts: aiResult.meta.attempts,
             parse_mode: aiResult.meta.parse_mode,
           };
+          if (hasVocabulary) {
+            queryProfile.meta.u2_ai_routing = {
+              called: true,
+              used:
+                aiResult.meta.used &&
+                (aiResult.confidence >= config.u2AiDomainMinConfidence) &&
+                ((aiResult.categories_ranked_top3?.length ?? 0) > 0 ||
+                  (aiResult.document_types_ranked_top3?.length ?? 0) > 0),
+              categories_top3: aiResult.categories_ranked_top3,
+              document_types_top3: aiResult.document_types_ranked_top3,
+              confidence: aiResult.confidence,
+              parse_mode: aiResult.meta.parse_mode,
+              not_used_reason: aiResult.meta.not_used_reason,
+            };
+          }
+        }
+        if (queryProfile.lldbi) {
+          queryProfile.lldbi = {
+            categories_ranked_top3: aiResult.categories_ranked_top3 ?? [],
+            document_types_ranked_top3: aiResult.document_types_ranked_top3 ?? [],
+            routing_confidence: aiResult.confidence,
+            routing_source: aiResult.meta.used ? 'ai' : 'heuristic',
+          };
         }
         if (aiResult.meta.used) {
           incrementU2AiDomainUsed();
+          if (
+            hasVocabulary &&
+            (aiResult.categories_ranked_top3?.length ?? 0) + (aiResult.document_types_ranked_top3?.length ?? 0) > 0
+          ) {
+            incrementU2AiRoutingUsed();
+          }
           queryProfile.domainHint = aiResult.domain_primary;
           queryProfile.domain_confidence = aiResult.confidence;
           queryProfile.domain_candidates_top2 = [aiResult.domain_primary, aiResult.domain_secondary].filter(
@@ -524,13 +729,18 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             queryProfile.domain = taxonomyKeyToLegalDomain(aiResult.domain_primary);
           }
         } else {
-          if (aiResult.meta.parse_mode === 'failed') incrementU2AiDomainInvalidJson();
-          else if (aiResult.confidence < config.u2AiDomainMinConfidence) incrementU2AiDomainConfTooLow();
-          else if (
+          if (aiResult.meta.parse_mode === 'failed') {
+            incrementU2AiDomainInvalidJson();
+            if (hasVocabulary) incrementU2AiRoutingInvalidJson();
+          } else if (aiResult.confidence < config.u2AiDomainMinConfidence) {
+            incrementU2AiDomainConfTooLow();
+            if (hasVocabulary) incrementU2AiRoutingConfTooLow();
+          } else if (
             aiResult.domain_primary !== 'unknown' &&
             aiResult.domain_primary !== finalDomain
           ) {
             incrementU2AiDomainDisagreesWithHeuristic();
+            if (hasVocabulary) incrementU2AiRoutingDisagreesWithHeuristic();
           }
         }
       } catch (aiErr) {

@@ -1,10 +1,12 @@
 /**
- * U2 AI Domain Classifier (Phase 6) — budgeted, only when heuristic low/unknown.
- * Returns taxonomy family keys only; max 1 call/run; cache by run_id; strict JSON + Zod.
+ * U2 AI Domain Classifier (Phase 6) + Routing v2 — budgeted, only when heuristic low/unknown.
+ * Returns taxonomy family keys; with vocabulary also categories_ranked + document_types_ranked (LLDBI only).
+ * Max 1 call/run; cache by run_id; strict JSON + Zod.
  */
 import { z } from 'zod';
 import { openRouterChat, OpenRouterError } from '../lib/openrouter.js';
 import { runContextGet, runContextSet } from '../lib/run-context.js';
+import type { LldbiVocabularyResult } from '../retrieval/lldbi-vocabulary.js';
 
 export interface AiDomainConfig {
   openRouterApiKey: string;
@@ -37,6 +39,8 @@ const DomainOutputSchema = z.object({
   confidence: z.number().min(0).max(1),
   rationale_short: z.string().max(300).optional(),
   missing_info_flags: z.array(z.string()).optional(),
+  categories_ranked: z.array(z.string()).max(5).optional(),
+  document_types_ranked: z.array(z.string()).max(5).optional(),
 });
 
 export type AiDomainOutput = z.infer<typeof DomainOutputSchema>;
@@ -46,6 +50,8 @@ export interface AiDomainClassifierInput {
   heuristic_domain: string;
   heuristic_confidence: number;
   run_id?: string;
+  /** When set, prompt asks for categories_ranked + document_types_ranked (only from these lists). */
+  vocabulary?: LldbiVocabularyResult;
 }
 
 export interface AiDomainClassifierResult {
@@ -54,6 +60,8 @@ export interface AiDomainClassifierResult {
   confidence: number;
   rationale_short?: string;
   missing_info_flags?: string[];
+  categories_ranked_top3?: string[];
+  document_types_ranked_top3?: string[];
   meta: {
     called: boolean;
     used: boolean;
@@ -67,17 +75,31 @@ export interface AiDomainClassifierResult {
 const TAXONOMY_SUMMARY =
   'Дозволені галузі (тільки ці ключі): criminal, civil, tax_customs, labor_social, administrative, judiciary_justice, administrative_offenses, criminal_procedure, civil_procedure, corporate, general, unknown. Не повертай назви актів.';
 
+const SITUATION_GUIDANCE =
+  'Визначай галузь за типом ПИТАННЯ (про що питають): питання про кримінальну відповідальність/кваліфікацію/покарання/статті ККУ → criminal; питання про відшкодування шкоди, моральну шкоду, позов, стягнення → civil навіть якщо в описі є заподіяння шкоди; юрособи, банкрутство → corporate. Один факт може бути кримінальним або цивільним питанням — дивись на формулювання питання.';
+
 function buildPrompt(input: AiDomainClassifierInput): string {
-  const { query, heuristic_domain, heuristic_confidence } = input;
+  const { query, heuristic_domain, heuristic_confidence, vocabulary } = input;
+  let extra = '';
+  let jsonExample =
+    '{"domain_primary": "<один з дозволених ключів>", "domain_secondary": "<або unknown>", "confidence": 0.0-1.0, "rationale_short": "1-2 речення", "missing_info_flags": []}';
+  if (vocabulary && (vocabulary.categories.length > 0 || vocabulary.documentTypes.length > 0)) {
+    const catList = vocabulary.categories.slice(0, 40).join(', ');
+    const typeList = vocabulary.documentTypes.slice(0, 30).join('", "');
+    extra = `\nДозволені категорії (тільки ці ключі, для categories_ranked): ${catList}.\nДозволені типи документів (тільки ці, для document_types_ranked): "${typeList}".\nПоверни також categories_ranked (масив до 3 ключів з дозволених категорій) та document_types_ranked (масив до 3 типів з дозволених). Якщо не впевнений — порожні масиви.`;
+    jsonExample = `{"domain_primary": "...", "domain_secondary": "...", "confidence": 0.0-1.0, "rationale_short": "...", "missing_info_flags": [], "categories_ranked": [], "document_types_ranked": []}`;
+  }
   return `Ти класифікатор правової галузі запиту. Вхід: запит користувача.
 Евристика дала: domain=${heuristic_domain}, confidence=${heuristic_confidence.toFixed(2)}.
 
+${SITUATION_GUIDANCE}
 ${TAXONOMY_SUMMARY}
+${extra}
 
 Запит: "${query.slice(0, 2000)}"
 
 Поверни ТІЛЬКИ один JSON-об'єкт без markdown:
-{"domain_primary": "<один з дозволених ключів>", "domain_secondary": "<або unknown>", "confidence": 0.0-1.0, "rationale_short": "1-2 речення", "missing_info_flags": []}
+${jsonExample}
 Якщо запит поза правом — domain_primary: "unknown", confidence < 0.55.`;
 }
 
@@ -86,20 +108,51 @@ function normalizeToAllowed(key: string): string {
   return ALLOWED_TAXONOMY_FAMILY_KEYS.has(k) ? k : 'unknown';
 }
 
-function tryParse(content: string): AiDomainOutput | null {
+function filterToAllowedCategories(arr: unknown[], allowed: Set<string>): string[] {
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const v of arr) {
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (s && allowed.has(s)) out.push(s);
+  }
+  return out.slice(0, 3);
+}
+
+function filterToAllowedDocTypes(arr: unknown[], allowed: Set<string>): string[] {
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const v of arr) {
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (s && allowed.has(s)) out.push(s);
+  }
+  return out.slice(0, 3);
+}
+
+function tryParse(content: string, vocabulary?: LldbiVocabularyResult): (AiDomainOutput & { categories_ranked_top3?: string[]; document_types_ranked_top3?: string[] }) | null {
   const trimmed = content.trim();
   const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   const jsonStr = jsonMatch ? jsonMatch[0] : trimmed;
+  const catSet = vocabulary ? new Set(vocabulary.categories) : new Set<string>();
+  const docTypeSet = vocabulary ? new Set(vocabulary.documentTypes) : new Set<string>();
   try {
     const raw = JSON.parse(jsonStr) as unknown;
     const parsed = DomainOutputSchema.safeParse(raw);
     if (parsed.success) {
+      const data = parsed.data;
+      const categories_ranked_top3 =
+        catSet.size > 0 && Array.isArray(data.categories_ranked)
+          ? filterToAllowedCategories(data.categories_ranked, catSet)
+          : undefined;
+      const document_types_ranked_top3 =
+        docTypeSet.size > 0 && Array.isArray(data.document_types_ranked)
+          ? filterToAllowedDocTypes(data.document_types_ranked, docTypeSet)
+          : undefined;
       return {
-        ...parsed.data,
-        domain_primary: normalizeToAllowed(parsed.data.domain_primary),
-        domain_secondary: parsed.data.domain_secondary
-          ? normalizeToAllowed(parsed.data.domain_secondary)
-          : undefined,
+        ...data,
+        domain_primary: normalizeToAllowed(data.domain_primary),
+        domain_secondary: data.domain_secondary ? normalizeToAllowed(data.domain_secondary) : undefined,
+        categories_ranked_top3,
+        document_types_ranked_top3,
       };
     }
     const bestEffort = raw as Record<string, unknown>;
@@ -111,6 +164,10 @@ function tryParse(content: string): AiDomainOutput | null {
       typeof bestEffort.confidence === 'number'
         ? Math.min(1, Math.max(0, bestEffort.confidence))
         : 0.5;
+    const categories_ranked_top3 =
+      catSet.size > 0 ? filterToAllowedCategories(Array.isArray(bestEffort.categories_ranked) ? bestEffort.categories_ranked : [], catSet) : undefined;
+    const document_types_ranked_top3 =
+      docTypeSet.size > 0 ? filterToAllowedDocTypes(Array.isArray(bestEffort.document_types_ranked) ? bestEffort.document_types_ranked : [], docTypeSet) : undefined;
     return {
       domain_primary: primary,
       domain_secondary:
@@ -125,6 +182,8 @@ function tryParse(content: string): AiDomainOutput | null {
       missing_info_flags: Array.isArray(bestEffort.missing_info_flags)
         ? (bestEffort.missing_info_flags as string[]).slice(0, 5)
         : undefined,
+      categories_ranked_top3: categories_ranked_top3?.length ? categories_ranked_top3 : undefined,
+      document_types_ranked_top3: document_types_ranked_top3?.length ? document_types_ranked_top3 : undefined,
     };
   } catch {
     return null;
@@ -171,17 +230,24 @@ export async function classifyDomainWithAi(
           messages,
           temperature: 0.1,
           max_tokens: config.u2AiDomainMaxTokens,
+          caller: 'u2-ai-domain',
         },
         timeoutSec
       );
       lastContent = result.content ?? '';
-      const parsed = tryParse(lastContent);
+      const parsed = tryParse(lastContent, input.vocabulary);
       if (parsed) {
         parseMode = DomainOutputSchema.safeParse(parsed).success ? 'zod' : 'best_effort';
         const used =
           parsed.confidence >= config.u2AiDomainMinConfidence && parsed.domain_primary !== 'unknown';
         const out: AiDomainClassifierResult = {
-          ...parsed,
+          domain_primary: parsed.domain_primary,
+          domain_secondary: parsed.domain_secondary,
+          confidence: parsed.confidence,
+          rationale_short: parsed.rationale_short,
+          missing_info_flags: parsed.missing_info_flags,
+          categories_ranked_top3: parsed.categories_ranked_top3,
+          document_types_ranked_top3: parsed.document_types_ranked_top3,
           meta: { called: true, used, attempts, parse_mode: parseMode },
         };
         if (config.u2AiDomainMaxCallsPerRun >= 1 && run_id) {

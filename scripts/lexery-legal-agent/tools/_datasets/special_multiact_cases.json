@@ -1,0 +1,30 @@
+{
+  "generated_at": "2025-01-01T00:00:00.000Z",
+  "description": "Border crossing + liability multi-act: expect SECONDARY_ORDER (rules/order) + PRIMARY_LAW (code/law) in selected_acts.",
+  "cases": [
+    {
+      "id": "multiact_border_a",
+      "query": "Порушення правил перетину державного кордону: яка відповідальність?",
+      "assertion": "D_multiact_border",
+      "expect_min_distinct_acts": 2,
+      "expect_secondary_order": true,
+      "expect_primary_law": true
+    },
+    {
+      "id": "multiact_border_b",
+      "query": "Які правила перетину кордону діють і що буде за їх порушення?",
+      "assertion": "D_multiact_border",
+      "expect_min_distinct_acts": 2,
+      "expect_secondary_order": true,
+      "expect_primary_law": true
+    },
+    {
+      "id": "multiact_border_c",
+      "query": "Перетин кордону без документів або з порушенням порядку — що загрожує?",
+      "assertion": "D_multiact_border",
+      "expect_min_distinct_acts": 2,
+      "expect_secondary_order": true,
+      "expect_primary_law": true
+    }
+  ]
+}

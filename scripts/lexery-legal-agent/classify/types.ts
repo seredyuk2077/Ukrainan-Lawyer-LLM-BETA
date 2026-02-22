@@ -15,7 +15,9 @@ export type LegalDomain =
   | 'labor'
   | 'admin'
   | 'tax'
+  | 'health'
   | 'corporate'
+  | 'education'
   | 'general';
 
 export type EntityType =
@@ -116,6 +118,29 @@ export interface QueryProfileMeta {
     attempts?: number;
     parse_mode?: string;
   };
+  /** U2 AI routing v2 (categories + document_types from LLDBI vocabulary) */
+  u2_ai_routing?: {
+    called: boolean;
+    used: boolean;
+    categories_top3?: string[];
+    document_types_top3?: string[];
+    confidence?: number;
+    parse_mode?: string;
+    not_used_reason?: string;
+  };
+  /** U2 lldbi hints (derived from vocabulary або AI), for audit. */
+  u2_lldbi_hints?: {
+    derived: boolean;
+    reasons: string[];
+  };
+  /** LLDBI vocabulary snapshot used for lldbi hints (for MCP audit + forward-compat). */
+  lldbi_vocabulary_source?: 'supabase' | 'stub';
+  lldbi_vocabulary_fetched_at?: string;
+  lldbi_vocab_stats?: {
+    totalDocs: number;
+    distinctCategories: number;
+    distinctDocumentTypes: number;
+  };
 }
 
 export interface QueryProfile {
@@ -126,6 +151,13 @@ export interface QueryProfile {
   domainHint?: string;
   domain_confidence?: number;
   domain_candidates_top2?: string[];
+  /** LLDBI routing hints (categories + document_types from vocabulary; U2 AI or heuristic). */
+  lldbi?: {
+    categories_ranked_top3: string[];
+    document_types_ranked_top3: string[];
+    routing_confidence: number;
+    routing_source: 'heuristic' | 'ai' | 'mixed';
+  };
   entities: ExtractedEntity[];
   ambiguity: AmbiguityResult;
   computed_flags: {

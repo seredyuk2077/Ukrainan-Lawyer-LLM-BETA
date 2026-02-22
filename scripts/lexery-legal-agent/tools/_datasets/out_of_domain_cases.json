@@ -1,0 +1,14 @@
+{
+  "generated_at": "2025-01-01T00:00:00.000Z",
+  "description": "Out-of-domain / anti-hallucination: expect low_confidence and appropriate reason_codes (NO_STRONG_ACT_EVIDENCE, OUT_OF_SCOPE, LOW_EVIDENCE).",
+  "cases": [
+    { "id": "ood_1", "query": "Правила космічної станції МКС", "assertion": "E_out_of_domain" },
+    { "id": "ood_2", "query": "Регламент NASA щодо польотів на Марс", "assertion": "E_out_of_domain" },
+    { "id": "ood_3", "query": "Законодавство Марсу про колонізацію", "assertion": "E_out_of_domain" },
+    { "id": "ood_4", "query": "Міжнародні правила космічного туризму", "assertion": "E_out_of_domain" },
+    { "id": "ood_5", "query": "Які норми регулюють життя на Місяці?", "assertion": "E_out_of_domain" },
+    { "id": "ood_6", "query": "Порядок реєстрації космічного корабля в США", "assertion": "E_out_of_domain" },
+    { "id": "ood_7", "query": "Податкові правила для астронавтів на орбіті", "assertion": "E_out_of_domain" },
+    { "id": "ood_8", "query": "Конвенція про права роботів на Марсі", "assertion": "E_out_of_domain" }
+  ]
+}

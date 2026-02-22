@@ -31,7 +31,7 @@ let clientInstance: QdrantClient | null = null;
 function getClient(): QdrantClient {
   if (!clientInstance) {
     if (!config.qdrantUrl) {
-      throw new Error('QDRANT_URL (or qdrant_clusterENDPOINT_LEXERY_LEGISLATION_DB) not set');
+      throw new Error('QDRANT_URL or QDRANT_CLUSTER_ENDPOINT_LEXERY_LEGISLATION_DB not set');
     }
     clientInstance = new QdrantClient({
       url: config.qdrantUrl.replace(/\/+$/, ''),

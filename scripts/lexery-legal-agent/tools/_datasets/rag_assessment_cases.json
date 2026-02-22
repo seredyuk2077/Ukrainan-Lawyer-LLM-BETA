@@ -1,0 +1,122 @@
+[
+  {
+    "id": "explicit_kku",
+    "type": "explicit_act",
+    "query": "ККУ ст. 115 умисне вбивство",
+    "expected_families": ["criminal"],
+    "description": "Пряма згадка ККУ — очікуємо кримінальний кодекс у результатах"
+  },
+  {
+    "id": "explicit_ck",
+    "type": "explicit_act",
+    "query": "Цивільний кодекс України договір купівлі-продажу",
+    "expected_families": ["civil"],
+    "description": "Пряма згадка ЦК — очікуємо цивільний кодекс"
+  },
+  {
+    "id": "explicit_kzpp",
+    "type": "explicit_act",
+    "query": "КЗпП ст. 36 звільнення з роботи",
+    "expected_families": ["labor", "labor_social"],
+    "description": "Пряма згадка КЗпП — очікуємо трудове законодавство"
+  },
+  {
+    "id": "explicit_cpk",
+    "type": "explicit_act",
+    "query": "ЦПК ст. 121 подача позову",
+    "expected_families": ["civil_procedure"],
+    "description": "Пряма згадка ЦПК — очікуємо цивільно-процесуальний кодекс"
+  },
+  {
+    "id": "explicit_kas",
+    "type": "explicit_act",
+    "query": "КАС оскарження рішення органу",
+    "expected_families": ["administrative", "admin"],
+    "description": "Пряма згадка КАС — очікуємо адмін/КАС"
+  },
+  {
+    "id": "explicit_moz",
+    "type": "explicit_act",
+    "query": "МОЗ №2559 про затвердження форм",
+    "expected_families": ["healthcare", "health", "admin", "general"],
+    "description": "Пряма згадка наказу МОЗ — очікуємо healthcare або адмін"
+  },
+  {
+    "id": "natural_murder",
+    "type": "natural_language",
+    "query": "умисне вбивство яке покарання",
+    "expected_families": ["criminal"],
+    "min_hits": 5,
+    "description": "Без згадки акту — питання про вбивство, очікуємо ККУ"
+  },
+  {
+    "id": "natural_labor",
+    "type": "natural_language",
+    "query": "права працівника при звільненні за прогул",
+    "expected_families": ["labor", "labor_social"],
+    "min_hits": 5,
+    "description": "Без згадки акту — трудові права, очікуємо КЗпП"
+  },
+  {
+    "id": "natural_civil",
+    "type": "natural_language",
+    "query": "права споживача повернення товару",
+    "expected_families": ["civil"],
+    "min_hits": 5,
+    "description": "Без згадки акту — споживач, очікуємо цивільне право"
+  },
+  {
+    "id": "natural_tax",
+    "type": "natural_language",
+    "query": "податкова перевірка та оскарження рішення",
+    "expected_families": ["tax_customs", "tax"],
+    "min_hits": 5,
+    "description": "Без згадки акту — податки, очікуємо ПКУ/податкове"
+  },
+  {
+    "id": "natural_admin",
+    "type": "natural_language",
+    "query": "порядок адміністративного провадження скарга",
+    "expected_families": ["administrative", "admin"],
+    "min_hits": 5,
+    "description": "Без згадки акту — адмін провадження, очікуємо КАС/КУпАП"
+  },
+  {
+    "id": "natural_inheritance",
+    "type": "natural_language",
+    "query": "спадщина квартира після смерті батьків",
+    "expected_families": ["civil"],
+    "min_hits": 5,
+    "description": "Без згадки акту — спадщина, очікуємо ЦК"
+  },
+  {
+    "id": "natural_fraud",
+    "type": "natural_language",
+    "query": "що таке шахрайство і хто підслідний",
+    "expected_families": ["criminal", "criminal_procedure"],
+    "min_hits": 5,
+    "description": "Без згадки акту — шахрайство і підслідність"
+  },
+  {
+    "id": "out_recipe",
+    "type": "out_of_scope",
+    "query": "рецепт борщу з буряком",
+    "expect_low_confidence": true,
+    "description": "Поза темою — очікуємо low_confidence або мало hits"
+  },
+  {
+    "id": "out_gibberish",
+    "type": "out_of_scope",
+    "query": "абсурд xyz неіснуючий термін 12345 qwerty",
+    "expect_low_confidence": true,
+    "description": "Гіберіш — очікуємо low_confidence"
+  },
+  {
+    "id": "multigoal_natural",
+    "type": "natural_language",
+    "query": "Що таке крадіжка та яке покарання передбачене?",
+    "expected_families": ["criminal"],
+    "min_hits": 5,
+    "description": "Два підпитання, без згадки акту — очікуємо ККУ"
+  }
+]

@@ -33,9 +33,14 @@
 10. **Hybrid re-score** — ordering без LLM. hit.score у trace залишається векторний.
 11. **Diversity cap** — у топ 25 не більше 16 hits з одного акту (generalizable).
 12. **RawHits** — з payload: r2_key, json_path, score, rada_nreg, article_number, title, source.
-13. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_goal_splitter, used_llm_planner, per_goal_act_retrieval, used_global_fallback), **goals_summary**, **fusion** (coverage_enforced, per_goal_min_hits, topN, per_goal_counts_in_topN), **planner** (tier_selected, called, call_failed_reason, tier, model_id, duration_ms, degraded, reason_codes), **qdrant_calls_count_total**, **hits_total_before_cap**, **hits_total_after_cap**, **hits_cap_applied**, **topN_used_for_distribution**, **scores_computed_on**, **avg_score_source**, **distribution** (noise_penalty_applied_count, noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes, hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
-14. **Persist** — RunRepository.updateRetrievalTrace; RunContext: raw_hits + retrieval_trace.
-15. **Enqueue U5** — Gate.
+13. **Selected_acts (Writer)** — Кожен елемент містить: rada_nreg, act_title, score, why_selected, reason_tag, source_tags; **метадані (E.2):** document_type, category, act_kind (PRIMARY_LAW / SECONDARY_ORDER / CASELAW_OPINION / BILL_DRAFT / UNKNOWN), flags (recovered, keep_one, draft, opinion). Джерело act_kind/document_type/category: taxonomy snapshot (candidateByNreg) + classifyActKind. **Low confidence (E.3):** коли low_confidence=true, reason_codes містять один з: OUT_OF_SCOPE, NO_STRONG_ACT_EVIDENCE, LOW_EVIDENCE, ACT_SELECTION_LOW_CONFIDENCE (додається автоматично, якщо ще немає).
+14. **RetrievalTrace.meta** — act_candidates_top, stage_decisions (used_taxonomy, used_acts_search, used_filtered_chunks, used_goal_splitter, used_llm_planner, per_goal_act_retrieval, used_global_fallback), **goals_summary**, **fusion** (coverage_enforced, per_goal_min_hits, topN, per_goal_counts_in_topN), **planner** (tier_selected, called, call_failed_reason, tier, model_id, duration_ms, degraded, reason_codes), **qdrant_calls_count_total**, **hits_total_before_cap**, **hits_total_after_cap**, **hits_cap_applied**, **topN_used_for_distribution**, **scores_computed_on**, **avg_score_source**, **distribution** (noise_penalty_applied_count, noise_penalty_policy_version, noise_penalty_guard_blocked, noise_penalty_guard_reason_codes, hits_by_act_top3, avg_score_by_act_top3), reason_codes, sample_hits, hits_count, low_confidence, query_variants_used, anchors_used.
+15. **Persist** — RunRepository.updateRetrievalTrace; RunContext: raw_hits + retrieval_trace.
+16. **Enqueue U5** — Gate.
+
+## MCP-аудит runs + чанки (read-only)
+
+Скрипт `tools/mcp_audit_runs_chunks_quality.ts` (`pnpm brain:audit:runs-chunks --limit 15 --since-days 3`): тягне runs з Supabase, для кожного — топ 5–8 чанків з retrieval_trace.hits, опційно snippet з R2, пише звіт `_reports/mcp_audit_runs_chunks_quality_YYYY-MM-DD.md`. Таблиця: run_id, query, domainHint, lldbi, selected_acts, low_conf, reason_codes; деталі + юридична оцінка. Для пошуку системних багів.
 
 ## Схема
 

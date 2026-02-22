@@ -1,0 +1,1652 @@
+[
+  {
+    "run_id": "7381957b-d01a-4f99-ba24-2e95dcb7ae47",
+    "query": "Договір купівлі-продажу. Сторони: ТОВ А та ФОП Б. Чи є це правочином і чи потрібна нотаріальна форма?",
+    "created_at": "2026-02-08T21:22:57.804+00:00",
+    "tenant_id_hash": "7483aec6",
+    "fingerprint": "62eb90a416ef6654",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "695b3b60-840b-4478-ad00-ba56316ea9af",
+    "query": "Емансипація: з якого віку можлива і як впливає на укладення договорів та роботу?",
+    "created_at": "2026-02-08T21:22:51.896+00:00",
+    "tenant_id_hash": "b2c35c13",
+    "fingerprint": "e04e8eb9436577d7",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "c6a71541-db70-4231-96b2-d69673a603c8",
+    "query": "Правочин: коли є недійсним і які строки позовної давності?",
+    "created_at": "2026-02-08T21:22:49.085+00:00",
+    "tenant_id_hash": "f53e404a",
+    "fingerprint": "f1bbf15c8da1a288",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "b4fc01aa-959d-4987-ab6f-216d9b0e330e",
+    "query": "Тероризм: відповідальність і які є фінансові санкційні наслідки?",
+    "created_at": "2026-02-08T21:22:44.866+00:00",
+    "tenant_id_hash": "76d96c94",
+    "fingerprint": "0a77bfbead11312f",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "bd693f84-bc4a-4489-ada6-1570dc412e9c",
+    "query": "Бандитизм: визначення і яка це юрисдикція підслідність?",
+    "created_at": "2026-02-08T21:22:38.899+00:00",
+    "tenant_id_hash": "114c68d5",
+    "fingerprint": "83d01c15252ddad5",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "12527ef1-6be9-4d6d-9f9f-d182e9475e67",
+    "query": "Корупція: що вважається корупційним правопорушенням і який орган розслідує справу?",
+    "created_at": "2026-02-08T21:22:34.79+00:00",
+    "tenant_id_hash": "70d91a74",
+    "fingerprint": "d0224ea9777a0bdd",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "84d2bddb-0ceb-4e09-a9aa-b5718dc87628",
+    "query": "цивільний кодекс договір окремі питання",
+    "created_at": "2026-02-08T21:22:32.399+00:00",
+    "tenant_id_hash": "0e9b2bfb",
+    "fingerprint": "ce23a2992bfe022e",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "1b8d5b63-31e0-40ac-a024-fc4de581adf9",
+    "query": "порядок процедура адміністративне провадження",
+    "created_at": "2026-02-08T21:22:29.974+00:00",
+    "tenant_id_hash": "856d82ee",
+    "fingerprint": "18e66da9c7e8321a",
+    "flags": {
+      "domain": "admin"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "admin",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "admin"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "ebcf5f7e-a6d9-49b7-9bdf-239da8483ff2",
+    "query": "Тлумачення норми Конституції позиція КСУ",
+    "created_at": "2026-02-08T21:22:24.435+00:00",
+    "tenant_id_hash": "e091df92",
+    "fingerprint": "634c3f57c6f81152",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "5d0ba812-0122-42dd-a3a3-902c9eb2ea76",
+    "query": "відповідальність порядок строки договір цивільне позов захист права",
+    "created_at": "2026-02-08T21:22:20.988+00:00",
+    "tenant_id_hash": "ffb16a43",
+    "fingerprint": "e565668be386426d",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "1c67c22f-3332-434a-a8cd-db34ef88d518",
+    "query": "адміністративні правопорушення загальні положення",
+    "created_at": "2026-02-08T21:22:18.683+00:00",
+    "tenant_id_hash": "c6a13ce9",
+    "fingerprint": "08e17808956f4585",
+    "flags": {
+      "domain": "admin"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "admin",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "admin"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "9190fafb-1114-4be4-98d1-78f0a04c9269",
+    "query": "права споживача повернення товару",
+    "created_at": "2026-02-08T21:22:14.92+00:00",
+    "tenant_id_hash": "a5f51adb",
+    "fingerprint": "e2697c10549e4d69",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "86708b4f-16ca-44e8-8cb7-aba064635849",
+    "query": "податки ФОП спрощена система",
+    "created_at": "2026-02-08T21:22:11.639+00:00",
+    "tenant_id_hash": "42b65713",
+    "fingerprint": "0e126fa9f957af6f",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "d5cf4639-147f-4a24-a8ec-794616763573",
+    "query": "права працівника при звільненні",
+    "created_at": "2026-02-08T21:22:08.562+00:00",
+    "tenant_id_hash": "ad149f21",
+    "fingerprint": "9c7c8e3e7ea11cae",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "labor"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "6b073b87-b2b7-4c0f-9041-05ede0677752",
+    "query": "мої права при зустрічі з поліцією",
+    "created_at": "2026-02-08T21:22:05.288+00:00",
+    "tenant_id_hash": "bff4e545",
+    "fingerprint": "3fc483e97fcc8caa",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "af46cf71-74f2-49d7-b582-83545c29340d",
+    "query": "податкова санкція",
+    "created_at": "2026-02-08T21:22:01.947+00:00",
+    "tenant_id_hash": "474673bd",
+    "fingerprint": "4db0ff8ab3880853",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "4619975f-6ea3-4f53-858d-d92dd8f8db51",
+    "query": "відповідальність дтп",
+    "created_at": "2026-02-08T21:21:57.468+00:00",
+    "tenant_id_hash": "afa68a1a",
+    "fingerprint": "bebb98043563d821",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "045dbba8-cbf5-409c-bca8-bedf3b44fabf",
+    "query": "звільнення прогул",
+    "created_at": "2026-02-08T21:21:54.217+00:00",
+    "tenant_id_hash": "8e791b6b",
+    "fingerprint": "343c3a287e3b8ffd",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "labor"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "371deafb-b06d-44a3-aebf-f5b10fa586c8",
+    "query": "строк апеляції",
+    "created_at": "2026-02-08T21:21:49.084+00:00",
+    "tenant_id_hash": "49f4625e",
+    "fingerprint": "f3b2d7823f2dc338",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "db7df6ab-d039-42bc-84df-f219e60ba14a",
+    "query": "підслідність шахрайство",
+    "created_at": "2026-02-08T21:21:45.894+00:00",
+    "tenant_id_hash": "32caa697",
+    "fingerprint": "f596b95332c801f8",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "dbb1112b-2d05-4cb8-b928-5bbd15ccf0fb",
+    "query": "Додаток до договору про зміну ціни. Сторони погодили. Перевір на відповідність ЦКУ.",
+    "created_at": "2026-02-08T21:21:44.004+00:00",
+    "tenant_id_hash": "45cd366c",
+    "fingerprint": "5ace98ce67f9cf84",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [
+            "цку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "ff32b2e7-14bd-4638-bb93-f6b19b8b0970",
+    "query": "Оренда земельної ділянки. Строк, плата. Перевір на відповідність ЦКУ та ЗКУ.",
+    "created_at": "2026-02-08T21:21:42.165+00:00",
+    "tenant_id_hash": "39f03ebb",
+    "fingerprint": "585b49995b16567c",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [
+            "цку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "4ac3f0e1-7373-446d-930b-a4928fbbb08c",
+    "query": "ФОП на спрощеній системі. Декларація, податковий облік. Перевір на відповідність ПКУ.",
+    "created_at": "2026-02-08T21:21:39.8+00:00",
+    "tenant_id_hash": "7e314f7f",
+    "fingerprint": "78efe46451d8e9e3",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "892c6a3e-10a7-4a06-8c88-9ab6741ccd25",
+    "query": "Трудовий договір на визначений строк. Звільнення за прогул. Перевір на відповідність КЗпП.",
+    "created_at": "2026-02-08T21:21:37.471+00:00",
+    "tenant_id_hash": "e811a721",
+    "fingerprint": "0952716d55eef3ea",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor_social",
+          "stems_or_signals": [
+            "кзпп"
+          ],
+          "confidence": 0.85
+        },
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil",
+        "labor_social"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "6a9f7b72-a97a-4a24-8aa6-dda6c2d65b82",
+    "query": "Договір купівлі-продажу квартири між фізичними особами. Предмет, ціна, строки. Перевір на відповідність ЦКУ.",
+    "created_at": "2026-02-08T21:21:33.629+00:00",
+    "tenant_id_hash": "e960d4e7",
+    "fingerprint": "c91a88677eb72963",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [
+            "цку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "49103eaa-17b4-47a9-a496-439bcdba4b10",
+    "query": "нетверезий водій штраф",
+    "created_at": "2026-02-08T21:21:30.402+00:00",
+    "tenant_id_hash": "994dfb66",
+    "fingerprint": "82ae996ee67fb606",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "42fb0f66-7db0-40a0-9a47-4042553c4b85",
+    "query": "оскаржити податкову перевірку",
+    "created_at": "2026-02-08T21:21:27.166+00:00",
+    "tenant_id_hash": "a03e9472",
+    "fingerprint": "2d9e7831441479fd",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "9c97acb6-0b77-4229-8e6e-7d68279df743",
+    "query": "шахрайка ККУ визначення",
+    "created_at": "2026-02-08T21:21:24.918+00:00",
+    "tenant_id_hash": "69e53e42",
+    "fingerprint": "54e1d35f9a3cc8fd",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [
+            "кку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "67939747-1e50-405e-a084-96bde0b4d44f",
+    "query": "п'яний за кермом відповідальність",
+    "created_at": "2026-02-08T21:21:21.521+00:00",
+    "tenant_id_hash": "a3b34bde",
+    "fingerprint": "b18bf28a4ab74fd2",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "c8a4d7a3-ad67-4e9b-bc87-0a2b9f4fd9de",
+    "query": "Водіння в нетверезому стані сп'янін",
+    "created_at": "2026-02-08T21:21:17.547+00:00",
+    "tenant_id_hash": "055e9f32",
+    "fingerprint": "8195417fdfaee4c7",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "4581a5c8-3621-4811-8944-c4df15d204ec",
+    "query": "ККУ ст. 190 крадіжка та підслідність",
+    "created_at": "2026-02-08T21:21:14.793+00:00",
+    "tenant_id_hash": "8cc2d5a2",
+    "fingerprint": "fce9f1a39120a64d",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [
+            "кку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "c081dfe8-4ddd-4b39-b36c-3824b5aee025",
+    "query": "Адміністративне правопорушення і порядок оскарження постанови",
+    "created_at": "2026-02-08T21:21:11.54+00:00",
+    "tenant_id_hash": "9c29c4df",
+    "fingerprint": "c5aa9fb035746426",
+    "flags": {
+      "domain": "admin"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "admin",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "admin"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "817eb687-3e67-4312-ad0f-fd8262e7a1c2",
+    "query": "Трудовий договір і цивільноправові наслідки порушення",
+    "created_at": "2026-02-08T21:21:08.228+00:00",
+    "tenant_id_hash": "686bc9cb",
+    "fingerprint": "7eee32205c3f6875",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "3c7cb136-560a-4723-95b8-31e90946d2e6",
+    "query": "Податкова перевірка та оскарження її результатів",
+    "created_at": "2026-02-08T21:21:05.354+00:00",
+    "tenant_id_hash": "e474dffb",
+    "fingerprint": "f0ae198207bb8d09",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "0880ca69-086f-46f9-ba05-eb7f8a941119",
+    "query": "Кримінальна відповідальність за шахрайство і хто розслідує",
+    "created_at": "2026-02-08T21:20:59+00:00",
+    "tenant_id_hash": "eb872750",
+    "fingerprint": "4619b1003ef7671d",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "738d550e-9de4-4426-958c-e9abe7712770",
+    "query": "Порядок звільнення та компенсації при скороченні",
+    "created_at": "2026-02-08T21:20:51.921+00:00",
+    "tenant_id_hash": "4891c196",
+    "fingerprint": "c3fc0d2caf91ad40",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "labor"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "d7adb067-6841-4721-9743-0e5ff9ceee60",
+    "query": "Що таке умисне вбивство і яке покарання?",
+    "created_at": "2026-02-08T21:20:49.165+00:00",
+    "tenant_id_hash": "78d97f06",
+    "fingerprint": "41028632d3ec2885",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "8e380cf7-fbb0-44d3-b749-10b20b9426b5",
+    "query": "Визначення шахрайства та підслідність цієї статті",
+    "created_at": "2026-02-08T21:20:46.364+00:00",
+    "tenant_id_hash": "f9a32823",
+    "fingerprint": "84ad8039496a00e1",
+    "flags": {
+      "domain": "corporate"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "corporate",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "corporate"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "1e93a71c-b355-4c19-bf79-d721a539d77f",
+    "query": "Порядок оскарження рішення і строки подачі скарги",
+    "created_at": "2026-02-08T21:20:42.63+00:00",
+    "tenant_id_hash": "fee2ca93",
+    "fingerprint": "97d0cfef20f5407e",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "0d600972-1c73-4048-9807-689781e6a040",
+    "query": "Що таке крадіжка і яка відповідальність?",
+    "created_at": "2026-02-08T21:20:35.558+00:00",
+    "tenant_id_hash": "de037083",
+    "fingerprint": "c73beda576980ba8",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "7f33e880-92f1-43d8-a3de-fc5e9c25a054",
+    "query": "абсурд xyz неіснуючий термін 12345",
+    "created_at": "2026-02-08T21:20:28.766+00:00",
+    "tenant_id_hash": "a9c1d582",
+    "fingerprint": "f1ac86b5b3e16ba6",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "4bfc9173-88ee-4a4d-bb38-eb3cd3fab440",
+    "query": "що таке крадіжка та яке покарання",
+    "created_at": "2026-02-08T21:20:24.583+00:00",
+    "tenant_id_hash": "ace1fd94",
+    "fingerprint": "afda89d63e2e457b",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "46d2b14e-7835-4115-a450-7dbe9b6980df",
+    "query": "оскарження податкової",
+    "created_at": "2026-02-08T21:20:17.848+00:00",
+    "tenant_id_hash": "29b01a97",
+    "fingerprint": "8cfc3e4f45827ae8",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "8044db03-f37c-41d3-a71f-d97b6cffa010",
+    "query": "ЦПК ст. 121 позов",
+    "created_at": "2026-02-08T21:20:15.455+00:00",
+    "tenant_id_hash": "8a80ccf4",
+    "fingerprint": "f9da4492200763ed",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil_procedure",
+          "stems_or_signals": [
+            "цпк"
+          ],
+          "confidence": 0.85
+        },
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil",
+        "civil_procedure"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "ed2f73b5-6919-4d8c-9429-8f4ef536ebb8",
+    "query": "КЗпП повернення товару",
+    "created_at": "2026-02-08T21:20:13.66+00:00",
+    "tenant_id_hash": "a14f3ca3",
+    "fingerprint": "6502a7d9ef546beb",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor_social",
+          "stems_or_signals": [
+            "кзпп"
+          ],
+          "confidence": 0.85
+        },
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "labor",
+        "labor_social"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "b01938a7-e433-4344-9987-2d68f7de5a81",
+    "query": "захист прав споживача",
+    "created_at": "2026-02-08T21:20:10.201+00:00",
+    "tenant_id_hash": "ef32d34e",
+    "fingerprint": "23acdacb3779c29b",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "39a5d26e-56e2-423f-b840-7b87bc15435e",
+    "query": "договір купівлі-продажу нерухомості",
+    "created_at": "2026-02-08T21:20:07.732+00:00",
+    "tenant_id_hash": "25b04914",
+    "fingerprint": "ce77cbbb38f4dcc4",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "30f97fb4-41f0-4438-a970-5420c83805ed",
+    "query": "банкрутство підприємства",
+    "created_at": "2026-02-08T21:20:04.029+00:00",
+    "tenant_id_hash": "ba364e03",
+    "fingerprint": "db87f08e9a0ac923",
+    "flags": {
+      "domain": "corporate"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "corporate",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "corporate"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "b57dabc8-4c03-46a4-8dff-bc09e9d959b3",
+    "query": "земельна ділянка приватизація",
+    "created_at": "2026-02-08T21:19:58.473+00:00",
+    "tenant_id_hash": "b7f494e6",
+    "fingerprint": "2769dee54687205e",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "dbd85dc1-5d4d-430e-a569-22f6aab3cb23",
+    "query": "конституційні права громадянина",
+    "created_at": "2026-02-08T21:19:54.949+00:00",
+    "tenant_id_hash": "80b75594",
+    "fingerprint": "1c8c7a489a44acc3",
+    "flags": {
+      "domain": "general"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "general",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "general"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "aad4cb8e-b08e-4b9b-a290-32fe028e2718",
+    "query": "адміністративне провадження скарга",
+    "created_at": "2026-02-08T21:19:53.053+00:00",
+    "tenant_id_hash": "3433fa91",
+    "fingerprint": "fd2a6d39b6b258b6",
+    "flags": {
+      "domain": "admin"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "admin",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "admin"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "c0215aa6-275b-4925-991d-b02c811d8901",
+    "query": "податкове право порушення",
+    "created_at": "2026-02-08T21:19:49.662+00:00",
+    "tenant_id_hash": "c491e0ab",
+    "fingerprint": "b485b5c5c7c32a06",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "79c0b472-ddcf-4cc2-ba0d-d065c19acd8f",
+    "query": "трудовий договір строковий",
+    "created_at": "2026-02-08T21:19:46.867+00:00",
+    "tenant_id_hash": "93f23689",
+    "fingerprint": "9d774b1734eb11b5",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "labor"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "605cdd73-398e-443a-9d54-ee53343c96f1",
+    "query": "спадщина квартира",
+    "created_at": "2026-02-08T21:19:43.623+00:00",
+    "tenant_id_hash": "a86578ff",
+    "fingerprint": "b912a045d61c2c04",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "aaf6d560-8774-4326-8f94-ceb2ea7ef599",
+    "query": "поліція перевищення повноважень",
+    "created_at": "2026-02-08T21:19:40.281+00:00",
+    "tenant_id_hash": "a7d7e8b7",
+    "fingerprint": "59aaa2137f395410",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "36d936a3-4468-45b8-b50b-b388e85d75be",
+    "query": "ККУ ст. 115 умисне вбивство",
+    "created_at": "2026-02-08T21:19:37.815+00:00",
+    "tenant_id_hash": "0d25a51a",
+    "fingerprint": "c4111604c68a11da",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [
+            "кку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "a27e9cb7-2941-47af-bb3a-629c433eba4f",
+    "query": "звільнення з роботи",
+    "created_at": "2026-02-08T21:19:33.597+00:00",
+    "tenant_id_hash": "f36ddb31",
+    "fingerprint": "4a0e3f0893facbfc",
+    "flags": {
+      "domain": "labor"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "labor",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "labor"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "61d789c4-67a4-4ab9-ac49-5f9d74c7dc5b",
+    "query": "умисне вбивство",
+    "created_at": "2026-02-08T21:19:29.223+00:00",
+    "tenant_id_hash": "9002fa25",
+    "fingerprint": "9d5321aa082a88f6",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "202cea9e-abcf-4741-820a-524ed73e6c45",
+    "query": "Податкова перевірка і оскарження рішення",
+    "created_at": "2026-02-08T21:19:22.992+00:00",
+    "tenant_id_hash": "ca55ceea",
+    "fingerprint": "8a361781e3517b4c",
+    "flags": {
+      "domain": "tax"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "tax",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "tax"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "dfede76b-e975-495d-abd8-1cbcc85fd2e4",
+    "query": "Договір оренди приміщення. Сторони: ТОВ \"Х\" та ФОП. Перевір на відповідність ЦКУ.",
+    "created_at": "2026-02-08T21:19:18.019+00:00",
+    "tenant_id_hash": "c67f2fc3",
+    "fingerprint": "135584d73b008fc7",
+    "flags": {
+      "domain": "civil"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "civil",
+          "stems_or_signals": [
+            "цку"
+          ],
+          "confidence": 0.85
+        }
+      ],
+      "expected_domains": [
+        "civil"
+      ],
+      "must_have_multi_act": true,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.85,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "fb99abb5-a397-4198-a74e-5e026247e340",
+    "query": "Водіння в нетверезому стані — яка відповідальність?",
+    "created_at": "2026-02-08T21:19:13.317+00:00",
+    "tenant_id_hash": "90d5b0a2",
+    "fingerprint": "3eac8672a7d1341b",
+    "flags": {
+      "domain": "criminal"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.6
+        }
+      ],
+      "expected_domains": [
+        "criminal"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": false,
+      "heuristic_confidence": 0.6,
+      "low_confidence": false
+    }
+  },
+  {
+    "run_id": "e6a324f2-5bc4-4719-93f1-e3f6a28d0e64",
+    "query": "Що таке шахрайство? і чия по підслідності це стаття?",
+    "created_at": "2026-02-08T21:19:05.001+00:00",
+    "tenant_id_hash": "7ac1b8d7",
+    "fingerprint": "8ece913a4d168b75",
+    "flags": {
+      "domain": "corporate"
+    },
+    "expectations": {
+      "expected_act_families": [
+        {
+          "family_id": "corporate",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        }
+      ],
+      "expected_domains": [
+        "corporate"
+      ],
+      "must_have_multi_act": false,
+      "must_have_multi_goal": true,
+      "heuristic_confidence": 0.5,
+      "low_confidence": false
+    }
+  }
+]

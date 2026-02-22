@@ -1,0 +1,107 @@
+[
+  {
+    "id": "border_military",
+    "query": "Чи може в умовах воєнного стану перетнути кордон чоловік 45 років, який є військовослужбовцем?",
+    "expected_rada_nregs": ["57-95-п"],
+    "expected_families": ["border_migration", "defense_mobilization", "admin"],
+    "description": "Постанова КМУ Про затвердження Правил перетинання державного кордону"
+  },
+  {
+    "id": "military_payments",
+    "query": "Які виплати належать військовослужбовцю та його сім'ї під час дії воєнного стану?",
+    "expected_rada_nregs": ["168-2022-п"],
+    "expected_families": ["defense_mobilization", "admin"],
+    "description": "Постанова КМУ про виплати військовослужбовцям"
+  },
+  {
+    "id": "avg_salary",
+    "query": "Як правильно обчислити середню заробітну плату при звільненні з роботи для розрахунку відпускних?",
+    "expected_rada_nregs": ["100-95-п"],
+    "expected_families": ["labor_social", "labor"],
+    "description": "Постанова КМУ Про затвердження Порядку обчислення середньої заробітної плати"
+  },
+  {
+    "id": "return_goods",
+    "query": "Чи можу я повернути непродовольчий товар протягом 14 днів без пояснення причин, якщо він не підійшов?",
+    "expected_rada_nregs": ["z1257-07"],
+    "expected_families": ["business_corporate", "civil"],
+    "description": "Наказ про Правила роздрібної торгівлі непродовольчими товарами"
+  },
+  {
+    "id": "procurement_martial",
+    "query": "Які особливості проведення тендеру на постачання товарів під час воєнного стану?",
+    "expected_rada_nregs": ["1178-2022-п"],
+    "expected_families": ["procurement", "admin"],
+    "description": "Постанова КМУ про особливості публічних закупівель під час воєнного стану"
+  },
+  {
+    "id": "icu_anesthesiology",
+    "query": "Які вимоги до відділення анестезіології та інтенсивної терапії в лікарні?",
+    "expected_rada_nregs": ["z1259-20"],
+    "expected_families": ["healthcare", "health"],
+    "description": "Наказ МОЗ про відділення анестезіології та інтенсивної терапії"
+  },
+  {
+    "id": "fuel_retail",
+    "query": "Які правила роздрібної торгівлі бензином та дизелем на автозаправних станціях?",
+    "expected_rada_nregs": ["1442-97-п"],
+    "expected_families": ["energy_utilities", "admin"],
+    "description": "Постанова КМУ Про затвердження Правил роздрібної торгівлі нафтопродуктами"
+  },
+  {
+    "id": "adoption_health",
+    "query": "При яких захворюваннях особа не може усиновити дитину або взяти під опіку?",
+    "expected_rada_nregs": ["z0018-26"],
+    "expected_families": ["healthcare", "civil"],
+    "description": "Наказ про Перелік захворювань для усиновлення та опіки"
+  },
+  {
+    "id": "poultry_disease",
+    "query": "Як проводити профілактику та ліквідацію аспергільозу птиці на птицефабриці?",
+    "expected_rada_nregs": ["z0785-18"],
+    "expected_families": ["healthcare", "admin"],
+    "description": "Наказ МОЗ про Інструкцію з профілактики аспергільозу птиці"
+  },
+  {
+    "id": "community_statute",
+    "query": "Де та як реєструється статут територіальної громади?",
+    "expected_rada_nregs": ["1150-98-п"],
+    "expected_families": ["local_government", "administrative", "admin"],
+    "description": "Постанова КМУ про державну реєстрацію статутів громад"
+  },
+  {
+    "id": "chernobyl_pension",
+    "query": "Які доплати належать непрацюючим пенсіонерам з зони відселення Чорнобиля у 2026 році?",
+    "expected_rada_nregs": ["48-2026-п"],
+    "expected_families": ["labor_social", "admin"],
+    "description": "Постанова КМУ про доплати пенсіонерам зони відселення"
+  },
+  {
+    "id": "building_products",
+    "query": "Які вимоги до технічного регламенту будівельних виробів та продукції?",
+    "expected_rada_nregs": ["1764-2006-п"],
+    "expected_families": ["construction_urban", "administrative", "admin"],
+    "description": "Постанова КМУ про Технічний регламент будівельних виробів"
+  },
+  {
+    "id": "energy_emergency",
+    "query": "Які заходи вживаються при надзвичайній ситуації в електроенергетичній системі країни?",
+    "expected_rada_nregs": ["39-2026-п"],
+    "expected_families": ["energy_utilities", "admin"],
+    "description": "Постанова КМУ про подолання наслідків надзвичайної ситуації в енергосистемах"
+  },
+  {
+    "id": "martial_law_intro",
+    "query": "Чим регулюється введення воєнного стану в Україні?",
+    "expected_rada_nregs": ["64/2022"],
+    "expected_families": ["defense_mobilization", "administrative", "admin"],
+    "description": "Указ Президента про введення воєнного стану"
+  },
+  {
+    "id": "military_doctrine",
+    "query": "Що передбачає Воєнна доктрина України щодо оборони країни?",
+    "expected_rada_nregs": ["555/2015"],
+    "expected_families": ["defense_mobilization", "national_security", "admin"],
+    "description": "Указ Президента про Воєнну доктрину України"
+  }
+]

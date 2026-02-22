@@ -58,7 +58,7 @@ export async function classifyWithLLM(
   const tryParse = async (model: string): Promise<LLMClassifyResult> => {
     let lastResult = await openRouterChat(
       config.apiKey,
-      { model, messages, temperature: 0.1, max_tokens: 1024 },
+      { model, messages, temperature: 0.1, max_tokens: 1024, caller: 'u2-classify' },
       config.timeoutSec
     );
     latencyMs = lastResult.latency_ms;
@@ -69,7 +69,7 @@ export async function classifyWithLLM(
       warnings.push('llm_invalid_json_retry');
       lastResult = await openRouterChat(
         config.apiKey,
-        { model, messages, temperature: 0.1, max_tokens: 1024 },
+        { model, messages, temperature: 0.1, max_tokens: 1024, caller: 'u2-classify' },
         config.timeoutSec
       );
       latencyMs = lastResult.latency_ms;

@@ -1,0 +1,14 @@
+{
+  "app": "codex-cursor-control-plane",
+  "version": "0.1.0",
+  "created_at": "2026-02-11T19:54:53.161Z",
+  "conventions": {
+    "flow": [
+      "context-scout",
+      "pm-linear",
+      "dev-implementer",
+      "qa-verifier"
+    ],
+    "qa_gate_required": true
+  }
+}

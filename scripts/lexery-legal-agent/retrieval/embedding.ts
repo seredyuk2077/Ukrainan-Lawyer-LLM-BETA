@@ -15,7 +15,7 @@ export interface EmbedResult {
 export async function embedQuery(text: string): Promise<EmbedResult> {
   const apiKey = config.openRouterApiKeyRag;
   if (!apiKey) {
-    throw new Error('OPEN_ROUTER_API_RAG or OPENROUTER_API_KEY not set for U4 embeddings');
+    throw new Error('OPENROUTER_API_KEY_ONLINE is not set for U4 embeddings');
   }
   const trimmed = text.trim();
   const input = trimmed.length > 0 ? trimmed : 'query';
@@ -31,8 +31,8 @@ export async function embedQuery(text: string): Promise<EmbedResult> {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://github.com/lexery-legal-agent',
-          'X-Title': 'Lexery Brain U4',
+          'HTTP-Referer': 'https://lexery-legal-agent/u4-embeddings',
+          'X-Title': 'Lexery Brain U4 Embeddings',
         },
         body: JSON.stringify({
           model: config.lldbiEmbedModelId,

@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-02-16T00:00:00.000Z",
+  "cases": [
+    {"id": "u2_routing_0", "query": "Указ про призначення Кубракова", "expect_doc_types_contain": ["Указ Президента"], "type": "presidential_decree"},
+    {"id": "u2_routing_1", "query": "звільнення за прогул трудовий кодекс", "expect_categories_contain": ["labor_social"], "expect_doc_types_contain": ["Кодекс", "Закон"], "type": "labor"},
+    {"id": "u2_routing_2", "query": "банкрутство фізичних осіб", "expect_categories_not_empty": true, "type": "business"},
+    {"id": "u2_routing_3", "query": "тероризм та санкції фінмоніторинг", "expect_categories_not_empty": true, "type": "multi"},
+    {"id": "u2_routing_4", "query": "спадщина квартира поділ", "expect_categories_contain": ["civil"], "type": "civil"},
+    {"id": "u2_routing_5", "query": "правила перебування на міжнародних космічних станціях", "expect_out_of_scope_or_low": true, "type": "out_of_domain"},
+    {"id": "u2_routing_6", "query": "проєкт закону про внесення змін до Податкового кодексу", "expect_doc_types_may_contain_draft": true, "type": "draft"},
+    {"id": "u2_routing_7", "query": "порушення правил перетину державного кордону", "expect_categories_contain": ["border_migration", "administrative_offenses"], "type": "multi_act"},
+    {"id": "u2_routing_8", "query": "ККУ ст. 115 умисне вбивство", "expect_categories_contain": ["criminal"], "type": "clean"}
+  ]
+}

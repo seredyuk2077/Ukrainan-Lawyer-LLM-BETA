@@ -1,0 +1,41 @@
+{
+  "generated_at": "2025-01-01T00:00:00.000Z",
+  "description": "Reference expansion: self-ref in text (1-2), quoted title (3-4), no match in taxonomy (5). Assert attempted, added_count or skipped_reason_codes.",
+  "cases": [
+    {
+      "id": "ref_exp_1",
+      "query": "Що каже Кодекс України про трудовий договір?",
+      "assertion": "F_reference_expansion",
+      "expect_attempted": true,
+      "expect_added_if_ref_detected": true
+    },
+    {
+      "id": "ref_exp_2",
+      "query": "Відповідно до ст. 1 цього Закону — які підстави застосування?",
+      "assertion": "F_reference_expansion",
+      "expect_attempted": true,
+      "expect_added_if_ref_detected": true
+    },
+    {
+      "id": "ref_exp_3",
+      "query": "Закон України «Про охорону навколишнього природного середовища» — які основні принципи?",
+      "assertion": "F_reference_expansion",
+      "expect_attempted": true,
+      "expect_added_if_ref_detected": true
+    },
+    {
+      "id": "ref_exp_4",
+      "query": "Згідно із Законом України «Про захист прав споживачів» які права має споживач?",
+      "assertion": "F_reference_expansion",
+      "expect_attempted": true,
+      "expect_added_if_ref_detected": true
+    },
+    {
+      "id": "ref_exp_5",
+      "query": "Конвенція «Про права роботів на Марсі» — чи застосовується в Україні?",
+      "assertion": "F_reference_expansion",
+      "expect_attempted": true,
+      "expect_no_match_ok": true
+    }
+  ]
+}
