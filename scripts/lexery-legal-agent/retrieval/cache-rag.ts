@@ -49,6 +49,7 @@ import {
 } from './routing-hints-llm.js';
 import { callQueryRewriter } from './query-rewriter-llm.js';
 import { getLldbiVocabulary } from './lldbi-vocabulary.js';
+import { fetchRecentMemory } from './memory-store.js';
 import { rrfMerge } from './rrf-merge.js';
 import {
   incrementU4RoutingHintsNotUsed,
@@ -139,7 +140,7 @@ async function hydrateSelectedActsMeta(
       act_title: a.act_title,
       score: a.score,
       why_selected: a.why_selected,
-      reason_tag: (a as any).reason_tag,
+      reason_tag: a.reason_tag,
       source_tags: a.source_tags,
       document_type,
       category,
@@ -406,11 +407,17 @@ export interface RunCacheRagInput {
   routing_flags?: RoutingFlags | null;
   /** Optional run_id for caching LLM planner result in RunContext. */
   run_id?: string;
+  /** Multi-tenant memory isolation: required for mm_memory_items fetch. */
+  tenant_id?: string | null;
+  /** User-scoped memory: required for mm_memory_items fetch. */
+  user_id?: string;
 }
 
 export interface RunCacheRagResult {
   rawHits: RawHit[];
   retrievalTrace: RetrievalTrace;
+  /** Memory refs fetched from mm_memory_items for downstream (U9 Assemble). Empty if memory disabled/unavailable. */
+  memoryRefs?: import('../assemble/types.js').MemoryRef[];
 }
 
 function dedupeHits(hits: RawHit[]): RawHit[] {
@@ -809,7 +816,7 @@ async function runOneGoal(
 const RUN_CONTEXT_TTL_SEC = 3600;
 
 export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagResult> {
-  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id } = input;
+  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id, tenant_id, user_id } = input;
   const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
   if (query.length === 0) {
     const emptyTrace: RetrievalTrace = {
@@ -2469,6 +2476,33 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
   }
 
+  // --- Memory Retrieval (LEX-MEM): fetch recent mm_memory_items for this user/tenant ---
+  // Runs AFTER main LLDBI retrieval so memory latency doesn't block critical path.
+  // Non-fatal: any failure → degraded=true, empty refs; pipeline always continues.
+  // Multi-tenant safe: always filters by tenant_id + user_id.
+  const memoryEnabled = config.memoryRecentEnabled && !!user_id;
+  const memorySemanticEnabled = config.memorySemanticEnabled && memoryEnabled;
+  let memoryRefs: import('../assemble/types.js').MemoryRef[] = [];
+  let memoryRecentLatencyMs: number | undefined;
+  let memoryDegraded = false;
+  let memoryDegradedReasonCodes: string[] | undefined;
+  const memorySources: string[] = [];
+
+  if (memoryEnabled) {
+    const memResult = await fetchRecentMemory({
+      tenantId: tenant_id ?? null,
+      userId: user_id!,
+      runId: run_id,
+    });
+    memoryRefs = memResult.refs;
+    memoryRecentLatencyMs = memResult.latency_ms;
+    if (memResult.degraded) {
+      memoryDegraded = true;
+      memoryDegradedReasonCodes = memResult.degraded_reason_codes;
+    }
+    if (memResult.refs.length > 0) memorySources.push('supabase_recent');
+  }
+
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
     source: h.source,
     score: h.score,
@@ -2483,7 +2517,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     hits: finalHits,
     top_score: topScore,
     latency_ms: totalLatency,
-    degraded_sources: Object.keys(degraded).length ? degraded : undefined,
+    degraded_sources: (Object.keys(degraded).length || memoryDegraded)
+      ? { ...degraded, ...(memoryDegraded ? { memory: true } : {}) }
+      : undefined,
     meta: {
       collections_used: collectionsUsed,
       steps_latency_ms: stepsLatencyMs,
@@ -2610,6 +2646,16 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         degraded: plannerMeta.degraded,
         reason_codes: plannerMeta.reason_codes,
       },
+      memory: {
+        enabled: memoryEnabled,
+        semantic_enabled: memorySemanticEnabled,
+        recent_count: memoryRefs.length,
+        semantic_count: 0,
+        degraded: memoryDegraded || undefined,
+        degraded_reason_codes: memoryDegradedReasonCodes,
+        latency_ms: memoryRecentLatencyMs !== undefined ? { recent: memoryRecentLatencyMs } : undefined,
+        sources_used: memorySources,
+      },
       retrieval_debug_bundle: {
         per_goal_act_candidates_top: actCandidatesTop.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
         stages: (collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
@@ -2627,5 +2673,5 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     },
   };
 
-  return { rawHits: finalHits, retrievalTrace };
+  return { rawHits: finalHits, retrievalTrace, memoryRefs };
 }

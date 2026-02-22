@@ -52,12 +52,26 @@ const metrics: Record<string, number> = {
   u4_routing_hints_used_total: 0,
   u4_routing_hints_not_used_total: 0,
   u4_routing_hints_invalid_json_total: 0,
+  u4_query_rewrite_called_total: 0,
+  u4_query_rewrite_failed_total: 0,
+  u4_query_rewrite_used_total: 0,
   u4_domain_bootstrap_attempted_total: 0,
   u4_domain_bootstrap_used_total: 0,
   u4_domain_bootstrap_conflict_total: 0,
   taxonomy_refresh_success_total: 0,
   taxonomy_refresh_failed_total: 0,
   taxonomy_snapshot_age_seconds: 0,
+  u4_taxonomy_category_hints_used_total: 0,
+  u4_taxonomy_doc_type_hints_used_total: 0,
+  u4_taxonomy_hints_injected_acts_total: 0,
+  u4_lldbi_hints_present_total: 0,
+  u4_lldbi_hints_used_total: 0,
+  u4_lldbi_hints_injected_acts_total: 0,
+  // U4 Memory (LEX-MEM)
+  u4_memory_recent_count_total: 0,
+  u4_memory_degraded_total: 0,
+  u4_memory_latency_ms_total: 0,
+  u4_memory_latency_ms_count: 0,
   u5_processed_total: 0,
   u5_failed_total: 0,
   u5_expand_total: 0,
@@ -67,6 +81,14 @@ const metrics: Record<string, number> = {
   u2_ai_domain_invalid_json_total: 0,
   u2_ai_domain_conf_too_low_total: 0,
   u2_ai_domain_disagrees_with_heuristic_total: 0,
+  u2_ai_routing_called_total: 0,
+  u2_ai_routing_used_total: 0,
+  u2_ai_routing_invalid_json_total: 0,
+  u2_ai_routing_conf_too_low_total: 0,
+  u2_ai_routing_disagrees_with_heuristic_total: 0,
+  u2_rules_routing_derived_total: 0,
+  u2_rules_doc_type_nonempty_total: 0,
+  u2_rules_category_nonempty_total: 0,
 };
 
 const u2IntentCounts: Record<string, number> = {};
@@ -164,6 +186,31 @@ export function incrementU2AiDomainConfTooLow() {
 }
 export function incrementU2AiDomainDisagreesWithHeuristic() {
   metrics.u2_ai_domain_disagrees_with_heuristic_total += 1;
+}
+
+export function incrementU2AiRoutingCalled() {
+  metrics.u2_ai_routing_called_total += 1;
+}
+export function incrementU2AiRoutingUsed() {
+  metrics.u2_ai_routing_used_total += 1;
+}
+export function incrementU2AiRoutingInvalidJson() {
+  metrics.u2_ai_routing_invalid_json_total += 1;
+}
+export function incrementU2AiRoutingConfTooLow() {
+  metrics.u2_ai_routing_conf_too_low_total += 1;
+}
+export function incrementU2AiRoutingDisagreesWithHeuristic() {
+  metrics.u2_ai_routing_disagrees_with_heuristic_total += 1;
+}
+export function incrementU2RulesRoutingDerived() {
+  metrics.u2_rules_routing_derived_total += 1;
+}
+export function incrementU2RulesDocTypeNonempty() {
+  metrics.u2_rules_doc_type_nonempty_total += 1;
+}
+export function incrementU2RulesCategoryNonempty() {
+  metrics.u2_rules_category_nonempty_total += 1;
 }
 
 // U3 / U3a (LEX-112, LEX-113)
@@ -271,6 +318,17 @@ export function getU4RoutingHintsNotUsedBreakdown(): Record<string, number> {
   return { ...u4RoutingHintsNotUsedByReason };
 }
 
+// U4 Always-on Query Rewriter (Phase 7)
+export function incrementU4QueryRewriteCalled() {
+  metrics.u4_query_rewrite_called_total += 1;
+}
+export function incrementU4QueryRewriteFailed() {
+  metrics.u4_query_rewrite_failed_total += 1;
+}
+export function incrementU4QueryRewriteUsed() {
+  metrics.u4_query_rewrite_used_total += 1;
+}
+
 // U4 Domain bootstrap (evidence-based, no wordlists)
 export function incrementU4DomainBootstrapAttempted() {
   metrics.u4_domain_bootstrap_attempted_total += 1;
@@ -291,6 +349,36 @@ export function incrementTaxonomyRefreshFailed() {
 }
 export function setTaxonomySnapshotAgeSeconds(seconds: number) {
   metrics.taxonomy_snapshot_age_seconds = Math.max(0, seconds);
+}
+export function addU4TaxonomyCategoryHintsUsed(count: number) {
+  metrics.u4_taxonomy_category_hints_used_total += count;
+}
+export function addU4TaxonomyDocTypeHintsUsed(count: number) {
+  metrics.u4_taxonomy_doc_type_hints_used_total += count;
+}
+export function addU4TaxonomyHintsInjectedActs(count: number) {
+  metrics.u4_taxonomy_hints_injected_acts_total += count;
+}
+export function incrementU4LldbiHintsPresent() {
+  metrics.u4_lldbi_hints_present_total += 1;
+}
+export function incrementU4LldbiHintsUsed() {
+  metrics.u4_lldbi_hints_used_total += 1;
+}
+export function addU4LldbiHintsInjectedActs(count: number) {
+  metrics.u4_lldbi_hints_injected_acts_total += count;
+}
+
+// U4 Memory (LEX-MEM)
+export function addU4MemoryRecentCount(count: number) {
+  metrics.u4_memory_recent_count_total += count;
+}
+export function incrementU4MemoryDegraded() {
+  metrics.u4_memory_degraded_total += 1;
+}
+export function recordU4MemoryLatency(latencyMs: number) {
+  metrics.u4_memory_latency_ms_total += latencyMs;
+  metrics.u4_memory_latency_ms_count += 1;
 }
 
 // U5 Gate (LEX-118)

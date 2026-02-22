@@ -210,6 +210,25 @@ export const config = {
   u4OodGuardTopScoreThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U4_OOD_GUARD_TOP_SCORE_THRESHOLD || '0.55'))),
   /** avg_score threshold (of finalHits) below which OOD guard may fire. */
   u4OodGuardAvgScoreThreshold: Math.min(1, Math.max(0, parseFloat(process.env.U4_OOD_GUARD_AVG_SCORE_THRESHOLD || '0.52'))),
+
+  // U4 Memory Retrieval (LEX-MEM): fetch recent mm_memory_items for tenant+user; non-fatal degraded on failure.
+  // Tables live in the same Supabase project as runs (supabaseUrl / supabaseServiceKey).
+  /** Enable recent memory fetch from mm_memory_items (Supabase). Default: true. Disable with MEMORY_RECENT_ENABLED=false. */
+  memoryRecentEnabled: process.env.MEMORY_RECENT_ENABLED !== 'false',
+  /** Max items from mm_memory_items per run. */
+  memoryRecentLimit: Math.max(1, Math.min(20, parseInt(process.env.MEMORY_RECENT_LIMIT || '5', 10))),
+  /** Timeout for mm_memory_items fetch (ms). Non-fatal if exceeded. */
+  memoryRecentTimeoutMs: Math.max(300, Math.min(5000, parseInt(process.env.MEMORY_RECENT_TIMEOUT_MS || '1500', 10))),
+  /**
+   * Enable semantic memory search via Qdrant (lexery_memory_semantic_v1).
+   * Requires QDRANT_MEMORY_URL + QDRANT_MEMORY_API_KEY. Default: false.
+   */
+  memorySemanticEnabled: process.env.MEMORY_SEMANTIC_ENABLED === 'true',
+  memoryQdrantUrl: process.env.QDRANT_MEMORY_URL || '',
+  memoryQdrantApiKey: process.env.QDRANT_MEMORY_API_KEY || '',
+  memoryQdrantCollection: process.env.MEMORY_QDRANT_COLLECTION || 'lexery_memory_semantic_v1',
+  memorySemanticTopK: Math.max(1, Math.min(20, parseInt(process.env.MEMORY_TOP_K || '8', 10))),
+  memorySemanticTimeoutMs: Math.max(500, Math.min(8000, parseInt(process.env.MEMORY_SEMANTIC_TIMEOUT_MS || '3000', 10))),
 } as const;
 
 export function requireEnv(name: string): string {

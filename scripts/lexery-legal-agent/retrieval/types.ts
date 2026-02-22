@@ -256,6 +256,27 @@ export const RetrievalTraceSchema = z.object({
           suppressed_reasons: z.array(z.string()),
         })
         .optional(),
+      /**
+       * U4 Memory Retrieval trace (LEX-MEM): recent mm_memory_items fetch result.
+       * degraded=true means fetch failed (non-fatal); pipeline always continues.
+       */
+      memory: z
+        .object({
+          enabled: z.boolean().optional(),
+          semantic_enabled: z.boolean().optional(),
+          recent_count: z.number().int().min(0).optional(),
+          semantic_count: z.number().int().min(0).optional(),
+          degraded: z.boolean().optional(),
+          degraded_reason_codes: z.array(z.string()).optional(),
+          latency_ms: z
+            .object({
+              recent: z.number().optional(),
+              semantic: z.number().optional(),
+            })
+            .optional(),
+          sources_used: z.array(z.string()).optional(),
+        })
+        .optional(),
       /** U4 Always-on Query Rewriter: trace per run. */
       query_rewrite: z
         .object({

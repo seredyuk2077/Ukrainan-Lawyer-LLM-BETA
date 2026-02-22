@@ -22,6 +22,12 @@ import {
   incrementU4NoisePenalty,
   incrementU4HitsCapApplied,
   recordU4HitsBeforeCapBucket,
+  incrementU4LldbiHintsPresent,
+  incrementU4LldbiHintsUsed,
+  addU4LldbiHintsInjectedActs,
+  addU4MemoryRecentCount,
+  incrementU4MemoryDegraded,
+  recordU4MemoryLatency,
 } from '../gateway/observability.js';
 import { runCacheRag } from './cache-rag.js';
 import type { SearchPlan, SearchStep } from '../plan/types.js';
@@ -73,28 +79,62 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
       steps = audit.steps;
     }
 
-    const query = run.query ?? (run.snapshot?.request as { query?: string } | undefined)?.query ?? '';
+    let query = run.query ?? (run.snapshot?.request as { query?: string } | undefined)?.query ?? '';
+    if (typeof query !== 'string') query = '';
+    query = query.trim();
+    if (query.length === 0) {
+      logger.error('U4 empty query', { ...ctx, error: 'empty_query' });
+      incrementU4Failed();
+      try {
+        await runRepo.markFailed(run_id, 'U4_EMPTY_QUERY');
+      } catch {
+        // ignore
+      }
+      return;
+    }
     const queryProfile = run.query_profile as {
       domain?: string;
       domainHint?: string;
       entities?: { act_abbrev?: string; article_ref?: string }[];
       routing_flags?: import('../classify/types.js').RoutingFlags;
+      lldbi?: { categories_ranked_top3?: string[]; document_types_ranked_top3?: string[] };
     } | null | undefined;
     const domainHint =
       queryProfile?.domainHint ??
       (queryProfile?.domain ? legalDomainToTaxonomyKey(queryProfile.domain) : undefined);
+    const lldbi =
+      queryProfile?.lldbi &&
+      (queryProfile.lldbi.categories_ranked_top3?.length || queryProfile.lldbi.document_types_ranked_top3?.length)
+        ? {
+            categories_ranked_top3: queryProfile.lldbi.categories_ranked_top3 ?? [],
+            document_types_ranked_top3: queryProfile.lldbi.document_types_ranked_top3 ?? [],
+          }
+        : undefined;
     const { rawHits, retrievalTrace } = await runCacheRag({
       query,
       searchPlan: plan,
       steps,
       domainHint,
+      lldbi: lldbi ?? null,
       entities: queryProfile?.entities,
       routing_flags: queryProfile?.routing_flags,
       run_id,
+      tenant_id: run.tenant_id ?? null,
+      user_id: run.user_id,
     });
 
     if (retrievalTrace.degraded_sources?.lldbi) {
       incrementU4DegradedLldbi();
+    }
+    if (retrievalTrace.meta?.lldbi_hints_present) {
+      incrementU4LldbiHintsPresent();
+    }
+    const lldbiUsed = retrievalTrace.meta?.lldbi_hints_used as { categories_used_count?: number; doc_types_used_count?: number; injected_acts_count?: number } | undefined;
+    if (lldbiUsed && ((lldbiUsed.categories_used_count ?? 0) + (lldbiUsed.doc_types_used_count ?? 0) > 0)) {
+      incrementU4LldbiHintsUsed();
+    }
+    if (lldbiUsed && (lldbiUsed.injected_acts_count ?? 0) > 0) {
+      addU4LldbiHintsInjectedActs(lldbiUsed.injected_acts_count!);
     }
     if (retrievalTrace.meta?.used_filtered_chunks_search) {
       incrementU4FilteredSearch();
@@ -123,6 +163,17 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     if (typeof beforeCap === 'number') recordU4HitsBeforeCapBucket(beforeCap);
     recordU4QdrantLatency(retrievalTrace.latency_ms ?? 0);
     recordU4Hits(rawHits.length);
+
+    // Memory metrics (LEX-MEM)
+    const memMeta = retrievalTrace.meta?.memory as { recent_count?: number; degraded?: boolean; latency_ms?: { recent?: number } } | undefined;
+    if (memMeta) {
+      if (typeof memMeta.recent_count === 'number' && memMeta.recent_count > 0) {
+        addU4MemoryRecentCount(memMeta.recent_count);
+      }
+      if (memMeta.degraded) incrementU4MemoryDegraded();
+      const recentLatency = memMeta.latency_ms?.recent;
+      if (typeof recentLatency === 'number') recordU4MemoryLatency(recentLatency);
+    }
 
     await runRepo.updateRetrievalTrace(run_id, retrievalTrace as unknown as object);
 
