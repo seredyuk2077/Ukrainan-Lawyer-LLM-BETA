@@ -61,6 +61,7 @@ import { analyzeManualAudit } from './Lexery Legislation DB Infra/src/commands/a
 import { backfillValidity } from './Lexery Legislation DB Infra/src/commands/backfill-validity.js';
 import { runValidityRegressionTests } from './Lexery Legislation DB Infra/src/commands/regression-validity.js';
 import { testLatestValidity } from './Lexery Legislation DB Infra/src/commands/test-latest-validity.js';
+import { repairQdrantDedup } from './Lexery Legislation DB Infra/src/commands/repair-qdrant-dedup.js';
 
 const program = new Command();
 
@@ -264,6 +265,15 @@ repairCommand
       forceAi: Boolean(options.forceAi),
       dryRun: Boolean(options.dryRun),
     });
+  });
+
+repairCommand
+  .command('qdrant-dedup')
+  .description('Видалити старі Qdrant-версії документа, залишивши тільки current content_hash')
+  .requiredOption('--nreg <nreg>', 'Конкретний документ')
+  .option('--dry-run', 'Тільки preview, без змін')
+  .action(async (options) => {
+    await repairQdrantDedup(options.nreg, { dryRun: Boolean(options.dryRun) });
   });
 
 repairCommand

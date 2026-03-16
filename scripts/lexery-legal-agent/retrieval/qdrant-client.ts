@@ -54,24 +54,30 @@ export async function qdrantSearch(
   const callCounter = options.callCounter;
 
   const doSearch = async (): Promise<QdrantSearchHit[]> => {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), timeoutMs);
+    let timeoutHandle: NodeJS.Timeout | null = null;
     try {
-      const result = await client.search(options.collection, {
-        vector: options.vector,
-        limit: options.limit,
-        filter: options.filter as never,
-        with_payload: true,
-      });
-      clearTimeout(t);
       if (callCounter) callCounter.count += 1;
+      const result = await Promise.race([
+        client.search(options.collection, {
+          vector: options.vector,
+          limit: options.limit,
+          filter: options.filter as never,
+          with_payload: true,
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(`Qdrant search timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       return (result || []).map((p: { id?: string | number; score?: number; payload?: Record<string, unknown> }) => ({
         id: p.id ?? '',
         score: typeof p.score === 'number' ? p.score : 0,
         payload: p.payload ?? {},
       }));
     } catch (e) {
-      clearTimeout(t);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       throw e;
     }
   };

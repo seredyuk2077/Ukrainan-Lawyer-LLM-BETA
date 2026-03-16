@@ -22,6 +22,7 @@ export interface ChunkPayload {
   content_hash: string;
   chunk_index: number;
   article_number: string | null;
+  chunk_title?: string | null;
   unit_number?: string | null; // універсальний номер unit (article/point/section)
   unit_type?: string | null; // тип unit (article/point/section)
   token_count: number | null;
@@ -231,5 +232,54 @@ export class QdrantRagClient {
       wait: true,
       filter,
     });
+  }
+
+  async deleteOldVersions(
+    radaNreg: string,
+    keepContentHash: string
+  ): Promise<{ actsDeleted: number; chunksDeleted: number }> {
+    const baseFilter = {
+      must: [{ key: 'rada_nreg', match: { value: radaNreg } }],
+    };
+
+    const actsScroll = await this.client.scroll(COLLECTION_ACTS, {
+      filter: baseFilter,
+      limit: 100,
+      with_payload: true,
+      with_vector: false,
+    });
+    const oldActIds = (actsScroll.points ?? [])
+      .filter((point: any) => point.payload?.content_hash !== keepContentHash)
+      .map((point: any) => point.id);
+    if (oldActIds.length > 0) {
+      await this.client.delete(COLLECTION_ACTS, {
+        wait: true,
+        points: oldActIds,
+      });
+    }
+
+    const chunksScroll = await this.client.scroll(COLLECTION_CHUNKS, {
+      filter: baseFilter,
+      limit: 10000,
+      with_payload: true,
+      with_vector: false,
+    });
+    const oldChunkIds = (chunksScroll.points ?? [])
+      .filter((point: any) => point.payload?.content_hash !== keepContentHash)
+      .map((point: any) => point.id);
+    if (oldChunkIds.length > 0) {
+      const batchSize = 100;
+      for (let i = 0; i < oldChunkIds.length; i += batchSize) {
+        await this.client.delete(COLLECTION_CHUNKS, {
+          wait: true,
+          points: oldChunkIds.slice(i, i + batchSize),
+        });
+      }
+    }
+
+    return {
+      actsDeleted: oldActIds.length,
+      chunksDeleted: oldChunkIds.length,
+    };
   }
 }

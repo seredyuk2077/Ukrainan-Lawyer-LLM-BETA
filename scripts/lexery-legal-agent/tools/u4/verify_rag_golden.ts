@@ -11,6 +11,8 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config as loadEnv } from 'dotenv';
 import { evaluateGoldenCase, type GoldenCase, type RetrievalTraceLike } from './rag_golden_eval.js';
+import { RunRepository } from '../../gateway/storage.js';
+import { getRetrievalTraceHitsForForensics } from '../../retrieval/retrieval-trace-r2.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +25,7 @@ const HEALTH_TIMEOUT_MS = 20_000;
 const POLL_MS = 400;
 const POLL_TIMEOUT_MS = 90_000;
 const SHUTDOWN_WAIT_MS = 5_000;
+const runRepo = new RunRepository();
 
 interface RunPayload {
   retrieval_trace?: RetrievalTraceLike | null;
@@ -63,7 +66,7 @@ async function runQuery(
   query: string,
   tenantId: string,
   userId: string
-): Promise<{ run: RunPayload | null; latencyMs: number }> {
+): Promise<{ run: RunPayload | null; runId: string; latencyMs: number }> {
   const start = Date.now();
   let runId = '';
   try {
@@ -72,12 +75,12 @@ async function runQuery(
       headers: { 'Content-Type': 'application/json', 'X-Dev-API-Key': DEV_KEY },
       body: JSON.stringify({ query, tenant_id: tenantId, user_id: userId }),
     });
-    if (postRes.status !== 202) return { run: null, latencyMs: Date.now() - start };
+    if (postRes.status !== 202) return { run: null, runId, latencyMs: Date.now() - start };
     const postJson = (await postRes.json()) as { run_id?: string };
     runId = postJson.run_id ?? '';
-    if (!runId) return { run: null, latencyMs: Date.now() - start };
+    if (!runId) return { run: null, runId, latencyMs: Date.now() - start };
   } catch {
-    return { run: null, latencyMs: Date.now() - start };
+    return { run: null, runId, latencyMs: Date.now() - start };
   }
 
   const pollStart = Date.now();
@@ -91,7 +94,7 @@ async function runQuery(
       const run = (await getRes.json()) as RunPayload;
       const trace = run.retrieval_trace;
       if (trace?.meta?.hits_count != null || trace?.meta?.low_confidence === true) {
-        return { run, latencyMs: Date.now() - start };
+        return { run, runId, latencyMs: Date.now() - start };
       }
     } catch {
       // ignore
@@ -99,7 +102,24 @@ async function runQuery(
     await sleep(POLL_MS);
   }
 
-  return { run: null, latencyMs: Date.now() - start };
+  return { run: null, runId, latencyMs: Date.now() - start };
+}
+
+async function loadTraceForEvaluation(
+  runId: string,
+  fallbackTrace: RetrievalTraceLike | null | undefined
+): Promise<RetrievalTraceLike | null | undefined> {
+  if (!runId) return fallbackTrace;
+  const persisted = await runRepo.findByRunId(runId);
+  if (!persisted?.retrieval_trace || typeof persisted.retrieval_trace !== 'object') return fallbackTrace;
+  const persistedTrace = persisted.retrieval_trace as RetrievalTraceLike;
+  const { hits } = await getRetrievalTraceHitsForForensics(
+    persisted as { retrieval_trace?: { hits?: unknown[]; meta?: { full_trace_r2_key?: string } } | null }
+  );
+  return {
+    ...persistedTrace,
+    hits: hits as RetrievalTraceLike['hits'],
+  };
 }
 
 async function main(): Promise<void> {
@@ -140,6 +160,7 @@ async function main(): Promise<void> {
 
   type ResultRow = {
     id: string;
+    runId?: string;
     pass: boolean;
     reasons: string[];
     latencyMs: number;
@@ -161,10 +182,12 @@ async function main(): Promise<void> {
     const userId = '00000000-0000-0000-0000-000000000002';
 
     for (const c of cases) {
-      const { run, latencyMs } = await runQuery(baseUrl, c.query, tenantId, userId);
-      const evaluated = evaluateGoldenCase(c, run?.retrieval_trace);
+      const { run, runId, latencyMs } = await runQuery(baseUrl, c.query, tenantId, userId);
+      const evaluationTrace = await loadTraceForEvaluation(runId, run?.retrieval_trace);
+      const evaluated = evaluateGoldenCase(c, evaluationTrace);
       results.push({
         id: c.id,
+        runId,
         pass: evaluated.pass,
         reasons: evaluated.reasons,
         latencyMs,

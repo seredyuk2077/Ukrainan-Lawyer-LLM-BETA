@@ -13,6 +13,8 @@ export const RawHitSchema = z.object({
   r2_key: z.string().min(1),
   json_path: z.string().min(1), // e.g. $.content.chunks[N].text
   score: z.number(),
+  /** Post-vector ordering score after hybrid rerank. Keeps rerank stable through later pipeline stages. */
+  ordering_score: z.number().optional(),
   source: RawHitSourceSchema.optional(),
   rada_nreg: z.string().optional(),
   article_number: z.string().nullable().optional(),

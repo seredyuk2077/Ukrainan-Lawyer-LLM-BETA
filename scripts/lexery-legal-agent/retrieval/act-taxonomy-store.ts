@@ -16,16 +16,20 @@ import { tolerantNormalizeToStrings } from './tolerant-normalizer.js';
 
 const LEGISLATION_TABLE = 'legislation_documents';
 const MIN_TOKEN_LEN = 2;
+const MIN_METADATA_TOKEN_LEN = 4;
 const MAX_ANCHOR_TOKENS = 3;
 interface ActEntry {
   rada_nreg: string;
   title: string;
   category: string | null;
   document_type: string | null;
+  validity_status: string | null;
 }
 
 interface TaxonomySnapshot {
   byAlias: Map<string, ActEntry[]>;
+  byKeyword: Map<string, ActEntry[]>;
+  byTopic: Map<string, ActEntry[]>;
   byCategory: Map<string, ActEntry[]>;
   byDocumentType: Map<string, ActEntry[]>;
   acts: Map<string, ActEntry>;
@@ -58,6 +62,22 @@ function addToMap(map: Map<string, ActEntry[]>, key: string, entry: ActEntry): v
   map.set(k, list);
 }
 
+function metadataTokens(value: unknown): string[] {
+  const values = tolerantNormalizeToStrings(value);
+  const out = new Set<string>();
+  for (const item of values) {
+    const normalized = toKey(item);
+    if (!normalized) continue;
+    out.add(normalized);
+    const parts = normalized
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
+    for (const part of parts) out.add(part);
+  }
+  return [...out];
+}
+
 let legislationClient: SupabaseClient | null = null;
 let snapshot: TaxonomySnapshot | null = null;
 let nextRefreshAt = 0;
@@ -78,7 +98,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
 
   const { data, error } = await client
     .from(LEGISLATION_TABLE)
-    .select('rada_nreg, title, category, document_type, aliases')
+    .select('rada_nreg, title, category, document_type, aliases, keywords, topics, validity_status')
     .eq('qdrant_status', 'indexed');
 
   if (error) {
@@ -88,6 +108,8 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
 
   const rows = Array.isArray(data) ? data : [];
   const byAlias = new Map<string, ActEntry[]>();
+  const byKeyword = new Map<string, ActEntry[]>();
+  const byTopic = new Map<string, ActEntry[]>();
   const byCategory = new Map<string, ActEntry[]>();
   const byDocumentType = new Map<string, ActEntry[]>();
   const acts = new Map<string, ActEntry>();
@@ -103,12 +125,16 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     const title = typeof row?.title === 'string' ? row.title.trim() : '';
     const category = row?.category != null ? String(row.category).trim() : null;
     const document_type = normDocType(row?.document_type);
+    const validity_status =
+      row?.validity_status != null ? String(row.validity_status).trim().toLowerCase() : null;
     if (!rada_nreg) continue;
 
-    const entry: ActEntry = { rada_nreg, title, category, document_type };
+    const entry: ActEntry = { rada_nreg, title, category, document_type, validity_status };
     acts.set(rada_nreg, entry);
 
     for (const a of tolerantNormalizeToStrings(row?.aliases)) addToMap(byAlias, a, entry);
+    for (const keyword of metadataTokens(row?.keywords)) addToMap(byKeyword, keyword, entry);
+    for (const topic of metadataTokens(row?.topics)) addToMap(byTopic, topic, entry);
     if (category) addToMap(byCategory, category, entry);
     if (document_type) addToMap(byDocumentType, document_type, entry);
   }
@@ -119,6 +145,8 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
 
   return {
     byAlias,
+    byKeyword,
+    byTopic,
     byCategory,
     byDocumentType,
     acts,
@@ -183,10 +211,12 @@ export interface TaxonomyCandidatesResult {
 }
 
 /**
- * Get act candidates from taxonomy: alias-token match from DB; domain and category as metadata hints; entities for scoring.
- * No hardcoded categories or act names. No keyword/topic lexical scoring.
+ * Get act candidates from taxonomy: alias/keyword/topic match from DB; domain and category as metadata hints; entities for scoring.
+ * No hardcoded categories or act names.
  */
 const DOMAIN_CATEGORY_BOOST = 1;
+const KEYWORD_MATCH_BOOST = 1.25;
+const TOPIC_MATCH_BOOST = 1;
 const MAX_DOMAIN_ACTS = 15;
 const MAX_HINTS_INJECTED_TOTAL = 30;
 const HINTS_TOP_K_PER_KEY = 10;
@@ -231,7 +261,20 @@ export async function getTaxonomyCandidates(
         category: entry.category,
       });
     }
-    // keyword/topic token scoring removed: not acceptance-critical per architecture decision
+    for (const entry of snap.byKeyword.get(key) ?? []) {
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + KEYWORD_MATCH_BOOST
+      );
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
+    for (const entry of snap.byTopic.get(key) ?? []) {
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + TOPIC_MATCH_BOOST
+      );
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
   }
 
   for (const e of entities) {
@@ -365,6 +408,7 @@ export interface ActMeta {
   title: string;
   category: string | null;
   document_type: string | null;
+  validity_status?: string | null;
 }
 
 /** Get act metadata by rada_nreg (from snapshot; no DB write). */
@@ -378,6 +422,7 @@ export async function getActMeta(rada_nreg: string): Promise<ActMeta | null> {
     title: entry.title,
     category: entry.category,
     document_type: entry.document_type,
+    validity_status: entry.validity_status,
   };
 }
 
@@ -455,10 +500,29 @@ export async function scoreActCandidate(
         if (!reasons.includes('alias_match')) reasons.push('alias_match');
       }
     }
+    for (const e of snap.byKeyword.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += KEYWORD_MATCH_BOOST;
+        if (!reasons.includes('keyword_match')) reasons.push('keyword_match');
+      }
+    }
+    for (const e of snap.byTopic.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += TOPIC_MATCH_BOOST;
+        if (!reasons.includes('topic_match')) reasons.push('topic_match');
+      }
+    }
   }
   if (domainHint && entry.category && toKey(entry.category) === toKey(domainHint)) {
     score += 1;
     reasons.push('category_hint');
+  }
+  if (entry.validity_status === 'in_force') {
+    score += 0.1;
+    reasons.push('validity_in_force');
+  } else if (entry.validity_status === 'expired' || entry.validity_status === 'not_in_force') {
+    score -= 0.35;
+    reasons.push('validity_penalty');
   }
   return { score, reasons };
 }

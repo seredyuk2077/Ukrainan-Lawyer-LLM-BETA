@@ -60,6 +60,11 @@ import {
   incrementU4DomainBootstrapConflict,
 } from '../gateway/observability.js';
 import { extractArticleRefsStructured } from '../lib/articleRefs.js';
+import {
+  compareHitsByOrderingScore,
+  computeChunkStructuralScore,
+  getHitOrderingScore,
+} from './chunk-rerank.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -219,10 +224,11 @@ async function domainBootstrapFromActHits(
 
 const QUERY_MAX_CHARS = 12000;
 /** Hybrid re-score weights (no extra LLM). Vector remains primary. */
-const W_VEC = 0.65;
+const W_VEC = 0.44;
 const W_ALIAS = 0.15;
 const W_ARTICLE = 0.15;
 const W_CATEGORY = 0.05;
+const W_STRUCTURAL = 0.3;
 const MIN_HITS_FOR_TWO_STAGE = 3;
 const GOOD_SCORE_THRESHOLD = 0.4;
 const TWO_STAGE_ACTS_TOP = 5;
@@ -264,13 +270,25 @@ function compareRawHitByScore(a: RawHit, b: RawHit): number {
   return ja.localeCompare(jb);
 }
 
+function applyHybridOrdering(
+  hits: RawHit[],
+  query: string,
+  taxonomy: TaxonomyCandidatesResult,
+  entities: { act_abbrev?: string; article_ref?: string }[] | undefined
+): void {
+  for (const hit of hits) {
+    hit.ordering_score = hybridScore(hit, query, taxonomy, entities);
+  }
+  hits.sort(compareHitsByOrderingScore);
+}
+
 /** Stable tie-breaker for effectiveScore (noise penalty): effectiveScore desc → hit keys. */
 function compareByEffectiveScore(
   a: { hit: RawHit; effectiveScore: number },
   b: { hit: RawHit; effectiveScore: number }
 ): number {
   if (b.effectiveScore !== a.effectiveScore) return b.effectiveScore - a.effectiveScore;
-  return compareRawHitByScore(a.hit, b.hit);
+  return compareHitsByOrderingScore(a.hit, b.hit);
 }
 
 /** Stable sort for act candidates / ScoredActItem: score desc → rada_nreg asc → title asc. */
@@ -430,7 +448,7 @@ function applyCoverageFusion(
     if (!byGoal.has(gid)) byGoal.set(gid, []);
     byGoal.get(gid)!.push(h);
   }
-  for (const [_, list] of byGoal) list.sort(compareRawHitByScore);
+  for (const [_, list] of byGoal) list.sort(compareHitsByOrderingScore);
 
   const coveredKeys = new Set<string>();
   const covered: RawHit[] = [];
@@ -446,9 +464,9 @@ function applyCoverageFusion(
       }
     }
   }
-  covered.sort(compareRawHitByScore);
+  covered.sort(compareHitsByOrderingScore);
   const remaining = hits.filter((h) => !coveredKeys.has(`${h.r2_key}:${h.json_path}`));
-  remaining.sort(compareRawHitByScore);
+  remaining.sort(compareHitsByOrderingScore);
   return [...covered, ...remaining].slice(0, topN);
 }
 
@@ -478,8 +496,8 @@ function applyNoisePenalty(hits: RawHit[], topNForGuard: number = 30): NoisePena
     // Data-driven noise detection: CASELAW_OPINION via document_type (no title regex)
     const kind = classifyActKind(h.title ?? '', h.document_type ?? undefined, h.category ?? undefined);
     const isNoise = kind === 'CASELAW_OPINION';
-    if (!isNoise) return { hit: h, effectiveScore: h.score ?? 0 };
-    const score = h.score ?? 0;
+    const score = getHitOrderingScore(h);
+    if (!isNoise) return { hit: h, effectiveScore: score };
     const gid = h.goal_id ?? '_single';
     const onlySourceForGoal = (goalCountInTopN.get(gid) ?? 0) <= 1;
     if (onlySourceForGoal) {
@@ -532,7 +550,6 @@ function hybridScore(
   taxonomy: TaxonomyCandidatesResult,
   entities: { act_abbrev?: string; article_ref?: string }[] | undefined
 ): number {
-  void query;
   const vec = Math.min(1, Math.max(0, hit.score));
   const aliasMatch =
     hit.rada_nreg && taxonomy.rada_nreg_candidates.includes(hit.rada_nreg) ? 1 : 0;
@@ -549,11 +566,13 @@ function hybridScore(
     )
       ? 1
       : 0;
+  const structuralScore = computeChunkStructuralScore(hit, query);
   return (
     W_VEC * vec +
     W_ALIAS * aliasMatch +
     W_ARTICLE * articleMatch +
-    W_CATEGORY * categoryHint
+    W_CATEGORY * categoryHint +
+    W_STRUCTURAL * structuralScore
   );
 }
 
@@ -753,11 +772,7 @@ async function runOneGoal(
   if (actNregsForSummary.length === 0) actNregsForSummary.push(...(taxonomyResult.rada_nreg_candidates ?? []));
 
   if (hits.length > 0 && taxonomyResult.debug.source === 'supabase') {
-    hits.sort((a, b) => {
-      const diff = hybridScore(b, goal.subquery, taxonomyResult, entities) - hybridScore(a, goal.subquery, taxonomyResult, entities);
-      if (diff !== 0) return diff;
-      return compareRawHitByScore(a, b);
-    });
+    applyHybridOrdering(hits, goal.subquery, taxonomyResult, entities);
   }
   return { hits, actNregsForSummary, usedFilteredChunks, stepsLatencyMs, collectionsUsed, taxonomyResult, domainBootstrap };
 }
@@ -1220,22 +1235,47 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const hitsCapAppliedMulti = config.u4HitsCap > 0 && hitsTotalBeforeCapMulti > config.u4HitsCap;
     const topScoreMulti = finalMulti.length > 0 ? Math.max(...finalMulti.map((h) => h.score)) : null;
 
-    const mergedNregs = [...new Set(goalsSummary.flatMap((g) => g.act_candidates_top3 ?? []))].filter(Boolean);
+    const chunksEvidenceMulti = computeChunksEvidenceTopActs(finalMulti);
+    const chunkEvidenceByNreg = new Map(
+      chunksEvidenceMulti.map((item) => [item.rada_nreg, item] as const)
+    );
+    const goalSupportByNreg = new Map<string, number>();
+    for (const summary of goalsSummary) {
+      for (const nreg of summary.act_candidates_top3 ?? []) {
+        goalSupportByNreg.set(nreg, (goalSupportByNreg.get(nreg) ?? 0) + 1);
+      }
+    }
+    const mergedNregs = [
+      ...new Set([
+        ...chunksEvidenceMulti.map((item) => item.rada_nreg),
+        ...goalsSummary.flatMap((g) => g.act_candidates_top3 ?? []),
+      ]),
+    ].filter(Boolean);
     const multiActCandidatesTop = await Promise.all(
       mergedNregs.slice(0, SELECTED_ACTS_MAX).map(async (nreg) => {
         const meta = await getActMeta(nreg);
+        const evidence = chunkEvidenceByNreg.get(nreg);
+        const goalSupport = goalSupportByNreg.get(nreg) ?? 0;
+        const score = Number(
+          (
+            (evidence?.max_score ?? 0) +
+            Math.min(0.24, (evidence?.count_in_top30 ?? 0) * 0.04) +
+            Math.min(0.12, goalSupport * 0.04)
+          ).toFixed(6)
+        );
         return {
           rada_nreg: nreg,
           title: meta?.title,
-          score: 1,
-          why_tag: 'TAXONOMY',
-          source_tier: 'ACTS_2' as const,
+          score,
+          why_tag:
+            evidence != null ? 'CHUNKS_EVIDENCE' : goalSupport > 1 ? 'GOAL_SUPPORT' : 'TAXONOMY',
+          source_tier: evidence != null ? ('ACTS_1' as const) : ('ACTS_2' as const),
           category: meta?.category ?? undefined,
           document_type: meta?.document_type ?? undefined,
         };
       })
     );
-    const chunksEvidenceMulti = computeChunksEvidenceTopActs(finalMulti);
+    multiActCandidatesTop.sort((a, b) => b.score - a.score);
     const familyEvidenceMulti = await computeFamilyEvidence({
       chunks_evidence_top_acts: chunksEvidenceMulti,
       getActMeta,
@@ -1247,6 +1287,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
       documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,
+      actSelectionLowConfidence: multiReasonCodes.includes('GOAL_ACT_POOL_WEAK'),
       chunks_evidence_top_acts: chunksEvidenceMulti,
       familyEvidence: toFamilyEvidenceSummary(familyEvidenceMulti),
     });
@@ -1254,6 +1295,35 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selectedActsMulti.selected_acts,
       selectedActsMulti.selected_acts_confidence
     );
+    const multiReasonCodesFinal = [
+      ...new Set([
+        ...multiReasonCodes,
+        ...selectedActsMulti.selected_acts_reason_codes,
+        ...familyEvidenceMulti.reason_codes,
+        ...noiseResultMulti.guardReasonCodes,
+      ]),
+    ];
+    const multiLowConfidence =
+      selectedActsMulti.selected_acts_confidence < 0.6 ||
+      familyEvidenceMulti.family_conflict ||
+      multiReasonCodesFinal.some((code) =>
+        [
+          'GOAL_ACT_POOL_WEAK',
+          'COVERAGE_MISS_SELECTED_ACTS',
+          'COVERAGE_GUARD_FAILED',
+          'EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE',
+          'EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY',
+          'NO_STRONG_ACT_EVIDENCE',
+        ].includes(code)
+      );
+    if (
+      multiLowConfidence &&
+      !multiReasonCodesFinal.some((code) =>
+        ['ACT_SELECTION_LOW_CONFIDENCE', 'NO_STRONG_ACT_EVIDENCE', 'LOW_EVIDENCE', 'OUT_OF_SCOPE'].includes(code)
+      )
+    ) {
+      multiReasonCodesFinal.push('ACT_SELECTION_LOW_CONFIDENCE');
+    }
 
     const multiTrace: RetrievalTrace = {
       version: 1,
@@ -1274,6 +1344,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         topN_used_for_distribution: config.u4FusionTopN,
         scores_computed_on: 'final_hits_after_cap_and_guards',
         avg_score_source: 'final_hits_after_cap_and_guards',
+        low_confidence: multiLowConfidence,
+        why_low_confidence: multiLowConfidence
+          ? familyEvidenceMulti.family_conflict
+            ? 'family_conflict'
+            : multiReasonCodesFinal[0]
+          : undefined,
         goals_summary: goalsSummary,
         selected_acts: selected_acts_multi,
         act_candidates_top: multiActCandidatesTop.map((a) => ({
@@ -1325,7 +1401,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
               }
             : undefined,
         query_rewrite: queryRewriteMeta,
-        reason_codes: multiReasonCodes.length ? multiReasonCodes : undefined,
+        reason_codes: multiReasonCodesFinal.length ? multiReasonCodesFinal : undefined,
         lldbi_hints_present: lldbiHintsPresent,
         lldbi_hints_used: toLldbiHintsUsed(taxonomyResultEarly?.taxonomy_hints_used),
         qdrant_calls_count_total: qdrantCallCounter.count,
@@ -1678,11 +1754,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   // Hybrid re-score for ordering (no extra LLM); hit.score unchanged for audit
   if (allHits.length > 0 && taxonomyResult.debug.source === 'supabase') {
-    allHits.sort((a, b) => {
-      const diff = hybridScore(b, query, taxonomyResult, entities) - hybridScore(a, query, taxonomyResult, entities);
-      if (diff !== 0) return diff;
-      return compareRawHitByScore(a, b);
-    });
+    applyHybridOrdering(allHits, query, taxonomyResult, entities);
   }
 
   // Anti-noise: demote "Окрема думка" / "порядок торгівлі" etc. for ordering (with guard)
@@ -1758,7 +1830,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       referenceExpansionMeta = meta;
       if (addedHits.length > 0) {
         allHits.push(...addedHits);
-        const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
+        const deduped = dedupeHits(allHits);
+        if (taxonomyResult.debug.source === 'supabase') {
+          applyHybridOrdering(deduped, query, taxonomyResult, entities);
+        } else {
+          deduped.sort(compareHitsByOrderingScore);
+        }
         allHits.length = 0;
         allHits.push(...deduped);
       }
@@ -1838,7 +1915,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       }
       if (backfillHits.length > 0) {
         allHits.push(...backfillHits);
-        const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
+        const deduped = dedupeHits(allHits);
+        if (taxonomyResult.debug.source === 'supabase') {
+          applyHybridOrdering(deduped, query, taxonomyResult, entities);
+        } else {
+          deduped.sort(compareHitsByOrderingScore);
+        }
         allHits.length = 0;
         allHits.push(...deduped);
       }

@@ -168,28 +168,63 @@ export function parseUnitsFromTxt(
   const units: ContentUnit[] = [];
   
   if (strategy === 'article-based') {
-    // Шукаємо статті в тексті
-    const articlePattern = /Стаття\s+(\d+[а-яіїє]?(?:-\d+)?)\s*\.?\s*([^]*?)(?=Стаття\s+\d+[а-яіїє]?(?:-\d+)?|Розділ\s+[IVX]+|$)/gi;
-    let match;
-    
-    while ((match = articlePattern.exec(txt)) !== null) {
-      const articleNumber = match[1].trim();
-      let articleText = match[2].trim();
-      articleText = articleText.replace(/\n{3,}/g, '\n\n').trim();
-      
-      if (articleText.length < 50) continue;
-      
-      const title = extractTitleFromText(articleText, articleNumber) || `Стаття ${articleNumber}`;
-      
+    const lines = txt.replace(/\r/g, '').split('\n');
+    const articleHeaderPattern = /^\s*Стаття\s+(\d+[а-яіїє]?(?:-\d+)?)\.?\s*(.*)$/i;
+    const hierarchyHeaderPattern = /^\s*(Розділ|Глава|Книга|Частина)\b/i;
+    let currentArticle:
+      | {
+          number: string;
+          inlineTitle: string | null;
+          bodyLines: string[];
+        }
+      | null = null;
+
+    const flushCurrentArticle = (): void => {
+      if (!currentArticle) return;
+      let articleText = currentArticle.bodyLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+      if (articleText.length < 50) {
+        currentArticle = null;
+        return;
+      }
+      const inlineTitle =
+        currentArticle.inlineTitle && !currentArticle.inlineTitle.startsWith('{')
+          ? currentArticle.inlineTitle
+          : null;
+      if (inlineTitle && articleText.startsWith(inlineTitle)) {
+        articleText = articleText.slice(inlineTitle.length).trimStart();
+      }
+      const title = inlineTitle || extractTitleFromText(articleText, currentArticle.number) || `Стаття ${currentArticle.number}`;
       units.push({
         unit_type: 'article',
-        number: articleNumber,
+        number: currentArticle.number,
         title,
         text: articleText,
         hierarchy: {},
         source: {},
       });
+      currentArticle = null;
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      const headerMatch = line.match(articleHeaderPattern);
+      if (headerMatch) {
+        flushCurrentArticle();
+        currentArticle = {
+          number: headerMatch[1]!.trim(),
+          inlineTitle: headerMatch[2]!.trim() || null,
+          bodyLines: [],
+        };
+        continue;
+      }
+      if (currentArticle && hierarchyHeaderPattern.test(line)) {
+        flushCurrentArticle();
+      }
+      if (currentArticle) {
+        currentArticle.bodyLines.push(rawLine);
+      }
     }
+    flushCurrentArticle();
   } else if (strategy === 'point-based') {
     // Шукаємо пункти в тексті
     const pointPattern = /(\d+)\.\s+([^]*?)(?=\d+\.\s+|$)/g;
@@ -254,6 +289,16 @@ function extractTitleFromText(text: string, number: string): string | null {
   return null;
 }
 
+function shouldPromoteTxtArticles(pointUnits: ContentUnit[], articleUnitsFromTxt: ContentUnit[]): boolean {
+  const articleDistinctCount = new Set(articleUnitsFromTxt.map((unit) => unit.number)).size;
+  const pointDistinctCount = new Set(pointUnits.map((unit) => unit.number)).size;
+  return (
+    articleDistinctCount >= 10 &&
+    (pointDistinctCount === 0 ||
+      articleDistinctCount >= Math.max(10, Math.floor(pointDistinctCount * 0.65)))
+  );
+}
+
 /**
  * Головна функція парсингу Units з підтримкою різних стратегій
  * Підтримує AI-assisted parsing для "weird docs" (PHASE 11)
@@ -292,6 +337,18 @@ export async function parseContentUnits(
       units = parseArticleUnitsFromStru(stru);
     } else if (strategy === 'point-based') {
       units = parsePointUnitsFromStru(stru);
+      if (txt) {
+        const articleUnitsFromTxt = parseUnitsFromTxt(txt, 'article-based');
+        if (shouldPromoteTxtArticles(units, articleUnitsFromTxt)) {
+          const articleDistinctCount = new Set(articleUnitsFromTxt.map((unit) => unit.number)).size;
+          units = articleUnitsFromTxt;
+          strategyResult = {
+            strategy: 'article-based',
+            reason: `TXT article salvage over point-based stru (${articleDistinctCount} distinct articles)`,
+          };
+          requiresFallback = true;
+        }
+      }
     } else if (strategy === 'chapter-based') {
       units = parseChapterBasedUnits(stru);
     } else if (strategy === 'annex-based') {
@@ -380,6 +437,23 @@ export async function parseContentUnits(
     
     units = parseUnitsFromTxt(txt, txtStrategy);
     if (units.length > 0) {
+      if (txtStrategy === 'point-based') {
+        const articleUnitsFromTxt = parseUnitsFromTxt(txt, 'article-based');
+        if (shouldPromoteTxtArticles(units, articleUnitsFromTxt)) {
+          units = articleUnitsFromTxt;
+          strategyResult = {
+            strategy: 'article-based',
+            reason: `Fallback TXT article salvage over point-based parsing (${new Set(articleUnitsFromTxt.map((unit) => unit.number)).size} distinct articles)`,
+          };
+          return {
+            units,
+            strategy: strategyResult.strategy,
+            strategyReason: strategyResult.reason,
+            distribution,
+            requiresFallback: true,
+          };
+        }
+      }
       strategyResult = { 
         strategy: txtStrategy, 
         reason: `Fallback TXT parsing (stru не дав units, document_type=${documentType})` 
@@ -445,6 +519,24 @@ export async function parseContentUnits(
     const txtStrategy = documentType.includes('Постанова') ? 'point-based' : 'article-based';
     units = parseUnitsFromTxt(txt, txtStrategy);
     if (units.length > 0) {
+      if (txtStrategy === 'point-based') {
+        const articleUnitsFromTxt = parseUnitsFromTxt(txt, 'article-based');
+        if (shouldPromoteTxtArticles(units, articleUnitsFromTxt)) {
+          units = articleUnitsFromTxt;
+          strategyResult = {
+            strategy: 'article-based',
+            reason: `TXT article salvage over point-based fallback (${new Set(articleUnitsFromTxt.map((unit) => unit.number)).size} distinct articles)`,
+          };
+          requiresFallback = true;
+          return {
+            units,
+            strategy: strategyResult.strategy,
+            strategyReason: strategyResult.reason,
+            distribution,
+            requiresFallback,
+          };
+        }
+      }
       strategyResult = { 
         strategy: txtStrategy, 
         reason: `TXT fallback: ${txtStrategy}` 

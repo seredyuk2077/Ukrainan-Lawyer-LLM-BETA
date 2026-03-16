@@ -7,6 +7,7 @@ import { heuristicGoalSplit, hasMultiClauseStructure } from '../../retrieval/goa
 import { classifyActKind } from '../../retrieval/selected-acts.js';
 import { scoreActCandidate, findActByTitleFragment } from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
+import { compareHitsByOrderingScore, computeChunkStructuralScore } from '../../retrieval/chunk-rerank.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -138,6 +139,70 @@ async function testDocsOnlyNoSemanticPlanIsNotMarkedDegraded(): Promise<void> {
   console.log('[OK] docs-only no-semantic plan stays neutral, not degraded');
 }
 
+function testChunkStructuralScorePrefersBaseArticleTitle(): void {
+  const query = 'Що таке умисне вбивство і яке покарання?';
+  const baseHit = {
+    r2_key: 'legislation/criminal/2341-14.json',
+    json_path: '$.content.chunks[261].text',
+    score: 0.46,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '2341-14',
+    article_number: '115',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Умисне вбивство',
+    },
+  };
+  const specializedHit = {
+    r2_key: 'legislation/criminal/2341-14.json',
+    json_path: '$.content.chunks[263].text',
+    score: 0.49,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '2341-14',
+    article_number: '116',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Умисне вбивство, вчинене в стані сильного душевного хвилювання',
+    },
+  };
+  const baseScore = computeChunkStructuralScore(baseHit, query);
+  const specializedScore = computeChunkStructuralScore(specializedHit, query);
+  if (baseScore <= specializedScore) {
+    throw new Error(
+      `Expected base article title to outrank specialized variant. base=${baseScore} specialized=${specializedScore}`
+    );
+  }
+  console.log('[OK] chunk structural score prefers base article title over overspecialized variant');
+}
+
+function testOrderingScoreBeatsRawVectorScore(): void {
+  const noisyHigherVector = {
+    r2_key: 'legislation/criminal/2341-14.json',
+    json_path: '$.content.chunks[11].text',
+    score: 0.57,
+    ordering_score: 0.31,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '2341-14',
+    article_number: '12',
+  };
+  const relevantLowerVector = {
+    r2_key: 'legislation/criminal/2341-14.json',
+    json_path: '$.content.chunks[147].text',
+    score: 0.51,
+    ordering_score: 0.62,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '2341-14',
+    article_number: '115',
+  };
+  const ordered = [noisyHigherVector, relevantLowerVector].sort(compareHitsByOrderingScore);
+  if (ordered[0]?.article_number !== '115') {
+    throw new Error(
+      `Expected ordering_score to outrank raw vector score. got=${ordered[0]?.article_number ?? 'none'}`
+    );
+  }
+  console.log('[OK] ordering score outranks raw vector score in post-rerank sorting');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -152,6 +217,8 @@ async function main(): Promise<void> {
   await testTaxonomyKeywordTopicNotInScore();
   await testFindActByTitleFragmentExport();
   await testDocsOnlyNoSemanticPlanIsNotMarkedDegraded();
+  testChunkStructuralScorePrefersBaseArticleTitle();
+  testOrderingScoreBeatsRawVectorScore();
   console.log('\nAll RAG unit tests passed.');
 }
 

@@ -544,6 +544,7 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
         content_hash: canonical.metadata.content_hash,
         chunk_index: chunk.chunk_index,
         article_number: chunk.article_number || null,
+        chunk_title: chunk.title || null,
         unit_number: (chunk as any).unit_number || chunk.article_number || null,
         unit_type: (chunk as any).unit_type || (chunk.article_number ? 'article' : null),
         token_count: typeof chunk.token_count === 'number' ? chunk.token_count : null,
@@ -608,6 +609,17 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
     }
     if (qCounts.chunks !== expectedChunks) {
       throw new Error(`Qdrant verify failed: chunks count expected ${expectedChunks}, got ${qCounts.chunks}`);
+    }
+
+    const dedupResult = await qdrantClient.deleteOldVersions(
+      canonical.metadata.rada_nreg,
+      canonical.metadata.content_hash
+    );
+    if (dedupResult.actsDeleted > 0 || dedupResult.chunksDeleted > 0) {
+      await logLine(
+        run,
+        `qdrant:dedup old_versions acts=${dedupResult.actsDeleted} chunks=${dedupResult.chunksDeleted}`
+      );
     }
 
     // Update Supabase post-verify
@@ -679,4 +691,3 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
     await uploadRunToR2(run);
   }
 }
-
