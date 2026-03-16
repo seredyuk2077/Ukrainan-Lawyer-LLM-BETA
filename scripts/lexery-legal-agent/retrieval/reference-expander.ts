@@ -98,8 +98,9 @@ function hitsForRefParse(hits: RawHit[], getActMeta: ExpandReferencesInput['getA
   return (async () => {
     const withKind: Array<{ hit: RawHit; isPrimary: boolean }> = [];
     for (const h of hits.slice(0, maxM * 2)) {
-      const title = h.title ?? (h.rada_nreg ? (await getActMeta(h.rada_nreg))?.title ?? '' : '');
-      const kind = classifyActKind(title);
+      const meta = h.rada_nreg ? await getActMeta(h.rada_nreg) : null;
+      const title = h.title ?? meta?.title ?? '';
+      const kind = classifyActKind(title, meta?.document_type, meta?.category);
       withKind.push({ hit: h, isPrimary: kind === 'PRIMARY_LAW' });
     }
     withKind.sort((a, b) => (a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1));

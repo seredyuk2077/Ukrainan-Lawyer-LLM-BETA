@@ -89,6 +89,12 @@ const metrics: Record<string, number> = {
   u2_rules_routing_derived_total: 0,
   u2_rules_doc_type_nonempty_total: 0,
   u2_rules_category_nonempty_total: 0,
+  u10_success_total: 0,
+  u10_fail_total: 0,
+  u10_latency_ms_sum: 0,
+  u10_latency_ms_count: 0,
+  u12_success_total: 0,
+  u12_fail_total: 0,
 };
 
 const u2IntentCounts: Record<string, number> = {};
@@ -393,4 +399,24 @@ export function incrementU5Expand() {
 }
 export function incrementU5NoExpand() {
   metrics.u5_no_expand_total += 1;
+}
+
+// U10 Legal Agent (LEX-134)
+export function incrementU10Success() {
+  metrics.u10_success_total += 1;
+}
+export function incrementU10Fail() {
+  metrics.u10_fail_total += 1;
+}
+export function recordU10LatencyMs(ms: number) {
+  metrics.u10_latency_ms_sum += ms;
+  metrics.u10_latency_ms_count += 1;
+}
+
+// U12 Deliver (LEX-134)
+export function incrementU12Success() {
+  metrics.u12_success_total += 1;
+}
+export function incrementU12Fail() {
+  metrics.u12_fail_total += 1;
 }

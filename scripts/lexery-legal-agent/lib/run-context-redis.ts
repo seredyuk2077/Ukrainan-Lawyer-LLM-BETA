@@ -2,22 +2,24 @@
  * Redis RunContextStore — prod (when REDIS_URL + RUN_CONTEXT_DRIVER=redis).
  * Namespace: lexery:runctx:{run_id} — no tenant mixing; run_id is UUID.
  */
+import type { Redis } from 'ioredis';
 import type { RunContextStore } from './run-context-store.js';
 
 const PREFIX = 'lexery:runctx:';
 const DEFAULT_TTL_SEC = 3600;
 
-async function getRedis(): Promise<typeof import('ioredis')> {
+async function getRedisCtor(): Promise<typeof import('ioredis').default> {
   try {
-    return await import('ioredis');
+    const mod = await import('ioredis');
+    return mod.default;
   } catch {
     throw new Error('ioredis not installed; add it for Redis RunContextStore (pnpm add ioredis)');
   }
 }
 
 export async function createRedisRunContextStore(redisUrl: string): Promise<RunContextStore> {
-  const Redis = await getRedis();
-  const client = new Redis(redisUrl, { maxRetriesPerRequest: 3 });
+  const RedisCtor = await getRedisCtor();
+  const client: Redis = new RedisCtor(redisUrl, { maxRetriesPerRequest: 3 });
 
   return {
     async get<T>(runId: string): Promise<T | null> {
@@ -39,6 +41,18 @@ export async function createRedisRunContextStore(redisUrl: string): Promise<RunC
 
     async del(runId: string): Promise<void> {
       await client.del(PREFIX + runId);
+    },
+
+    async shutdown(): Promise<void> {
+      try {
+        await client.quit();
+      } catch {
+        try {
+          client.disconnect();
+        } catch {
+          // ignore best-effort shutdown
+        }
+      }
     },
   };
 }

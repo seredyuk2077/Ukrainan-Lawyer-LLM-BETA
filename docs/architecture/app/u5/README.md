@@ -1,4 +1,4 @@
-# [U5] Gate — expand decision (LEX-118)
+# [U5] Gate — expand decision (LEX-118, LEX-131)
 
 U5 приймає retrieval_trace + query_profile + search_plan і вирішує: **expand** (U6 DocList/Expand) чи **no expand** (U9 Assemble).
 
@@ -16,6 +16,7 @@ U5 приймає retrieval_trace + query_profile + search_plan і вирішу�
 - `gate/gate.ts` — evaluateGate(input)
 - `gate/consumer.ts` — handleU5Event: load run, evaluateGate, persist gate_decision, enqueue U6 або U9
 - `expand/consumer.ts` — U6 connectivity stub (log + enqueue U9)
+- `lib/pipeline/contracts.ts` — RunContext, U4Result, GateInput, GateDecision re-exports, gateStatus()
 
 ## ENV (canonical + safe defaults)
 
@@ -36,6 +37,7 @@ U5 приймає retrieval_trace + query_profile + search_plan і вирішу�
 
 ```bash
 pnpm brain:verify:u5
+pnpm brain:test:gate-units
 ```
 
-Три сценарії: A) "ККУ ст. 115" (gate_decision присутній), B) "мобілізація" (expand=true, AMBIGUOUS_QUERY), C) QDRANT_URL= (degraded U4 → expand=true, DEGRADED_LLDBI). Без ручних кроків.
+Три сценарії: A) "ККУ ст. 115" (gate_decision присутній, baseline `expand=false`), B) "мобілізація" (soft-ambiguity scenario; verifier фіксує поточне gate-рішення, яке зараз зазвичай лишається `expand=false` після ambiguity suppression), C) `QDRANT_URL=` (degraded U4 → `expand=true`, `DEGRADED_LLDBI`). Без ручних кроків.

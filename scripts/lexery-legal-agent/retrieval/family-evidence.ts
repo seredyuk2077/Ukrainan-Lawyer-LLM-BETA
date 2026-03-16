@@ -76,7 +76,7 @@ export async function computeFamilyEvidence(input: ComputeFamilyEvidenceInput): 
   for (const e of chunks_evidence_top_acts) {
     const meta = await getActMeta(e.rada_nreg);
     if (!meta) continue;
-    const kind = classifyActKind(meta.title, undefined, meta.category ?? undefined);
+    const kind = classifyActKind(meta.title, meta.document_type ?? undefined, meta.category ?? undefined);
     if (kind !== 'PRIMARY_LAW') continue;
 
     const family_key = toKey(meta.category ?? 'unknown');

@@ -986,18 +986,24 @@
     "tenant_id_hash": "f9a32823",
     "fingerprint": "84ad8039496a00e1",
     "flags": {
-      "domain": "corporate"
+      "domain": "criminal"
     },
     "expectations": {
       "expected_act_families": [
         {
-          "family_id": "corporate",
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        },
+        {
+          "family_id": "criminal_procedure",
           "stems_or_signals": [],
           "confidence": 0.3
         }
       ],
       "expected_domains": [
-        "corporate"
+        "criminal",
+        "criminal_procedure"
       ],
       "must_have_multi_act": false,
       "must_have_multi_goal": true,

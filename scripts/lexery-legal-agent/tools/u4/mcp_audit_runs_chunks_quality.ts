@@ -5,13 +5,13 @@
  * Usage: pnpm exec tsx scripts/lexery-legal-agent/tools/mcp_audit_runs_chunks_quality.ts [--limit 15] [--since-days 3]
  */
 import { createClient } from '@supabase/supabase-js';
-import { resolve, dirname } from 'path';
+import { resolve, dirname as pathDirname } from 'path';
 import { fileURLToPath } from 'url';
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
 import { config as loadEnv } from 'dotenv';
 import { config } from '../../lib/config.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = pathDirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(process.cwd(), '.env') });
 loadEnv({ path: resolve(__dirname, '../.env') });
 
@@ -60,14 +60,22 @@ type RunRow = {
   updated_at?: string;
 };
 
+let snippetLoadSuccess = 0;
+let snippetLoadFail = 0;
+
 async function getSnippet(r2Key: string, jsonPath: string): Promise<string> {
   try {
-    const { getFragmentFromR2 } = await import('../retrieval/r2-fragment.js');
+    const { getFragmentFromR2 } = await import('../../retrieval/r2-fragment.js');
     const text = await getFragmentFromR2(r2Key, jsonPath);
-    if (!text) return '(empty)';
+    if (!text) {
+      snippetLoadFail++;
+      return '(empty)';
+    }
+    snippetLoadSuccess++;
     const s = text.replace(/\s+/g, ' ').trim();
     return s.length <= SNIPPET_MAX_CHARS ? s : s.slice(0, SNIPPET_MAX_CHARS) + '…';
   } catch {
+    snippetLoadFail++;
     return '(R2 unavailable or error)';
   }
 }
@@ -195,6 +203,25 @@ async function main(): Promise<void> {
   reportLines.push('');
   reportLines.push(...runDetails);
 
+  const totalSnippets = snippetLoadSuccess + snippetLoadFail;
+  const failRate = totalSnippets > 0 ? snippetLoadFail / totalSnippets : 0;
+  const r2Capable = !!(config.r2BucketLegislation || config.r2Endpoint);
+  if (totalSnippets > 0) {
+    console.log(`[mcp_audit] snippet_load_success=${snippetLoadSuccess} snippet_load_fail=${snippetLoadFail}`);
+    if (failRate > 0.8 && r2Capable) {
+      const msg = `[mcp_audit] WARNING: R2 snippet fail-rate ${(failRate * 100).toFixed(0)}% > 80% (R2 configured). Forensics snippets may be unreliable.`;
+      console.warn(msg);
+      reportLines.push('');
+      reportLines.push('---');
+      reportLines.push('');
+      reportLines.push('## ⚠️ Увага: R2 snippets');
+      reportLines.push('');
+      reportLines.push(`- \`snippet_load_success\`: ${snippetLoadSuccess} | \`snippet_load_fail\`: ${snippetLoadFail}`);
+      reportLines.push(`- Fail-rate **${(failRate * 100).toFixed(0)}%** > 80% при налаштованому R2 — частина форензіки чанків може бути недостовірною.`);
+      reportLines.push('');
+    }
+  }
+
   reportLines.push('');
   reportLines.push('---');
   reportLines.push('');
@@ -209,6 +236,7 @@ async function main(): Promise<void> {
   reportLines.push('*Звіт згенеровано скриптом mcp_audit_runs_chunks_quality.ts (read-only).*');
 
   const outPath = resolve(__dirname, '_reports/mcp_audit_runs_chunks_quality_' + new Date().toISOString().slice(0, 10) + '.md');
+  mkdirSync(pathDirname(outPath), { recursive: true });
   writeFileSync(outPath, reportLines.join('\n'), 'utf-8');
   console.log('[mcp_audit] wrote', outPath);
 }

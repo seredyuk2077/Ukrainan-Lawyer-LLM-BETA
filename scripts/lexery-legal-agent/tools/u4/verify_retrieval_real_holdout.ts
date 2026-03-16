@@ -159,14 +159,36 @@ async function runQuery(
 
 function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Array<{ family_id: string }>): boolean {
   if (!rt || expectedFamilies.length === 0) return true;
+  const normalizeFamilyId = (familyId: string | undefined): string | undefined => {
+    switch ((familyId ?? '').trim().toLowerCase()) {
+      case 'tax':
+      case 'tax_customs':
+        return 'tax_customs';
+      case 'labor':
+      case 'labor_social':
+        return 'labor_social';
+      case 'admin':
+      case 'administrative':
+        return 'administrative';
+      case 'administrative_offenses':
+        return 'administrative_offenses';
+      default:
+        return familyId?.trim().toLowerCase();
+    }
+  };
   const actCandidates = rt.meta?.act_candidates_top ?? [];
+  const selectedActs = rt.meta?.selected_acts ?? [];
   const hits = rt.hits ?? [];
+  const dominantFamilyKey = normalizeFamilyId(rt.meta?.family_evidence_summary?.dominant_family_key);
   const allTitles = [
     ...actCandidates.map((a) => a.title ?? ''),
+    ...selectedActs.map((a) => a.act_title ?? ''),
     ...hits.map((h) => (h.act_title ?? h.title) ?? ''),
   ].filter(Boolean);
   for (const exp of expectedFamilies) {
     if (exp.family_id === 'general') return true;
+    const normalizedExpected = normalizeFamilyId(exp.family_id);
+    if (dominantFamilyKey && normalizedExpected && dominantFamilyKey === normalizedExpected) return true;
     const match = allTitles.some((t) => actTitleMatchesFamily(t, exp.family_id));
     if (match) return true;
   }

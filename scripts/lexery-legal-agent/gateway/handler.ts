@@ -6,21 +6,22 @@ import { randomUUID } from 'crypto';
 import { CreateRunRequestSchema, type CreateRunRequest } from './types.js';
 import { DevAuthProvider, AuthError } from './auth.js';
 import { checkRateLimit, checkConcurrentRuns, decrementActiveRuns } from './limits.js';
-import { RunRepository } from './storage.js';
-import { InMemoryQueue } from './queue.js';
+import { RunRepository, StorageError } from './storage.js';
+import { withTransientGatewayIoRetry } from './retry.js';
+import { createTaskQueue } from './queue-factory.js';
 import { processAttachments, estimateRequestSize } from './attachments.js';
 import { putQueryOverflow } from './query-overflow.js';
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
+import { runContextGet } from '../lib/run-context.js';
 import { incrementRunsStarted, incrementRunsRejected } from './observability.js';
 import type { SnapshotInput } from './types.js';
 
 const auth = new DevAuthProvider();
 const runRepo = new RunRepository();
-const taskQueue = new InMemoryQueue();
 
 export function getTaskQueue() {
-  return taskQueue;
+  return createTaskQueue();
 }
 
 export async function handleGetRun(req: Request, res: Response): Promise<void> {
@@ -36,23 +37,60 @@ export async function handleGetRun(req: Request, res: Response): Promise<void> {
     res.status(401).json({ error: 'Invalid or missing X-Dev-API-Key', code: 'UNAUTHORIZED' });
     return;
   }
-  const runRepoGet = new RunRepository();
-  const run = await runRepoGet.findByRunId(runId);
+  let run;
+  try {
+    const runRepoGet = new RunRepository();
+    run = await withTransientGatewayIoRetry(() => runRepoGet.findByRunId(runId));
+  } catch (err) {
+    if (err instanceof StorageError && (err.code === 'DB_READ_FAIL' || err.code.startsWith('DB_'))) {
+      res.status(503).json({
+        error: 'Database temporarily unavailable',
+        code: err.code,
+      });
+      return;
+    }
+    throw err;
+  }
   if (!run) {
     res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
     return;
   }
-  res.json({
-    run_id: run.run_id,
-    status: run.status,
-    query: run.query,
-    query_profile: run.query_profile ?? null,
-    search_plan: run.search_plan ?? null,
-    retrieval_trace: run.retrieval_trace ?? null,
-    gate_decision: run.gate_decision ?? null,
-    created_at: run.created_at,
-    updated_at: (run as { updated_at?: string }).updated_at,
-  });
+  try {
+    const includeSnapshot = req.query.include_snapshot === '1' || req.query.include_snapshot === 'true';
+    const payload: Record<string, unknown> = {
+      run_id: run.run_id,
+      status: run.status,
+      query: run.query,
+      query_profile: run.query_profile ?? null,
+      search_plan: run.search_plan ?? null,
+      retrieval_trace: run.retrieval_trace ?? null,
+      gate_decision: run.gate_decision ?? null,
+      created_at: run.created_at,
+      updated_at: (run as { updated_at?: string }).updated_at,
+    };
+    if (includeSnapshot && run.snapshot != null && typeof run.snapshot === 'object') {
+      payload.snapshot = run.snapshot;
+    }
+    if (run.llm_result != null && typeof run.llm_result === 'object') {
+      payload.llm_result = run.llm_result;
+    } else {
+      try {
+        const ctx = await runContextGet<{ llm_result?: unknown }>(runId);
+        if (ctx?.llm_result != null && typeof ctx.llm_result === 'object') {
+          payload.llm_result = ctx.llm_result;
+        }
+      } catch {
+        // RunContext may be unavailable (e.g. Redis down)
+      }
+    }
+    res.json(payload);
+  } catch (err) {
+    if (res.headersSent) return;
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'API_ERROR',
+    });
+  }
 }
 
 export async function handleCreateRun(req: Request, res: Response): Promise<void> {
@@ -112,7 +150,9 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
 
     const queryBytes = Buffer.byteLength(body.query, 'utf8');
     if (queryBytes > config.queryR2ThresholdBytes) {
-      const overflowResult = await putQueryOverflow(body.query, authContext.tenant_id, runId);
+      const overflowResult = await withTransientGatewayIoRetry(() =>
+        putQueryOverflow(body.query, authContext.tenant_id, runId)
+      );
       const prev = overflowResult.query_preview;
       queryForDb =
         prev.head +
@@ -129,6 +169,29 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       }
     }
 
+    // Extract prompt_stack from client_context (temporary until product backend sends dedicated fields)
+    const promptStack = (body.client_context?.prompt_stack != null &&
+      typeof body.client_context.prompt_stack === 'object' &&
+      !Array.isArray(body.client_context.prompt_stack))
+      ? (body.client_context.prompt_stack as {
+          global?: string; project?: string; chat?: string; user?: string;
+        })
+      : undefined;
+    const projectId =
+      typeof body.client_context?.project_id === 'string' && body.client_context.project_id.trim().length > 0
+        ? body.client_context.project_id.trim().slice(0, 255)
+        : undefined;
+    const requestedMmDocScopeRaw =
+      typeof body.client_context?.mm_doc_scope === 'string'
+        ? body.client_context.mm_doc_scope.trim().toLowerCase()
+        : undefined;
+    const requestedMmDocScope =
+      requestedMmDocScopeRaw === 'conversation' ||
+      requestedMmDocScopeRaw === 'project' ||
+      requestedMmDocScopeRaw === 'user_global'
+        ? requestedMmDocScopeRaw
+        : undefined;
+
     const snapshot = {
       request: {
         query: queryForDb,
@@ -140,6 +203,13 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       flags: { dry_run: body.dry_run, debug: body.debug },
       version: { api_version: config.apiVersion },
       ...(snapshotInput && { input: snapshotInput }),
+      ...(promptStack && { prompt_stack: promptStack }),
+      ...((projectId || requestedMmDocScope) && {
+        project_context: {
+          project_id: projectId ?? null,
+          mm_doc_scope: requestedMmDocScope ?? null,
+        },
+      }),
     };
 
     if (body.dry_run) {
@@ -161,16 +231,28 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       return;
     }
 
-    let attachmentsManifest: { name: string; size: number; sha256?: string; storage: 'inline' | 'r2'; r2_key?: string }[] = [];
+    let attachmentsManifest: Array<{
+      name: string;
+      size: number;
+      sha256?: string;
+      content_type?: string;
+      storage: 'inline' | 'r2';
+      r2_key?: string;
+      mm_doc_candidate?: boolean;
+    }> = [];
 
     if (body.attachments && body.attachments.length > 0) {
-      const result = await processAttachments(body.attachments, authContext.tenant_id, runId);
+      const result = await withTransientGatewayIoRetry(() =>
+        processAttachments(body.attachments, authContext.tenant_id, authContext.user_id, runId)
+      );
       attachmentsManifest = result.manifest;
       warnings.push(...result.warnings);
     }
 
     const existing = body.idempotency_key
-      ? await runRepo.findByIdempotencyKey(authContext.tenant_id, body.idempotency_key)
+      ? await withTransientGatewayIoRetry(() =>
+          runRepo.findByIdempotencyKey(authContext.tenant_id, body.idempotency_key)
+        )
       : null;
 
     let recordRunId: string = runId;
@@ -187,18 +269,31 @@ export async function handleCreateRun(req: Request, res: Response): Promise<void
       return;
     }
 
-    await runRepo.create({
-      runId: recordRunId,
-      tenantId: authContext.tenant_id,
-      userId: authContext.user_id,
-      query: queryForDb,
-      snapshot,
-      attachmentsManifest: attachmentsManifest.length ? attachmentsManifest : undefined,
-      idempotencyKey: body.idempotency_key,
-    });
+    await withTransientGatewayIoRetry(() =>
+      runRepo.create({
+        runId: recordRunId,
+        tenantId: authContext.tenant_id,
+        userId: authContext.user_id,
+        conversationId: body.conversation_id ?? null,
+        query: queryForDb,
+        snapshot,
+        attachmentsManifest: attachmentsManifest.length ? attachmentsManifest : undefined,
+        idempotencyKey: body.idempotency_key,
+      })
+    );
+
+    if (body.conversation_id && queryForDb) {
+      try {
+        await withTransientGatewayIoRetry(() =>
+          runRepo.insertUserMessageIfNotExists(recordRunId, body.conversation_id, queryForDb)
+        );
+      } catch {
+        // non-fatal: history still loadable; idempotent on retry
+      }
+    }
 
     try {
-      await taskQueue.enqueue({
+      await getTaskQueue().enqueue({
         run_id: recordRunId,
         step: 'U2',
         created_at: now,

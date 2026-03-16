@@ -66,6 +66,10 @@ export type RoutingHintsTriggers = {
   selected_acts_confidence_below_055: boolean;
   /** v3: confidence < 0.6 for conflict trigger (TRIGGER_STRONG). */
   selected_acts_confidence_below_06?: boolean;
+  /** v4: confidence < 0.65 for single-goal low-confidence trigger. Catches 0.6 = one_strong_act cases. */
+  selected_acts_confidence_below_065?: boolean;
+  /** v4: confidence < 0.9 for single-goal trigger. Catches 0.5/0.55/0.6/0.75 (at most one strong act). */
+  selected_acts_confidence_below_09?: boolean;
   reason_codes_include_coverage_guard_failed: boolean;
   reason_codes_include_no_strong_act_evidence: boolean;
   query_short_cryptic_high_entropy?: boolean;
@@ -73,13 +77,25 @@ export type RoutingHintsTriggers = {
   confident_family_mismatch?: boolean;
   /** v3: single goal for TRIGGER_MEDIUM (optional). */
   goals_count?: number;
+  /** Zero or very low recall — call routing to suggest families (e.g. admin/procedure queries). */
+  selected_acts_empty_or_very_low?: boolean;
 };
 
 const CONFIDENT_FAMILY_SUPPORT_THRESHOLD = 0.62;
 
-/** v3: Budget guard ≤25%. TRIGGER_STRONG + TRIGGER_MEDIUM + coverage_guard_failed (single-goal path). */
+/**
+ * v4: Budget guard ≤25%.
+ * TRIGGER_STRONG: family mismatch or conflict.
+ * TRIGGER_MEDIUM: family weak + single-goal + confidence <= 0.55.
+ * TRIGGER_NO_EVIDENCE: NO_STRONG_ACT_EVIDENCE + single-goal + confidence <= 0.55.
+ *   Rationale: taxonomy may identify the law but Qdrant found no chunk evidence for it
+ *   (niche law, uncommon domain). Routing hints can suggest alternative search strategies.
+ * TRIGGER_ZERO: selected_acts empty/very_low.
+ * TRIGGER_COVERAGE: coverage guard failed with family conflict evidence.
+ */
 export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean {
   if (!config.u4RoutingHintsEnabled || !config.openRouterApiKey) return false;
+  if (triggers.selected_acts_empty_or_very_low === true) return true;
   const strongMismatch = triggers.confident_family_mismatch === true;
   const strongConflict =
     triggers.family_conflict === true && (triggers.selected_acts_confidence_below_06 === true);
@@ -89,6 +105,26 @@ export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean 
     (triggers.goals_count ?? 1) === 1 &&
     triggers.selected_acts_confidence_below_055 === true;
   if (medium) return true;
+  // No-chunk-evidence path: taxonomy found candidates but Qdrant returned no strong evidence.
+  // Family evidence may appear strong from surrounding corpus hits, but the queried act has no coverage.
+  const noEvidenceSingleGoal =
+    triggers.reason_codes_include_no_strong_act_evidence === true &&
+    (triggers.goals_count ?? 1) === 1 &&
+    triggers.selected_acts_confidence_below_055 === true;
+  if (noEvidenceSingleGoal) return true;
+  // Low-confidence single-goal path: confidence < 0.9 + single-goal.
+  // Catches: 0.5 (no chunk evidence), 0.55 (taxonomy-only), 0.6 (no strong chunk act),
+  //          0.75 (exactly one strong act) — all below the 0.9 "two-or-more strong acts" bar.
+  // At confidence < 0.9, at most one act is strongly evidenced — routing hints can confirm
+  // the act family and suggest search variants without topic-word guessing.
+  // Family evidence is intentionally NOT required: general corpus hits produce strong family
+  // evidence even when the specific queried act has limited dedicated chunk coverage.
+  // Note: queries with 2+ strongly-evidenced acts (confidence = 0.9) are NOT triggered —
+  // this preserves the "do not force routing-hints into well-evidenced smoke queries" contract.
+  const lowConfSingleGoal =
+    (triggers.goals_count ?? 1) === 1 &&
+    triggers.selected_acts_confidence_below_09 === true;
+  if (lowConfSingleGoal) return true;
   const coverageWithEvidence =
     triggers.reason_codes_include_coverage_guard_failed === true &&
     (triggers.goals_count ?? 1) === 1 &&

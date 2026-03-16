@@ -2,8 +2,11 @@
  * U4 CacheRAG consumer (LEX-114, LEX-117) — handle U4 event: run retrieval, persist RetrievalTrace, enqueue U5.
  */
 import type { RunEvent } from '../gateway/types.js';
+import { compactRetrievalTraceForDb, MAX_HITS_IN_DB } from './retrieval-trace-compact.js';
+import { putRetrievalTraceFull } from './retrieval-trace-r2.js';
 import { RunRepository } from '../gateway/storage.js';
 import { getTaskQueue } from '../gateway/handler.js';
+import { withTransientGatewayIoRetry } from '../gateway/retry.js';
 import { logger } from '../lib/logger.js';
 import { runContextGet, runContextSet } from '../lib/run-context.js';
 import {
@@ -46,6 +49,16 @@ function legalDomainToTaxonomyKey(domain: string): string | undefined {
   if (d === 'corporate') return 'corporate';
   if (d === 'general') return undefined;
   return undefined;
+}
+
+export async function runU4IoRetry<T>(fn: () => Promise<T>): Promise<T> {
+  return withTransientGatewayIoRetry(fn);
+}
+
+export async function runCacheRagWithIoRetry(
+  params: Parameters<typeof runCacheRag>[0]
+): Promise<Awaited<ReturnType<typeof runCacheRag>>> {
+  return runU4IoRetry(() => runCacheRag(params));
 }
 
 export async function handleU4Event(event: RunEvent): Promise<void> {
@@ -110,7 +123,7 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
             document_types_ranked_top3: queryProfile.lldbi.document_types_ranked_top3 ?? [],
           }
         : undefined;
-    const { rawHits, retrievalTrace } = await runCacheRag({
+    const { rawHits, retrievalTrace, memoryRefs, memorySummaries, memoryTrace } = await runCacheRagWithIoRetry({
       query,
       searchPlan: plan,
       steps,
@@ -121,6 +134,7 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
       run_id,
       tenant_id: run.tenant_id ?? null,
       user_id: run.user_id,
+      conversation_id: run.conversation_id ?? null,
     });
 
     if (retrievalTrace.degraded_sources?.lldbi) {
@@ -175,12 +189,26 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
       if (typeof recentLatency === 'number') recordU4MemoryLatency(recentLatency);
     }
 
-    await runRepo.updateRetrievalTrace(run_id, retrievalTrace as unknown as object);
+    let compact = compactRetrievalTraceForDb(retrievalTrace);
+    if (Array.isArray(retrievalTrace.hits) && retrievalTrace.hits.length > MAX_HITS_IN_DB) {
+      const r2Result = await putRetrievalTraceFull(run.tenant_id ?? null, run_id, retrievalTrace);
+      if (r2Result.success && r2Result.r2_key) {
+        compact = { ...compact, meta: { ...compact.meta, full_trace_r2_key: r2Result.r2_key } };
+      }
+    }
+    await runRepo.updateRetrievalTrace(run_id, compact as unknown as object);
 
     const mergedCtx = (await runContextGet<Record<string, unknown>>(run_id)) ?? {};
     await runContextSet(
       run_id,
-      { ...mergedCtx, raw_hits: rawHits, retrieval_trace: retrievalTrace } as Record<string, unknown>,
+      {
+        ...mergedCtx,
+        raw_hits: rawHits,
+        retrieval_trace: retrievalTrace,
+        memory_items: memoryRefs ?? mergedCtx.memory_items,
+        memory_summaries: memorySummaries ?? mergedCtx.memory_summaries,
+        memory_trace: memoryTrace ?? mergedCtx.memory_trace,
+      } as Record<string, unknown>,
       RUN_CONTEXT_TTL_SEC
     );
 

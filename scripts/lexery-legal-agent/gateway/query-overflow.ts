@@ -4,6 +4,7 @@
  */
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { config } from '../lib/config.js';
+import { r2KeyQuery } from '../lib/r2-keys.js';
 import type { QueryOverflowRef, QueryPreview } from './types.js';
 
 function createR2Client(): S3Client | null {
@@ -48,8 +49,7 @@ export async function putQueryOverflow(
     return { success: false, query_preview, error: 'R2 not configured' };
   }
 
-  const effectiveTenant = tenantId || 'dev-tenant';
-  const r2Key = `runs/${effectiveTenant}/${runId}/input/query.txt`;
+  const r2Key = r2KeyQuery(tenantId, runId);
 
   try {
     const buf = Buffer.from(query, 'utf8');

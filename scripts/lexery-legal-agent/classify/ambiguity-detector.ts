@@ -1,13 +1,8 @@
 /**
- * [U2d] Ambiguity Detector — heuristics (LEX-86).
- * Returns strength: "hard" (override LLM: AMBIG_TERMS, too-short) | "soft" (merge/OR).
+ * [U2d] Ambiguity Detector — structure-first ambiguity checks (LEX-86).
+ * Returns strength: "hard" only for clearly underspecified short queries; otherwise "soft".
  */
 import type { AmbiguityResult, AmbiguityReasonCode, LegalDomain, ExtractedEntity } from './types.js';
-
-const AMBIG_TERMS = [
-  'мобілізація', 'поліція', 'права', 'обов\'язки', 'відповідальність',
-  'мобилизация', 'полиция', 'права', 'обязанности',
-];
 
 export function detectAmbiguity(
   query: string,
@@ -18,11 +13,17 @@ export function detectAmbiguity(
   const reason_codes: AmbiguityReasonCode[] = [];
   const ambig_terms: string[] = [];
   const q = query.trim().toLowerCase().normalize('NFC');
+  const HARD_SHORT_QUERY_MAX_CHARS = 18;
+  const tokenCount = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
 
   const hasEntities = entities.length > 0;
   const hasDirectRef = entities.some((e) => e.type === 'article_ref' || e.type === 'act_abbrev');
+  const hasConcreteDomain = domain !== 'general';
 
-  if (!hasEntities && q.length < 30) {
+  // Hard ambiguity is reserved for genuinely underspecified very short queries.
+  // Short but concrete domain-specific legal queries should not be pushed into
+  // the expensive ambiguity/deep-retrieval path just because they lack entities.
+  if (!hasEntities && !hasDirectRef && !hasConcreteDomain && q.length < HARD_SHORT_QUERY_MAX_CHARS && tokenCount <= 3) {
     reasons.push('no_entities_short_query');
     reason_codes.push('TOO_SHORT_QUERY');
   }
@@ -32,17 +33,8 @@ export function detectAmbiguity(
     reason_codes.push('GENERAL_DOMAIN_NO_DIRECT_REF');
   }
 
-  for (const term of AMBIG_TERMS) {
-    if (q.includes(term.toLowerCase().normalize('NFC'))) {
-      ambig_terms.push(term);
-      reasons.push('ambiguous_term');
-      if (!reason_codes.includes('AMBIG_TERM_MATCH')) reason_codes.push('AMBIG_TERM_MATCH');
-      break;
-    }
-  }
-
   const is_ambiguous = reasons.length > 0;
-  const hasHard = reason_codes.includes('AMBIG_TERM_MATCH') || reason_codes.includes('TOO_SHORT_QUERY');
+  const hasHard = reason_codes.includes('TOO_SHORT_QUERY');
   const strength: 'hard' | 'soft' = hasHard ? 'hard' : 'soft';
 
   return {

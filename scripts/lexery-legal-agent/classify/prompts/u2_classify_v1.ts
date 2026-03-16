@@ -24,7 +24,7 @@ const SYSTEM = `Ти — класифікатор юридичних запит�
 - domain: один з "criminal" | "civil" | "labor" | "admin" | "tax" | "corporate" | "general"
 - entities: масив об'єктів { type, value, norm? }. type: "act_abbrev" | "law_title" | "article_ref" | "authority" | "term". Нормалізуй посилання: стаття 115-1, ст. 115¹, ч. 2 ст. 115 → article_ref з norm.
 - ambiguity: { is_ambiguous: boolean, reasons: string[], ambig_terms?: string[] }
-- routing_flags: { need_deep_retrieval?: boolean, need_web?: boolean, ambiguous?: boolean }
+- routing_flags: { need_deep_retrieval?, need_web?, ambiguous?, context_mode? }. context_mode ОБОВ'ЯЗКОВО визначай: "law" = потрібне законодавство; "memory" = користувач питає лише про попередні повідомлення/розмову/що асистент пам'ятає (без посилань на норми); "mixed" = і розмова, і законодавство. Приклади: "Що ти пам'ятаєш про мої запити?" → context_mode: "memory"; "З урахуванням того, що ми обговорювали, порівняй крадіжку і грабіж" → context_mode: "mixed"; "Чим відрізняється крадіжка від грабежу?" → context_mode: "law".
 
 ${DOMAIN_BY_QUESTION_TYPE}
 

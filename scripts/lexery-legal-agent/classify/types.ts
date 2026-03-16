@@ -35,6 +35,7 @@ export interface ExtractedEntity {
 
 /** Rule-based reason codes for ambiguity (for override policy and audit) */
 export type AmbiguityReasonCode =
+  /** Legacy code retained for backward compatibility; no longer emitted by detector. */
   | 'AMBIG_TERM_MATCH'
   | 'TOO_SHORT_QUERY'
   | 'NO_ENTITIES_GENERIC_TOPIC'
@@ -44,11 +45,14 @@ export interface AmbiguityResult {
   is_ambiguous: boolean;
   reasons: string[];
   ambig_terms?: string[];
-  /** When from rules: "hard" = override LLM (e.g. AMBIG_TERMS); "soft" = merge/OR */
+  /** When from rules: "hard" = override LLM for clearly underspecified short query; "soft" = merge/OR */
   strength?: 'hard' | 'soft';
-  /** Canonical reason codes for audit (e.g. AMBIG_TERM_MATCH) */
+  /** Canonical reason codes for audit. */
   reason_codes?: AmbiguityReasonCode[];
 }
+
+/** U2 LLM: which context to use. law = legislation; memory = conversation/history; mixed = both. */
+export type ContextMode = 'law' | 'memory' | 'mixed';
 
 export interface RoutingFlags {
   need_deep_retrieval?: boolean;
@@ -66,11 +70,14 @@ export interface RoutingFlags {
   input_looks_like_legal_text?: boolean;
   /** U2: possible PII/sensitive data detected */
   contains_sensitive_data_possible?: boolean;
+  /** U2 LLM: context_mode — law (legislation), memory (conversation/history), mixed (both). */
+  context_mode?: ContextMode;
 }
 
 /** Gating: why LLM was or wasn't used */
 export type GatingDecision =
   | 'rules_high_confidence'
+  | 'rules_docs_only_scope'
   | 'llm_low_confidence'
   | 'llm_large_input'
   | 'llm_contract_like'

@@ -41,54 +41,35 @@ export type TaxonomyInputForSplit = {
   category_hints: string[];
 };
 
-/** Multi-question: multiple "?" or "і … ?" / "та … ?" / "і чия …" */
+/** Structure-only: multiple "?" or conjunction "і"/"та" before second question. No topic/domain inference. */
 function detectMultiQuestion(query: string): boolean {
   const q = query.normalize('NFC').trim();
   const questionMarks = (q.match(/\?/g) || []).length;
   if (questionMarks >= 2) return true;
-  if (/\s+і\s+чия\s+/i.test(q) || /\s+та\s+чия\s+/i.test(q)) return true;
   if (/\s+і\s+[^?]*\?\s*$/i.test(q) && questionMarks >= 1) return true;
   return false;
 }
 
 /**
- * Multi-topic: coarse markers for subdomains. Primary domain should come from U2 (domainHint).
- * Do not add word lists here—new topics (e.g. antisemitism, terrorism) belong in a classifier (U2 or a light AI), not in retrieval heuristics.
+ * No topic/domain regexes. Domain comes from U2 (domainHint) only. Multi-goal semantics from planner/taxonomy.
  */
-function detectMultiTopic(query: string, domainHint?: string): { multi: boolean; domains: string[] } {
-  const q = query.normalize('NFC').toLowerCase();
-  const domains: string[] = [];
-  if (domainHint) domains.push(domainHint);
-  const criminal = /кримін|злочин|вбивств|шахрайств|кку|кк\s*у|кримінальн/i.test(q);
-  const procedure = /підслідн|досудов|слідч|кпк|кримінальн.*процес|оскаржен|позов|ципк|цпк/i.test(q);
-  const tax = /податк|податков|пкку|пк\s*у/i.test(q);
-  const admin = /адмін|адміністратив|купап|кодекс.*правопоруш/i.test(q);
-  const labor = /труд|звільнен|трудовий\s+договір|кзпп/i.test(q);
-  const civil = /цивіль|цик|цк\s*у|договір|спадщин|кзпп|споживач/i.test(q);
-  const compliance = /відповідність|відповідає|перевір.*на\s+відповід|відповідно\s+до/i.test(q);
-
-  if (criminal) domains.push('criminal');
-  if (procedure) domains.push('criminal_procedure');
-  if (tax) domains.push('tax_customs');
-  if (admin) domains.push('admin');
-  if (labor) domains.push('labor');
-  if (civil) domains.push('civil');
-  if (compliance) domains.push('compliance');
-
-  const unique = [...new Set(domains)];
-  const multi = unique.length >= 2;
-  return { multi, domains: unique };
+function getDomainsFromHint(domainHint?: string): { multi: boolean; domains: string[] } {
+  const domains = domainHint ? [domainHint] : [];
+  return { multi: false, domains };
 }
 
-/** Infer goal_type from subquery tokens (heuristic). */
-function inferGoalType(subquery: string, isComplianceContext: boolean): EvidenceGoalType {
-  const q = subquery.normalize('NFC').toLowerCase();
-  if (isComplianceContext || /відповідність|перевір.*відповід|відповідає/i.test(q)) return 'compliance_check';
-  if (/що таке|визначення|означає|розуміння/i.test(q)) return 'definition';
-  if (/підслідн|досудов|слідч|оскаржен|позов|порядок|строки|процедур/i.test(q)) return 'procedure';
-  if (/відповідальність|штраф|санкція|покарання|позбавлення/i.test(q)) return 'liability';
-  if (/ст\.\s*\d+|стаття\s*\d+|згідно\s+з|згідно\s+статті/i.test(q)) return 'reference_resolution';
+/** Structure-only: direct citation (article/act ref) — avoid splitting. No topic inference for goal_type. */
+function inferGoalType(_subquery: string, isComplianceContext: boolean): EvidenceGoalType {
+  if (isComplianceContext) return 'compliance_check';
   return 'definition';
+}
+
+/** Structure-only: query has two segments separated by " і " or " та " (min length each). Used to trigger planner for multi-clause. */
+export function hasMultiClauseStructure(query: string, minSegmentLength = 5): boolean {
+  const q = query.normalize('NFC').trim();
+  const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
+  if (!andMatch) return false;
+  return andMatch[1].trim().length >= minSegmentLength && andMatch[2].trim().length >= minSegmentLength;
 }
 
 /** Split query into subqueries by "?" or by conjunctions "і" / "та" before second question. */
@@ -130,25 +111,22 @@ export function heuristicGoalSplit(
   const inputIsLarge = !!routingFlags?.input_is_large;
 
   const multiQ = detectMultiQuestion(query);
-  const { multi: multiT, domains } = detectMultiTopic(query, domainHint);
+  const { domains } = getDomainsFromHint(domainHint);
 
   if (multiQ) reasonCodes.push('multi_question');
-  if (multiT) reasonCodes.push('multi_topic');
   if (inputLikeContract) reasonCodes.push('input_looks_like_contract');
   if (inputLikeTable) reasonCodes.push('input_looks_like_table');
 
   const subqueries = splitIntoSubqueries(query);
-  // "?" split requires multiQ (≥2 "?") to avoid spurious 2-goal split for single questions like
-  // "...задоволенню? Відповідь обґрунтуйте." where second "subquery" is a trivial instruction phrase.
+  // Structure-only: multi-goal only from multiple "?" or contract-like input. Semantic multi-goal from planner/taxonomy.
   const useMultiGoal =
     (multiQ && subqueries.length >= 2) ||
-    (multiT && domains.length >= 2) ||
     (inputLikeContract && query.length > 100);
 
   if (!useMultiGoal || subqueries.length === 0) {
     const single: EvidenceGoal = {
       id: 'goal_0',
-      goal_type: inputLikeContract && /відповідність|перевір/i.test(query) ? 'compliance_check' : inferGoalType(query, inputLikeContract),
+      goal_type: inputLikeContract ? 'compliance_check' : inferGoalType(query, false),
       subquery: query.slice(0, 4000),
       domain_hint: domainHint,
     };

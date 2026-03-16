@@ -18,6 +18,10 @@ export function getRunContextStore(): RunContextStore {
   return _store;
 }
 
+export function resetRunContextStore(): void {
+  _store = new InMemoryRunContextStore();
+}
+
 export async function runContextGet<T>(runId: string): Promise<T | null> {
   return _store.get<T>(runId);
 }

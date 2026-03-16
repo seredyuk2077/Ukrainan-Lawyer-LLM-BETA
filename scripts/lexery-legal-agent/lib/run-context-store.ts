@@ -6,6 +6,7 @@ export interface RunContextStore {
   get<T>(runId: string): Promise<T | null>;
   set<T>(runId: string, data: T, ttlSec: number): Promise<void>;
   del(runId: string): Promise<void>;
+  shutdown?(): Promise<void>;
 }
 
 const DEFAULT_TTL_SEC = 3600;

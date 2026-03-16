@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Autonomous U5 Gate verification harness.
- * One command: free port, start server, 3 scenarios (A: direct ref no expand, B: ambiguous expand, C: degraded expand), shutdown.
+ * One command: free port, start server, 3 scenarios
+ * (A: direct ref no expand, B: soft ambiguity with current-policy observation, C: degraded expand), shutdown.
  * No manual steps.
  */
 import { createServer } from 'net';
@@ -155,7 +156,7 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log('[verify_u5] Using port', port, 'BASE_URL=', baseUrl);
 
-  const child = runServer(port);
+  const child = runServer(port, { LEGAL_AGENT_DISABLE_LLM: 'true' });
   let healthOk = false;
   let scenarioA: { pass: boolean; expand?: boolean; reason?: string; latencyMs?: number } = { pass: false };
   let scenarioB: { pass: boolean; expand?: boolean; reason?: string; latencyMs?: number } = { pass: false };
@@ -211,6 +212,7 @@ async function main(): Promise<void> {
   const child2 = runServer(port2, {
     QDRANT_URL: '',
     qdrant_clusterENDPOINT_LEXERY_LEGISLATION_DB: '',
+    LEGAL_AGENT_DISABLE_LLM: 'true',
   });
   let scenarioC: { pass: boolean; expand?: boolean; reason_codes?: string[]; reason?: string } = { pass: false };
   try {

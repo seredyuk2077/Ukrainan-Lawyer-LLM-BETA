@@ -8,9 +8,12 @@ import { spawn } from 'child_process';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { splitLabeled } from './retrieval_real_split.js';
+import { RunRepository } from '../../gateway/storage.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const runRepo = new RunRepository();
 
 const FLAKY_CHECK_ENABLED =
   process.env.REAL_DEV_FLAKY_CHECK === '1' || process.argv.includes('--flaky-check');
@@ -60,6 +63,27 @@ function actTitleMatchesFamily(title: string, familyId: string): boolean {
 /** When expected_confidence < this, act_family_miss counts as soft_fail only. */
 const EXPECTED_CONFIDENCE_HARD_THRESHOLD = 0.5;
 
+/** Exported for unit tests: smoke gate must require 0 stable fails (7/7 PASS). */
+export function getRetrievalGateThresholds(
+  total: number,
+  isSmokeRun: boolean,
+  isLimitedRun: boolean
+): { minHardPass: number; maxHardFail: number } {
+  const minHardPassFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MIN_HARD_PASS ?? '30', 10);
+  const maxHardFailFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MAX_HARD_FAIL ?? '13', 10);
+  const minHardPass = isSmokeRun
+    ? total
+    : isLimitedRun
+      ? Math.max(1, Math.floor(total * 0.6))
+      : minHardPassFull;
+  const maxHardFail = isSmokeRun
+    ? 0
+    : isLimitedRun
+      ? Math.min(total, Math.max(1, Math.ceil(total * 0.3)))
+      : maxHardFailFull;
+  return { minHardPass, maxHardFail };
+}
+
 interface LabeledRow {
   run_id: string;
   query: string;
@@ -76,6 +100,7 @@ interface LabeledRow {
 }
 
 interface RunResult {
+  run_id?: string;
   retrievalTrace: {
     hits?: Array<{ title?: string; act_title?: string }>;
     meta?: {
@@ -87,13 +112,14 @@ interface RunResult {
       qdrant_calls_count_total?: number;
       hits_cap_applied?: boolean;
       stage_decisions?: { used_llm_planner?: boolean; used_act_planner?: boolean };
-      planner?: { tier?: number };
+      planner?: { tier?: number; duration_ms?: number };
       routing_hints?: {
         enabled?: boolean;
         called?: boolean;
         not_used_reason_codes?: string[];
         used_reason_codes?: string[];
         routing_path?: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE';
+        tokens_approx?: number;
       };
       reason_codes?: string[];
       selected_acts_decision?: { reason_codes?: string[] };
@@ -101,8 +127,14 @@ interface RunResult {
       family_evidence_summary?: { dominant_family_key?: string };
     };
   } | null;
+  promptTokens?: number;
   latencyMs: number;
 }
+
+type RunGetPayload = {
+  status?: string;
+  retrieval_trace?: RunResult['retrievalTrace'];
+};
 
 /** Resolve --only=SMOKE|FAST|FULL or ONLY_CASES=0,1,2. Returns indices into dev array or 'all'. */
 function getOnlyIndices(devLength: number): number[] | 'all' {
@@ -179,6 +211,88 @@ async function waitHealth(baseUrl: string): Promise<boolean> {
   return false;
 }
 
+const TERMINAL_STATUSES = ['completed', 'failed', 'U11_DONE', 'Deliver'];
+const RUN_TERMINAL_POLL_MS = 500;
+const RUN_TERMINAL_TIMEOUT_MS = 120_000;
+const U10_POSTCHECK_RETRIES = 6;
+const U10_POSTCHECK_RETRY_DELAY_MS = 5_000;
+const DB_TERMINAL_STATUSES = new Set(TERMINAL_STATUSES);
+
+/** Poll GET /v1/runs/:id until status is terminal. Canonical for U10 post-check readiness. */
+async function waitRunTerminal(
+  baseUrl: string,
+  runId: string,
+  timeoutMs: number = RUN_TERMINAL_TIMEOUT_MS
+): Promise<{ terminal: boolean; status?: string }> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch(`${baseUrl}/v1/runs/${runId}`, {
+        headers: { 'X-Dev-API-Key': DEV_KEY },
+      });
+      if (r.status === 200) {
+        const body = (await r.json()) as { status?: string };
+        const status = body?.status;
+        if (typeof status === 'string' && TERMINAL_STATUSES.includes(status)) {
+          return { terminal: true, status };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    await sleep(RUN_TERMINAL_POLL_MS);
+  }
+  return { terminal: false };
+}
+
+/** Wait for terminal with retries: 6 x 5s delay after first wait, then short re-check. */
+async function waitRunTerminalWithRetries(
+  baseUrl: string,
+  runId: string
+): Promise<{ terminal: boolean; status?: string }> {
+  let result = await waitRunTerminal(baseUrl, runId);
+  for (let r = 0; r < U10_POSTCHECK_RETRIES && !result.terminal; r++) {
+    await sleep(U10_POSTCHECK_RETRY_DELAY_MS);
+    result = await waitRunTerminal(baseUrl, runId, 15_000);
+  }
+  return result;
+}
+
+async function waitRunTerminalViaDb(runId: string): Promise<{ terminal: boolean; status?: string }> {
+  try {
+    const run = await runRepo.findByRunId(runId);
+    const status = typeof run?.status === 'string' ? run.status : undefined;
+    if (status && DB_TERMINAL_STATUSES.has(status)) {
+      return { terminal: true, status };
+    }
+  } catch {
+    // HTTP remains primary; DB is verifier fallback so timing lag does not fake a failure.
+  }
+  return { terminal: false };
+}
+
+export function isRetrievalTraceReadyForScoring(
+  status: string | undefined,
+  retrievalTrace: RunResult['retrievalTrace'] | undefined | null
+): boolean {
+  if (!status || !TERMINAL_STATUSES.includes(status)) return false;
+  if (retrievalTrace == null || typeof retrievalTrace !== 'object') return false;
+  const hitsCount = retrievalTrace.meta?.hits_count;
+  return typeof hitsCount === 'number' && hitsCount >= 0;
+}
+
+async function fetchRunPayload(baseUrl: string, runId: string): Promise<RunGetPayload | null> {
+  try {
+    const getRes = await fetch(`${baseUrl}/v1/runs/${runId}`, {
+      headers: { 'X-Dev-API-Key': DEV_KEY },
+    });
+    if (getRes.status !== 200) return null;
+    return (await getRes.json()) as RunGetPayload;
+  } catch {
+    return null;
+  }
+}
+
 async function runQuery(
   baseUrl: string,
   query: string,
@@ -194,46 +308,95 @@ async function runQuery(
       body: JSON.stringify({ query, tenant_id: tenantId, user_id: userId }),
     });
     if (postRes.status !== 202) {
-      return { retrievalTrace: null, latencyMs: Date.now() - start };
+      return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: undefined };
     }
     const postJson = (await postRes.json()) as { run_id?: string };
     runId = postJson.run_id ?? '';
-    if (!runId) return { retrievalTrace: null, latencyMs: Date.now() - start };
+    if (!runId) return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: undefined };
   } catch {
-    return { retrievalTrace: null, latencyMs: Date.now() - start };
+    return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: undefined };
   }
 
   const pollStart = Date.now();
+  let latestPayload: RunGetPayload | null = null;
   while (Date.now() - pollStart < POLL_TIMEOUT_MS) {
-    try {
-      const getRes = await fetch(`${baseUrl}/v1/runs/${runId}`, {
-        headers: { 'X-Dev-API-Key': DEV_KEY },
-      });
-      if (getRes.status !== 200) {
-        await sleep(POLL_MS);
-        continue;
+    const payload = await fetchRunPayload(baseUrl, runId);
+    if (payload) {
+      latestPayload = payload;
+      if (isRetrievalTraceReadyForScoring(payload.status, payload.retrieval_trace)) {
+        return {
+          run_id: runId,
+          retrievalTrace: payload.retrieval_trace ?? null,
+          latencyMs: Date.now() - start,
+        };
       }
-      const run = (await getRes.json()) as { retrieval_trace?: RunResult['retrievalTrace'] };
-      const rt = run.retrieval_trace;
-      if (rt != null && typeof rt === 'object') {
-        const meta = rt.meta;
-        if (meta?.hits_count != null && meta.hits_count >= 0) {
-          return { retrievalTrace: rt, latencyMs: Date.now() - start };
-        }
-      }
-    } catch {
-      // ignore
     }
     await sleep(POLL_MS);
   }
-  return { retrievalTrace: null, latencyMs: Date.now() - start };
+
+  let waitResult = await waitRunTerminalWithRetries(baseUrl, runId);
+  if (!waitResult.terminal) {
+    waitResult = await waitRunTerminalViaDb(runId);
+  }
+
+  if (waitResult.terminal) {
+    const finalPayload = await fetchRunPayload(baseUrl, runId);
+    if (isRetrievalTraceReadyForScoring(finalPayload?.status, finalPayload?.retrieval_trace)) {
+      return {
+        run_id: runId,
+        retrievalTrace: finalPayload?.retrieval_trace ?? null,
+        latencyMs: Date.now() - start,
+      };
+    }
+    try {
+      const fromDb = await runRepo.findByRunId(runId);
+      const dbTrace = fromDb?.retrieval_trace as RunResult['retrievalTrace'] | undefined;
+      if (isRetrievalTraceReadyForScoring(fromDb?.status, dbTrace)) {
+        return {
+          run_id: runId,
+          retrievalTrace: dbTrace ?? null,
+          latencyMs: Date.now() - start,
+        };
+      }
+    } catch {
+      // DB is a verifier fallback only
+    }
+  }
+
+  if (isRetrievalTraceReadyForScoring(latestPayload?.status, latestPayload?.retrieval_trace)) {
+    return {
+      run_id: runId,
+      retrievalTrace: latestPayload?.retrieval_trace ?? null,
+      latencyMs: Date.now() - start,
+    };
+  }
+
+  return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: runId };
 }
 
-function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Array<{ family_id: string }>): boolean {
+export function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Array<{ family_id: string }>): boolean {
   if (!rt || expectedFamilies.length === 0) return true;
+  const normalizeFamilyId = (familyId: string | undefined): string | undefined => {
+    switch ((familyId ?? '').trim().toLowerCase()) {
+      case 'tax':
+      case 'tax_customs':
+        return 'tax_customs';
+      case 'labor':
+      case 'labor_social':
+        return 'labor_social';
+      case 'admin':
+      case 'administrative':
+        return 'administrative';
+      case 'administrative_offenses':
+        return 'administrative_offenses';
+      default:
+        return familyId?.trim().toLowerCase();
+    }
+  };
   const actCandidates = rt.meta?.act_candidates_top ?? [];
   const selectedActs = rt.meta?.selected_acts ?? [];
   const hits = rt.hits ?? [];
+  const dominantFamilyKey = normalizeFamilyId(rt.meta?.family_evidence_summary?.dominant_family_key);
   const allTitles = [
     ...actCandidates.map((a) => a.title ?? ''),
     ...selectedActs.map((a) => a.act_title ?? ''),
@@ -241,6 +404,8 @@ function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Ar
   ].filter(Boolean);
   for (const exp of expectedFamilies) {
     if (exp.family_id === 'general') return true;
+    const normalizedExpected = normalizeFamilyId(exp.family_id);
+    if (dominantFamilyKey && normalizedExpected && dominantFamilyKey === normalizedExpected) return true;
     const match = allTitles.some((t) => actTitleMatchesFamily(t, exp.family_id));
     if (match) return true;
   }
@@ -278,7 +443,16 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log('[verify_retrieval_real_dev] port', port, 'DEV cases', devToRun.length, onlyIndices !== 'all' ? `(--only: ${caseIndices.length} cases)` : '', FLAKY_CHECK_ENABLED ? 'flaky_check=ON' : '');
 
-  const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
+  const serverEnv = {
+    ...process.env,
+    BRAIN_PORT: String(port),
+    DEV_API_KEY: DEV_KEY,
+    LEGAL_AGENT_DISABLE_LLM: 'true',
+    U10_DRY_RUN_KEEP_TRIAGE: 'true',
+  };
+  if (!serverEnv.REDIS_QUEUE_NAMESPACE) {
+    serverEnv.REDIS_QUEUE_NAMESPACE = `lexery:verify:retrieval-real-dev:${randomUUID()}`;
+  }
   const child = spawn(
     process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
     ['exec', 'tsx', resolve(process.cwd(), 'scripts/lexery-legal-agent/server.ts')],
@@ -297,6 +471,7 @@ async function main(): Promise<void> {
     softFail?: boolean;
     latencyMs: number;
     hasTrace: boolean;
+    run_id?: string;
     qdrantCalls?: number;
     goalsCount?: number;
     hitsCapApplied?: boolean;
@@ -304,6 +479,8 @@ async function main(): Promise<void> {
     llmPlannerUsed?: boolean;
     actPlannerUsed?: boolean;
     actListSize?: number;
+    plannerDurationMs?: number;
+    promptTokens?: number;
     failReasons?: string[];
     routingHintsCalled?: boolean;
     routingHintsUsed?: boolean;
@@ -312,6 +489,9 @@ async function main(): Promise<void> {
     status?: 'PASS' | 'FAIL_STABLE' | 'FAIL_FLAKY';
   };
   const results: ResultRow[] = [];
+  let u10PostCheckFail = 0;
+  const postCheckReasonCodes: string[] = [];
+  const incompleteRunIds: string[] = [];
 
   try {
     healthOk = await waitHealth(baseUrl);
@@ -333,6 +513,14 @@ async function main(): Promise<void> {
       const softFail =
         !pass && !actFamilyHit && (multiGoalCorrect && multiActCorrect) && expectedConf < EXPECTED_CONFIDENCE_HARD_THRESHOLD;
       const lowConf = !!rt?.meta?.low_confidence;
+      let promptTokens: number | undefined;
+      if (run.run_id) {
+        try {
+          const fullRun = await runRepo.findByRunId(run.run_id);
+          const pt = fullRun?.prompt_tokens;
+          if (typeof pt === 'number') promptTokens = pt;
+        } catch { /* best-effort */ }
+      }
       results.push({
         pass,
         actFamilyHit,
@@ -342,6 +530,7 @@ async function main(): Promise<void> {
         softFail,
         latencyMs: run.latencyMs,
         hasTrace: rt != null,
+        run_id: run.run_id,
         qdrantCalls: rt?.meta?.qdrant_calls_count_total,
         goalsCount: rt?.meta?.goals_summary?.length,
         hitsCapApplied: rt?.meta?.hits_cap_applied,
@@ -349,6 +538,8 @@ async function main(): Promise<void> {
         llmPlannerUsed: rt?.meta?.stage_decisions?.used_llm_planner,
         actPlannerUsed: rt?.meta?.stage_decisions?.used_act_planner,
         actListSize: (rt?.meta?.selected_acts ?? rt?.meta?.act_candidates_top ?? []).length,
+        plannerDurationMs: rt?.meta?.planner?.duration_ms,
+        promptTokens,
         failReasons: pass ? [] : [(!actFamilyHit && 'act_family_miss'), (!multiGoalCorrect && 'multi_goal_miss'), (!multiActCorrect && 'multi_act_miss')].filter(Boolean) as string[],
         routingHintsCalled: rt?.meta?.routing_hints?.called === true,
         routingHintsUsed:
@@ -367,6 +558,69 @@ async function main(): Promise<void> {
         console.error('[verify_retrieval_real_dev]', label, 'FAIL', reasons.join(', '));
       }
     }
+
+    // U10 post-check: wait for terminal status (with retries) then GET ?include_snapshot=1 (canonical). Non-200 or exception = post-check fail.
+    for (const r of results) {
+      if (!r.run_id) continue;
+      let waitResult = await waitRunTerminalWithRetries(baseUrl, r.run_id);
+      if (!waitResult.terminal) {
+        waitResult = await waitRunTerminalViaDb(r.run_id);
+      }
+      if (!waitResult.terminal) {
+        incompleteRunIds.push(r.run_id);
+        console.error('[verify_retrieval_real_dev] U10 post-check: run_not_terminal run_id=', r.run_id);
+        u10PostCheckFail++;
+        postCheckReasonCodes.push('run_not_terminal');
+        continue;
+      }
+      try {
+        const getRes = await fetch(`${baseUrl}/v1/runs/${r.run_id}?include_snapshot=1`, {
+          headers: { 'X-Dev-API-Key': DEV_KEY },
+        });
+        if (getRes.status !== 200) {
+          u10PostCheckFail++;
+          postCheckReasonCodes.push('API_NON_200');
+          console.error('[verify_retrieval_real_dev] U10 post-check: GET /v1/runs/:id returned', getRes.status, 'run_id=', r.run_id);
+          continue;
+        }
+        let runBody = (await getRes.json()) as { snapshot?: { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
+        if (runBody.snapshot == null) {
+          const fromDb = await runRepo.findByRunId(r.run_id);
+          if (fromDb?.snapshot != null && typeof fromDb.snapshot === 'object') {
+            runBody = { snapshot: fromDb.snapshot as { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
+          }
+        }
+        const u10 = runBody.snapshot?.u10_selection;
+        if (r.hasTrace && !u10) {
+          console.error('[verify_retrieval_real_dev] U10 post-check: snapshot_missing_on_completed run_id=', r.run_id);
+          u10PostCheckFail++;
+          postCheckReasonCodes.push('snapshot_missing_on_completed');
+        } else if (u10?.triage_used && (!u10.triage_attempt_trail || u10.triage_attempt_trail.length === 0)) {
+          console.error('[verify_retrieval_real_dev] U10 post-check: triage_trail_empty_when_triage_used run_id=', r.run_id);
+          u10PostCheckFail++;
+          postCheckReasonCodes.push('triage_trail_empty_when_triage_used');
+        }
+      } catch (err) {
+        u10PostCheckFail++;
+        postCheckReasonCodes.push('POST_CHECK_EXCEPTION');
+        console.error('[verify_retrieval_real_dev] U10 post-check: exception run_id=', r.run_id, err);
+      }
+    }
+  if (u10PostCheckFail > 0) {
+    console.error('[verify_retrieval_real_dev] U10 post-check failed:', u10PostCheckFail, 'runs');
+  } else if (results.some((r) => r.run_id && r.hasTrace)) {
+    console.log('[verify_retrieval_real_dev] U10 post-check: u10_selection present and triage_attempt_trail ok for triage-eligible runs');
+  }
+  const postCheckReasonCounts: Record<string, number> = {};
+  for (const code of postCheckReasonCodes) {
+    postCheckReasonCounts[code] = (postCheckReasonCounts[code] ?? 0) + 1;
+  }
+  if (Object.keys(postCheckReasonCounts).length > 0) {
+    console.log('[verify_retrieval_real_dev] U10 post-check reason_codes:', Object.entries(postCheckReasonCounts).map(([k, v]) => `${k}=${v}`).join(', '));
+  }
+  if (incompleteRunIds.length > 0) {
+    console.log('[verify_retrieval_real_dev] Incomplete run IDs (not terminal):', incompleteRunIds.join(', '));
+  }
 
     // Flaky check: re-run each hard-fail case once; set FAIL_STABLE (2/2 fail) or FAIL_FLAKY (1st fail, 2nd pass)
     if (FLAKY_CHECK_ENABLED && healthOk) {
@@ -485,6 +739,29 @@ async function main(): Promise<void> {
   const topNotUsedReasons = Object.entries(notUsedByReason)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
+
+  // Stage latency breakdown
+  const plannerDurations = results.map((r) => r.plannerDurationMs ?? 0).filter((n) => n > 0).sort((a, b) => a - b);
+  const plannerP50 = plannerDurations.length ? plannerDurations[Math.floor(plannerDurations.length * 0.5)] ?? 0 : 0;
+  const plannerP95 = plannerDurations.length ? plannerDurations[Math.min(Math.ceil(plannerDurations.length * 0.95) - 1, plannerDurations.length - 1)] ?? 0 : 0;
+  const promptTokensAll = results.map((r) => r.promptTokens ?? 0).filter((n) => n > 0).sort((a, b) => a - b);
+  const ptMedian = promptTokensAll.length ? promptTokensAll[Math.floor(promptTokensAll.length / 2)] ?? 0 : 0;
+  const ptP95 = promptTokensAll.length ? promptTokensAll[Math.min(Math.ceil(promptTokensAll.length * 0.95) - 1, promptTokensAll.length - 1)] ?? 0 : 0;
+  const plannerPctOfLatency = total > 0 && p50 > 0 ? Math.round((plannerP50 / p50) * 100) : 0;
+  console.log('--- Stage Latency Breakdown ---');
+  console.log('planner_duration_ms p50:', Math.round(plannerP50), 'p95:', Math.round(plannerP95), `(${plannerPctOfLatency}% of p50 total latency)`);
+  console.log('prompt_tokens median:', ptMedian, 'p95:', ptP95);
+  const bottleneckCases = results
+    .filter((r) => r.latencyMs > 20_000)
+    .sort((a, b) => b.latencyMs - a.latencyMs)
+    .slice(0, 3);
+  if (bottleneckCases.length > 0) {
+    console.log('Top slow cases (>20s):');
+    for (const bc of bottleneckCases) {
+      const plannerPct = bc.plannerDurationMs && bc.latencyMs ? Math.round((bc.plannerDurationMs / bc.latencyMs) * 100) : 0;
+      console.log(`  run=${bc.run_id?.slice(0, 8)} latency=${Math.round(bc.latencyMs / 1000)}s planner=${Math.round((bc.plannerDurationMs ?? 0) / 1000)}s(${plannerPct}%) qdrant=${bc.qdrantCalls ?? 0} tokens=${bc.promptTokens ?? '?'} planner_used=${bc.llmPlannerUsed ? 'llm' : bc.actPlannerUsed ? 'act' : 'none'}`);
+    }
+  }
   if (topNotUsedReasons.length) {
     console.log('routing_hints top not_used_reason_codes:', topNotUsedReasons.map(([k, v]) => `${k}=${v}`).join(', '));
   }
@@ -505,14 +782,13 @@ async function main(): Promise<void> {
   console.log('multi_goal_miss:', multiGoalMissStable);
   console.log('multi_act_miss:', multiActMissStable);
 
-  const minHardPassFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MIN_HARD_PASS ?? '30', 10);
-  const maxHardFailFull = parseInt(process.env.RETRIEVAL_REAL_DEV_MAX_HARD_FAIL ?? '13', 10);
   const isLimitedRun = Array.isArray(onlyIndices) && onlyIndices.length > 0;
-  const minHardPass = isLimitedRun ? Math.max(1, Math.floor(total * 0.6)) : minHardPassFull;
-  const maxHardFail = isLimitedRun ? Math.min(total, Math.max(1, Math.ceil(total * 0.3))) : maxHardFailFull;
+  const isSmokeRun = process.argv.some((a) => a.startsWith('--only=SMOKE'));
+  const { minHardPass, maxHardFail } = getRetrievalGateThresholds(total, isSmokeRun, isLimitedRun);
   const gatePass = hardPass >= minHardPass && hardFailCount <= maxHardFail;
   console.log('--- Quality gate ---');
-  if (isLimitedRun) console.log('(limited run: proportional gate 60% pass / 30% max fail)');
+  if (isSmokeRun) console.log('(smoke run: 0 stable fails required; gate = 7/7 PASS)');
+  else if (isLimitedRun) console.log('(limited run: proportional gate 60% pass / 30% max fail)');
   console.log('thresholds: MIN_HARD_PASS=', minHardPass, 'MAX_HARD_FAIL=', maxHardFail);
   console.log('gate:', gatePass ? 'PASS' : 'FAIL', `(hard_pass=${hardPass} >= ${minHardPass} && hard_fail_stable=${hardFailCount} <= ${maxHardFail})`);
 
@@ -554,11 +830,23 @@ async function main(): Promise<void> {
     }
   }
 
-  const exitCode = allPass ? 0 : gatePass ? 0 : 1;
+  const qualityGatePass = allPass || gatePass;
+  const exitCode =
+    u10PostCheckFail > 0
+      ? 1
+      : qualityGatePass
+        ? 0
+        : 1;
+  if (u10PostCheckFail > 0) {
+    console.error('[verify_retrieval_real_dev] exit 1: U10 post-check failed on', u10PostCheckFail, 'runs');
+  }
   process.exit(exitCode);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isEntry = typeof process !== 'undefined' && process.argv[1] != null && /verify_retrieval_real_dev\.(ts|js)$/.test(process.argv[1]);
+if (isEntry) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

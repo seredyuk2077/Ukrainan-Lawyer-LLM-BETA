@@ -30,22 +30,22 @@ pnpm brain:migrate-r2-runs               # копіювання
 > - [LEXERY_LEGAL_AI_AGENT_ARCHITECTURE.md](../../docs/architecture/LEXERY_LEGAL_AI_AGENT_ARCHITECTURE.md) — повний опис архітектури
 > - [mermaid/](../../docs/architecture/mermaid/) — детальні діаграми та Block Cards
 
-## Структура папок (онлайн-пайплайн)
+## Структура папок (поточний runtime tree)
 
 | Папка | Блоки | Призначення |
 |-------|-------|-------------|
-| **gateway/** | U1 | Вхідні двері: прийом запиту, auth, ліміти, RunRecord |
-| **classify/** | U2, U2a–U2d | Розуміння запиту: IntentClassifier, LegalDomainTagger, Entity Extractor, Ambiguity Detector |
-| **plan/** | U3, U3a | Планування пошуку: SearchPlan, Plan Builder |
-| **retrieval/** | U4, U5, U6 | CacheRAG, Gate, Expand: пошук в LLDBI + пам'яті, Gate, Synonymizer |
-| **doclist/** | U7 | DocList API: запит → nreg[] (Act Catalog Resolver) |
-| **import/** | U8, U8a, U8b | Import: ActIngestionOrchestrator, ActRelevanceValidator → T6 LLDBI |
-| **assemble/** | U9 | Збір промпту: system + user + context (EvidencePack, Memory) |
-| **write/** | U10 | Генерація відповіді LLM (gpt-4o, evidence-only) |
-| **verify/** | U11, U11a–U11e | CoverageCritic, CrossEncoderReranker, QueryRefiner, StopPolicy, WebNavigator |
-| **deliver/** | U12 | SSE stream, messages, outbox (index_memory, summarize_case) |
-| **memory/** | MM | Memory Manager: Search, Load, Outbox (mm_memory_items, mm_summaries, Qdrant) |
-| **lib/** | — | Спільні утиліти, типи, константи |
+| **gateway/** | U1 | HTTP intake, attachments, queue, storage, observability |
+| **classify/** | U2, U2a–U2d | Intent/domain/entity/ambiguity routing |
+| **plan/** | U3, U3a | SearchPlan і builder кроків |
+| **retrieval/** | U4, U6 | LLDBI/MM retrieval, routing hints, trace shaping, fragment loading |
+| **gate/** | U5 | Рішення `expand` / `no expand` перед U9 |
+| **assemble/** | U9 | Збір prompt context: law + docs + memory + history |
+| **write/** | U10–U12 | Legal agent, composer, verify consumer, deliver consumer |
+| **mm/** | MM | Memory runtime, outbox worker, MM Docs (`mm/doc/`) |
+| **tools/** | verify/dev | Unit tests, smoke/live verifiers, forensics, dev chat, infra checks |
+| **lib/** | — | Конфіг, pipeline contracts, shared utils |
+
+U7/U8 зараз лишаються інтеграційними стадіями без окремих top-level папок: їхні точки входу проходять через `plan/`, `gate/`, `retrieval/` і суміжні consumer paths.
 
 ## Потік запиту
 

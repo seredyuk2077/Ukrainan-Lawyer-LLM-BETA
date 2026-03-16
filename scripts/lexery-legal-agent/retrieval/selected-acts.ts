@@ -11,7 +11,7 @@ export const CHUNKS_EVIDENCE_SCORE_THRESHOLD = 0.55;
 export const SELECTED_ACTS_MIN = 2;
 export const SELECTED_ACTS_MAX_OUT = 8;
 
-/** Act kind by document type (title/document_type/category; best-effort, no "word → act" map). */
+/** Act kind by structural metadata only (document_type/category). */
 export type ActKind =
   | 'PRIMARY_LAW'
   | 'SECONDARY_ORDER'
@@ -22,48 +22,65 @@ export type ActKind =
   | 'UNKNOWN';
 
 /**
- * Lightweight classifier: document type from title + optional document_type/category.
+ * Lightweight classifier: document type from structured metadata only.
  * Best-effort: unknown document_type/category never break; fallback UNKNOWN.
  */
+function normalizeMetaKey(value: string | null | undefined): string {
+  return (value ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const ACT_KIND_BY_DOCUMENT_TYPE = new Map<string, ActKind>([
+  ['закон', 'PRIMARY_LAW'],
+  ['кодекс', 'PRIMARY_LAW'],
+  ['конституція', 'PRIMARY_LAW'],
+
+  ['наказ', 'SECONDARY_ORDER'],
+  ['постанова кму', 'SECONDARY_ORDER'],
+  ['розпорядження кму', 'SECONDARY_ORDER'],
+  ['постанова вру', 'SECONDARY_ORDER'],
+  ['указ президента', 'SECONDARY_ORDER'],
+  ['указ президента україни', 'SECONDARY_ORDER'],
+  ['розпорядження президента україни', 'SECONDARY_ORDER'],
+  ['постанова нбу', 'SECONDARY_ORDER'],
+  ['повідомлення нбу', 'SECONDARY_ORDER'],
+  ['постанова цвк', 'SECONDARY_ORDER'],
+  ['постанова пленуму верховного суду', 'SECONDARY_ORDER'],
+  ['рішення рнбо', 'SECONDARY_ORDER'],
+  ['постанова нкрекп', 'SECONDARY_ORDER'],
+  ['розпорядження голови вру', 'SECONDARY_ORDER'],
+  ['положення', 'SECONDARY_ORDER'],
+  ["роз'яснення", 'SECONDARY_ORDER'],
+
+  ['рішення ксу', 'KSU_DECISION'],
+  ['рішення конституційного суду україни', 'KSU_DECISION'],
+  ['ухвала ксу', 'KSU_DECISION'],
+
+  ['конвенція', 'INTERNATIONAL_TREATY'],
+  ['міжнародний договір', 'INTERNATIONAL_TREATY'],
+  ['угода', 'INTERNATIONAL_TREATY'],
+  ['протокол', 'INTERNATIONAL_TREATY'],
+  ['декларація', 'INTERNATIONAL_TREATY'],
+  ['регламент європейського парламенту', 'INTERNATIONAL_TREATY'],
+  ['директива європейського парламенту', 'INTERNATIONAL_TREATY'],
+
+  ['окрема думка судді', 'CASELAW_OPINION'],
+  ['окрема думка судді ксу', 'CASELAW_OPINION'],
+
+  ['проєкт закону', 'BILL_DRAFT'],
+  ['проект закону', 'BILL_DRAFT'],
+]);
+
 export function classifyActKind(
-  title: string,
+  _title: string,
   document_type?: string | null,
   _category?: string | null
 ): ActKind {
-  const t = (title ?? '').normalize('NFC').toLowerCase();
-  const dt = (document_type ?? '').normalize('NFC').toLowerCase();
-
-  // Prefer document_type when present (data-driven from LLDBI)
-  // Title "Про проект Закону..." must be BILL_DRAFT even if document_type is "Закон"
-  if (/проєкт|проект/i.test(t)) return 'BILL_DRAFT';
-  if (dt) {
-    if (/проєкт|проект/i.test(dt)) return 'BILL_DRAFT';
-    if (/окрем[ауі]\s+думк/i.test(dt)) return 'CASELAW_OPINION';
-    if (/рішення конституційного суду|рішення ксу/i.test(dt)) return 'KSU_DECISION';
-    if (/конвенція|договір|угода/i.test(dt)) return 'INTERNATIONAL_TREATY';
-    if (/кодекс|закон|конституція/i.test(dt)) return 'PRIMARY_LAW';
-    if (
-      /постанова|розпорядження|наказ|інструкція|порядок|правила/i.test(dt)
-    ) {
-      return 'SECONDARY_ORDER';
-    }
-  }
-
-  // Fallback: title-based
-  if (
-    /кодекс|закон|конституц|процесуальн|кодекс україни про|податковий кодекс|кзпп|цк\s|ск\s|цік|кпк|цпк|ципк|кримінальний кодекс|цивільний кодекс|кку|пкку/i.test(t)
-  ) {
-    return 'PRIMARY_LAW';
-  }
-  if (
-    /постанова|порядок|розпоряджен|наказ|про звільнення|про призначення|про затвердження порядку/i.test(t)
-  ) {
-    return 'SECONDARY_ORDER';
-  }
-  if (/окрема думка|рішення ксу/i.test(t)) return 'CASELAW_OPINION';
-  if (/конвенція|договір|угода/i.test(t)) return 'INTERNATIONAL_TREATY';
-  if (/проєкт|проект/i.test(t)) return 'BILL_DRAFT';
-  return 'UNKNOWN';
+  const dt = normalizeMetaKey(document_type);
+  return ACT_KIND_BY_DOCUMENT_TYPE.get(dt) ?? 'UNKNOWN';
 }
 
 export type ActCandidateInput = {
@@ -211,7 +228,7 @@ function documentTypeHintMatches(docType: string | undefined | null, hints: stri
 
 /** True if U2 hints explicitly mention project/draft (allow BILL_DRAFT from taxonomy only then). */
 function hintsAllowDraft(hints: string[]): boolean {
-  return hints.some((h) => /проєкт|проект/i.test((h ?? '').normalize('NFC')));
+  return hints.some((h) => classifyActKind('', h, null) === 'BILL_DRAFT');
 }
 
 /** Min distinct act_kinds in chunks evidence to enforce diversity in selected_acts. */
@@ -226,8 +243,15 @@ const DIVERSITY_EVIDENCE_COUNT_MIN = 2;
 const FAMILY_GUARD_CONFIDENCE_THRESHOLD = 0.55;
 const FAMILY_CONFLICT_TOP2_MIN = 0.45;
 
-/** Kinds that need evidence or doc_type hint when adding from taxonomy (noise control). */
-const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION', 'UNKNOWN'];
+/**
+ * Kinds that need evidence or doc_type hint when adding from taxonomy (noise control).
+ * UNKNOWN is intentionally excluded: after removing title-word guessing from classifyActKind,
+ * UNKNOWN means "document_type absent in metadata" not "this is noise". Acts from the taxonomy
+ * DB are structurally vetted; they may legitimately lack document_type metadata.
+ * BILL_DRAFT and CASELAW_OPINION are still controlled because they are structurally distinct
+ * content types that require explicit evidence to be included.
+ */
+const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION'];
 
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
   const {

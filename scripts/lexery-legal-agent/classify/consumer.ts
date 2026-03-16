@@ -5,6 +5,7 @@
  */
 import type { RunEvent } from '../gateway/types.js';
 import { RunRepository } from '../gateway/storage.js';
+import { withTransientGatewayIoRetry } from '../gateway/retry.js';
 import { getTaskQueue } from '../gateway/handler.js';
 import { logger } from '../lib/logger.js';
 import { config } from '../lib/config.js';
@@ -50,9 +51,10 @@ import { classifyIntent } from './intent-classifier.js';
 import { tagLegalDomain } from './legal-domain-tagger.js';
 import { extractEntities } from './entity-extractor.js';
 import { detectAmbiguity } from './ambiguity-detector.js';
-import { classifyWithLLM } from './llm-classifier.js';
+import { classifyWithLLM, repairContextMode } from './llm-classifier.js';
 import { normalizeInput } from './input-normalizer.js';
 import { classifyDomainWithAi } from './ai-domain-classifier.js';
+import { shouldUseDocsOnlyFastPath } from '../lib/queryScopeHints.js';
 import type {
   QueryProfile,
   ExtractedEntity,
@@ -94,6 +96,48 @@ function attachLldbiVocabularyMeta(queryProfile: QueryProfile, vocabulary: Lldbi
 const runRepo = new RunRepository();
 const llmSemaphore = new Semaphore(config.u2LlmConcurrency);
 
+export async function loadRunForU2(runId: string) {
+  return withTransientGatewayIoRetry(() => runRepo.findByRunId(runId));
+}
+
+export function isTransientU2ClassifierError(error: unknown): boolean {
+  if (error instanceof OpenRouterError) {
+    if (error.code === 'TIMEOUT' || error.code === 'NETWORK') return true;
+    if (error.statusCode != null && [429, 502, 503, 504].includes(error.statusCode)) return true;
+  }
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|EAI_AGAIN|429|502|503|504|network/i.test(
+    message
+  );
+}
+
+export async function withTransientU2ClassifierRetry<T>(
+  fn: () => Promise<T>,
+  attempts = 2,
+  baseDelayMs = 250
+): Promise<T> {
+  const maxAttempts = Math.max(1, attempts);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientU2ClassifierError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      logger.warn('U2 transient classifier error; retrying', {
+        module: 'classify/consumer',
+        attempt,
+        attempts: maxAttempts,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 /** Compute rules confidence 0..1 from intent/domain/ambiguity for smart gating */
 function computeRulesConfidence(
   intent: string,
@@ -109,28 +153,12 @@ function computeRulesConfidence(
   return { intent: intentScore, domain: domainScore, ambiguity: ambiguityScore, overall };
 }
 
-/** Чи є в запиті явний структурний сигнал галузі (назва/абревіатура акту, явне посилання). Кирилиця: не використовувати \b (не працює для не-ASCII). */
-function hasExplicitDomainCue(query: string): boolean {
-  const q = (query ?? '').trim();
-  if (!q || q.length < 3) return false;
-  const cues = [
-    /(?:^|[\s\W])ККУ(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])КК\s+України(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])ПКУ(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])ЦКУ(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])КЗпП(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])КАС(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])КПК(?:[\s\W]|$)/i,
-    /кримінальний\s+кодекс/i,
-    /податковий\s+кодекс/i,
-    /цивільний\s+кодекс/i,
-    /ст\.\s*\d+\s*(?:ККУ|КК\s+України)/i,
-    /закон\s+про\s+(освіту|охорону\s+здоров'я)/i,
-    /(?:^|[\s\W])МОЗ(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])ТОВ(?:[\s\W]|$)/i,
-    /(?:^|[\s\W])АТ\s+[«""\w]/i,
-  ];
-  return cues.some((re) => re.test(q));
+/** Structural/entity-based only: article_ref, act_abbrev, law_title. No topic wordlists. */
+function hasStructuralDomainCue(entities: ExtractedEntity[]): boolean {
+  if (!Array.isArray(entities) || entities.length === 0) return false;
+  return entities.some(
+    (e) => e.type === 'article_ref' || e.type === 'act_abbrev' || e.type === 'law_title'
+  );
 }
 
 /** Decide gating reason when we call LLM (for meta.llm_used_reason) */
@@ -148,7 +176,7 @@ function gatingReasonForLlm(
 }
 
 /**
- * Merge ambiguity: rules "hard" (AMBIG_TERMS, TOO_SHORT) override LLM so ambiguity is deterministic.
+ * Merge ambiguity: only clearly underspecified short-query rule ambiguity hard-overrides LLM.
  */
 function mergeAmbiguity(
   rulesAmbiguity: AmbiguityResult,
@@ -160,7 +188,7 @@ function mergeAmbiguity(
 } {
   const isHard =
     rulesAmbiguity.strength === 'hard' ||
-    (rulesAmbiguity.reason_codes?.some((c) => c === 'AMBIG_TERM_MATCH' || c === 'TOO_SHORT_QUERY') ?? false);
+    (rulesAmbiguity.reason_codes?.some((c) => c === 'TOO_SHORT_QUERY') ?? false);
   if (rulesAmbiguity.is_ambiguous && isHard) {
     const reasonCodes = (rulesAmbiguity.reason_codes || []).join(',');
     const out = {
@@ -349,7 +377,7 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
   logger.info('U2 started', ctx);
 
   try {
-    const run = await runRepo.findByRunId(run_id);
+    const run = await loadRunForU2(run_id);
     if (!run) {
       logger.error('Run not found', { ...ctx, error: 'run_not_found' });
       incrementU2Failed();
@@ -427,8 +455,8 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     const rulesMs = Date.now() - t2a;
     const rulesConfidence = computeRulesConfidence(intent, domain, ambiguity);
 
-    // Домен за типом питання визначає LLM, якщо в запиті немає явного структурного сигналу (ККУ, ПКУ, ст. N ККУ тощо). Без евристик за довжиною/словами.
-    const explicitCue = hasExplicitDomainCue(effectiveQuery);
+    // Gating: structural cue from entities only (article_ref, act_abbrev, law_title). No topic wordlists.
+    const explicitCue = hasStructuralDomainCue(preEntities);
     const skipLlmByGating =
       !useRulesOnlyConfig &&
       config.u2GatingEnabled &&
@@ -437,12 +465,17 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
       rulesConfidence.overall >= config.u2GatingConfidenceThreshold &&
       !normalizer.isComplexInput &&
       !ambiguity.is_ambiguous;
+    const docsOnlyFastPath =
+      !useRulesOnlyConfig &&
+      config.u2GatingEnabled &&
+      shouldUseDocsOnlyFastPath(effectiveQuery);
 
-    const useRulesOnly = useRulesOnlyConfig || skipLlmByGating;
+    const useRulesOnly = useRulesOnlyConfig || skipLlmByGating || docsOnlyFastPath;
 
     let gatingDecision: GatingDecision;
     if (circuitOpen && config.openRouterApiKey) gatingDecision = 'circuit_open';
     else if (config.useRuleBasedClassifier) gatingDecision = 'rules_only_config';
+    else if (docsOnlyFastPath) gatingDecision = 'rules_docs_only_scope';
     else if (skipLlmByGating) gatingDecision = 'rules_high_confidence';
     else gatingDecision = gatingReasonForLlm(normalizer, ambiguity);
 
@@ -450,9 +483,9 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     let routing_flags: RoutingFlags | undefined;
 
     if (useRulesOnly) {
-      if (skipLlmByGating) {
+      if (skipLlmByGating || docsOnlyFastPath) {
         incrementU2GatingLlmSkipped();
-        incrementU2GatingReason('rules_high_confidence');
+        incrementU2GatingReason(docsOnlyFastPath ? 'rules_docs_only_scope' : 'rules_high_confidence');
       }
       logger.info('U2 rules path', { ...ctx, intent, domain, duration_ms: rulesMs, gating_decision: gatingDecision });
       incrementU2Intent(intent);
@@ -494,6 +527,32 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         queryProfile.meta.warnings = [...(queryProfile.meta.warnings ?? []), 'circuit_open'];
       }
       attachLldbiVocabularyMeta(queryProfile, vocabulary);
+      // Rules path: try to repair context_mode when not set and LLM is available
+      if (
+        queryProfile.routing_flags?.context_mode === undefined &&
+        config.openRouterApiKey &&
+        !circuitOpen
+      ) {
+        try {
+          const repair = await repairContextMode(
+            {
+              apiKey: config.openRouterApiKey,
+              modelId: config.clfModelId,
+              fallbackModelId: config.clfFallbackModelId || undefined,
+              timeoutSec: config.clfTimeoutSec,
+            },
+            effectiveQuery,
+            { pre_entities: preEntities, has_direct_citation }
+          );
+          if ('context_mode' in repair) {
+            queryProfile.routing_flags = { ...queryProfile.routing_flags, context_mode: repair.context_mode };
+          } else if (queryProfile.meta) {
+            queryProfile.meta.warnings = [...(queryProfile.meta.warnings ?? []), repair.reason];
+          }
+        } catch {
+          // repair is best-effort; unresolved fallback remains explicit in U3
+        }
+      }
     } else {
       incrementU2GatingLlmCalled();
       incrementU2GatingReason(gatingDecision);
@@ -501,18 +560,20 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         const llmResult = await llmSemaphore.run(async () => {
           incrementU2LlmInflight();
           try {
-            return await classifyWithLLM(
-              {
-                apiKey: config.openRouterApiKey,
-                modelId: config.clfModelId,
-                fallbackModelId: config.clfFallbackModelId || undefined,
-                timeoutSec: config.clfTimeoutSec,
-              },
-              {
-                query: effectiveQuery,
-                pre_entities: preEntities,
-                language: locale,
-              }
+            return await withTransientU2ClassifierRetry(() =>
+              classifyWithLLM(
+                {
+                  apiKey: config.openRouterApiKey,
+                  modelId: config.clfModelId,
+                  fallbackModelId: config.clfFallbackModelId || undefined,
+                  timeoutSec: config.clfTimeoutSec,
+                },
+                {
+                  query: effectiveQuery,
+                  pre_entities: preEntities,
+                  language: locale,
+                }
+              )
             );
           } finally {
             decrementU2LlmInflight();
@@ -525,6 +586,25 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         const mergedEntities = mergeEntities(preEntities, llmResult.entities);
         const now = new Date().toISOString();
         routing_flags = { ...routingOverrides, ...llmResult.routing_flags, ambiguous: finalAmbiguity.is_ambiguous };
+        if (routing_flags.context_mode === undefined) {
+          const repair = await withTransientU2ClassifierRetry(() =>
+            repairContextMode(
+              {
+                apiKey: config.openRouterApiKey,
+                modelId: config.clfModelId,
+                fallbackModelId: config.clfFallbackModelId || undefined,
+                timeoutSec: config.clfTimeoutSec,
+              },
+              effectiveQuery,
+              { pre_entities: preEntities, has_direct_citation: mergedEntities.some((e) => e.type === 'article_ref' || e.type === 'act_abbrev') }
+            )
+          );
+          if ('context_mode' in repair) {
+            routing_flags = { ...routing_flags, context_mode: repair.context_mode };
+          } else {
+            llmResult.meta.warnings = [...(llmResult.meta.warnings || []), repair.reason];
+          }
+        }
         const llmWarnings = [...(llmResult.meta.warnings || [])];
         if (overrideWarning) llmWarnings.push(overrideWarning);
         queryProfile = {
@@ -606,7 +686,17 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
           domain as QueryProfile['domain'],
           preEntities
         );
-        const warnings = ['llm_timeout_fallback_rules', warnMsg.slice(0, 100)];
+        const isTimeout =
+          llmErr instanceof OpenRouterError && llmErr.code === 'TIMEOUT';
+        const isInvalidJson =
+          /Invalid JSON|parse|validation/i.test(warnMsg) ||
+          (llmErr instanceof OpenRouterError && llmErr.code !== 'TIMEOUT' && llmErr.code !== 'HTTP_ERROR' && llmErr.code !== 'NETWORK');
+        const warningCode = isTimeout
+          ? 'llm_timeout_fallback_rules'
+          : isInvalidJson
+            ? 'llm_invalid_json_fallback_rules'
+            : 'llm_fallback_rules';
+        const warnings = [warningCode, warnMsg.slice(0, 100)];
         const vocabulary = await getLldbiVocabulary();
         const domainHintForU4 = legalDomainToTaxonomyKey(domain) ?? undefined;
         const lldbiDerived = deriveLldbiHintsFromVocabulary({
@@ -638,6 +728,34 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
           resolvedDomainHintForU4
         );
         attachLldbiVocabularyMeta(queryProfile, vocabulary);
+        // Degraded/timeout path: try to repair context_mode when not set and LLM is available
+        if (
+          queryProfile.routing_flags?.context_mode === undefined &&
+          config.openRouterApiKey &&
+          !isCircuitOpen()
+        ) {
+          try {
+            const repair = await withTransientU2ClassifierRetry(() =>
+              repairContextMode(
+                {
+                  apiKey: config.openRouterApiKey,
+                  modelId: config.clfModelId,
+                  fallbackModelId: config.clfFallbackModelId || undefined,
+                  timeoutSec: Math.min(config.clfTimeoutSec, 10),
+                },
+                effectiveQuery,
+                { pre_entities: preEntities, has_direct_citation }
+              )
+            );
+            if ('context_mode' in repair) {
+              queryProfile.routing_flags = { ...queryProfile.routing_flags, context_mode: repair.context_mode };
+            } else if (queryProfile.meta) {
+              queryProfile.meta.warnings = [...(queryProfile.meta.warnings ?? []), repair.reason];
+            }
+          } catch {
+            // repair is best-effort; unresolved fallback remains explicit in U3
+          }
+        }
         if (ambiguity.is_ambiguous) incrementU2Ambiguous();
         incrementU2Intent('question');
         incrementU2Domain('general');
@@ -657,22 +775,24 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         const hasVocabulary =
           (vocabulary.categories.length > 0 || vocabulary.documentTypes.length > 0);
         if (hasVocabulary) incrementU2AiRoutingCalled();
-        const aiResult = await classifyDomainWithAi(
-          {
-            openRouterApiKey: config.openRouterApiKey,
-            u2AiDomainModel: config.u2AiDomainModel,
-            u2AiDomainMaxTokens: config.u2AiDomainMaxTokens,
-            u2AiDomainTimeoutMs: config.u2AiDomainTimeoutMs,
-            u2AiDomainMaxCallsPerRun: config.u2AiDomainMaxCallsPerRun,
-            u2AiDomainMinConfidence: config.u2AiDomainMinConfidence,
-          },
-          {
-            query: effectiveQuery,
-            heuristic_domain: finalDomain,
-            heuristic_confidence: rulesConfidence.domain,
-            run_id,
-            vocabulary: hasVocabulary ? vocabulary : undefined,
-          }
+        const aiResult = await withTransientU2ClassifierRetry(() =>
+          classifyDomainWithAi(
+            {
+              openRouterApiKey: config.openRouterApiKey,
+              u2AiDomainModel: config.u2AiDomainModel,
+              u2AiDomainMaxTokens: config.u2AiDomainMaxTokens,
+              u2AiDomainTimeoutMs: config.u2AiDomainTimeoutMs,
+              u2AiDomainMaxCallsPerRun: config.u2AiDomainMaxCallsPerRun,
+              u2AiDomainMinConfidence: config.u2AiDomainMinConfidence,
+            },
+            {
+              query: effectiveQuery,
+              heuristic_domain: finalDomain,
+              heuristic_confidence: rulesConfidence.domain,
+              run_id,
+              vocabulary: hasVocabulary ? vocabulary : undefined,
+            }
+          )
         );
         if (queryProfile.meta) {
           queryProfile.meta.u2_domain = {
@@ -757,10 +877,29 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
       }
     }
 
+    let history: Array<{ role: string; content: string }> | undefined;
+    if (run.conversation_id) {
+      history = await withTransientGatewayIoRetry(() =>
+        runRepo.listConversationMessages(run.conversation_id!, 20)
+      );
+    }
+    const projectId =
+      ((run.snapshot as { project_context?: { project_id?: string | null } } | undefined)?.project_context
+        ?.project_id as string | null | undefined) ?? undefined;
+
     const persistOnce = async (): Promise<void> => {
       await runContextSet(
         run_id,
-        { query_profile: queryProfile, routing_flags: queryProfile.routing_flags ?? {} },
+        {
+          query_profile: queryProfile,
+          routing_flags: queryProfile.routing_flags ?? {},
+          user_input: effectiveQuery,
+          tenant_id: tenant_id ?? undefined,
+          user_id: user_id ?? undefined,
+          conversation_id: (run.conversation_id as string | null) ?? undefined,
+          project_id: projectId,
+          history,
+        },
         3600
       );
       await runRepo.updateQueryProfile(run_id, queryProfile as unknown as object, 'Profiling');
@@ -786,12 +925,14 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
 
     const now = new Date().toISOString();
     const taskQueue = getTaskQueue();
-    await taskQueue.enqueue({
-      run_id,
-      step: 'U3',
-      created_at: now,
-      trace_id,
-    });
+    await withTransientGatewayIoRetry(() =>
+      taskQueue.enqueue({
+        run_id,
+        step: 'U3',
+        created_at: now,
+        trace_id,
+      })
+    );
 
     logger.info('U2 finished', {
       ...ctx,

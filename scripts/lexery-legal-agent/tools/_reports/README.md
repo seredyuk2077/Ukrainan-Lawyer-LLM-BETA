@@ -1,6 +1,6 @@
 # Tools — _reports
 
-Директорія для звітів і артефактів прогонів.
+Директорія для курованих markdown-звітів і артефактів прогонів.
 
 ## Що тут зберігається
 
@@ -9,14 +9,15 @@
 | `u4_final2_go_report_2026-02-22.md` | Фінальний GO/NO-GO звіт U4 (22 лют 2026) — поточна базова лінія |
 | `u4_final_go_report_2026-02-21.md` | Фінальний GO/NO-GO звіт U4 (21 лют 2026) — попередня версія |
 | `final_go_audit_2026-02-21.md` | MCP chunk audit 15 runs (21 лют 2026) |
+| `u4/` | Stage-specific archive для dated U4 markdown reports |
 
 ## Що НЕ зберігається в git
 
 - `*.json` — JSON дампи runs/результатів (об'ємні, auto-generated)
 - `*.log`, `*.txt` — лог-файли stress/verify прогонів
-- Dated `.md` файли (context_restore_*, mcp_audit_*, task9_*, stress_e2e_*, rag_assessment_*, etc.)
+- Великі auto-generated `.md`/`.txt` прогінні дампи, які не є curated reports
 
-Ці файли генеруються тулами з `tools/u4/`. За потреби зберегти для прод-аудиту — використовуй **R2 bucket `lexery-legal-agent`**.
+Markdown reports, які варто тримати в git, можна або класти в корінь `_reports/`, або розносити по stage subfolders на кшталт `_reports/u4/`. Великі дампи для прод-аудиту краще зберігати в **R2 bucket `lexery-legal-agent`**.
 
 ## Як згенерувати звіт
 

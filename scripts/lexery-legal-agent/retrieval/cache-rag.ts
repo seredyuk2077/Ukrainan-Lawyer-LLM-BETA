@@ -11,7 +11,7 @@ import { embedQuery } from './embedding.js';
 import { qdrantSearch, getQdrantCollections } from './qdrant-client.js';
 import { config } from '../lib/config.js';
 import { shapeQueryForRetrieval } from './query-shaping.js';
-import { heuristicGoalSplit, tryCategoryClusterSplitV2 } from './goal-splitter.js';
+import { heuristicGoalSplit, tryCategoryClusterSplitV2, hasMultiClauseStructure } from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
 import {
   selectActPlannerTier,
@@ -59,6 +59,7 @@ import {
   incrementU4DomainBootstrapUsed,
   incrementU4DomainBootstrapConflict,
 } from '../gateway/observability.js';
+import { extractArticleRefsStructured } from '../lib/articleRefs.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -218,11 +219,10 @@ async function domainBootstrapFromActHits(
 
 const QUERY_MAX_CHARS = 12000;
 /** Hybrid re-score weights (no extra LLM). Vector remains primary. */
-const W_VEC = 0.6;
+const W_VEC = 0.65;
 const W_ALIAS = 0.15;
 const W_ARTICLE = 0.15;
 const W_CATEGORY = 0.05;
-const W_TITLE = 0.05;
 const MIN_HITS_FOR_TWO_STAGE = 3;
 const GOOD_SCORE_THRESHOLD = 0.4;
 const TWO_STAGE_ACTS_TOP = 5;
@@ -296,75 +296,39 @@ const ANTI_FAMILY_PENALTY = 0.05;
  */
 const LLDBI_SOFT_PRIOR_POLICY_VERSION = 1;
 
-/** family_id -> regex to match act title (Ukrainian). Order: more specific first for actTitleToFamily. */
-const FAMILY_TITLE_SIGNALS: Record<string, RegExp> = {
-  administrative_offenses: /купап|адмін.*правопоруш|кодекс.*адмін/i,
-  criminal_procedure: /кпк|кримінальн.*процес|кримінально.*процесуальн/i,
-  civil_procedure: /ципк|цпк|цивільн.*процес/i,
-  criminal: /кримін|кку|злочин|кримінальний\s+кодекс/i,
-  civil: /цивіль|цк\s*у|цік|цивільний\s+кодекс/i,
-  administrative: /адмін|адміністративн/i,
-  tax_customs: /податк|пкку|податковий\s+кодекс/i,
-  labor_social: /труд|кзпп|трудовий\s+кодекс/i,
-  constitutional: /конституц/i,
-  anti_corruption: /корупц|протидія.*корупц/i,
-  finance_banking: /банк|фінмон|санкц/i,
-};
-
-function actTitleToFamily(title: string): string | null {
-  if (!title?.trim()) return null;
-  for (const [family, re] of Object.entries(FAMILY_TITLE_SIGNALS)) {
-    if (re.test(title)) return family;
-  }
-  return null;
+/**
+ * Normalize DB category string to a family key comparable to planner family hints.
+ * Data-driven: uses stored act metadata category, no hardcoded title regexes.
+ */
+function normalizedCategoryKey(category: string | null | undefined): string | null {
+  if (!category) return null;
+  return category.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim() || null;
 }
-
-function actTitleMatchesFamily(title: string, familyId: string): boolean {
-  if (familyId === 'general') return true;
-  const re = FAMILY_TITLE_SIGNALS[familyId];
-  if (!re) return title.toLowerCase().includes(familyId.toLowerCase());
-  return re.test(title);
-}
-
-/** Query-based family signals for fallback prior / anti-signals (soft only). */
-function queryFamilySignals(query: string): { criminal?: boolean; administrative?: boolean; tax?: boolean } {
-  const q = query.normalize('NFC').toLowerCase();
-  const criminal =
-    /\b(умисн|злочин|кк\b|кримін|кримінальн|нетверез|сп'?янін|керуван.*сп'?янін|відповідальність.*кримін)/i.test(q);
-  const administrative =
-    /\b(штраф|купап|адмін|адміністративн|правопорушення|провадження.*адмін)/i.test(q);
-  const tax = /\b(податк|пкку|податковий|податков)\b/i.test(q);
-  return { criminal: criminal || false, administrative: administrative || false, tax: tax || false };
-}
-
-/** Lexical anchors per family for ACTS-2 query (rule-based when planner has no query_variants). */
-const ACTS_2_LEXICAL_ANCHORS: Record<string, string> = {
-  criminal: 'Кримінальний кодекс України',
-  criminal_procedure: 'Кримінальний процесуальний кодекс України',
-  administrative_offenses: 'Кодекс України про адміністративні правопорушення',
-  administrative: 'Кодекс України про адміністративні правопорушення',
-  civil: 'Цивільний кодекс України',
-  civil_procedure: 'Цивільний процесуальний кодекс України',
-  tax_customs: 'Податковий кодекс України',
-  labor_social: 'Кодекс законів про працю України',
-  constitutional: 'Конституція України',
-  anti_corruption: 'протидія корупції',
-  finance_banking: 'банківське регулювання',
-};
 
 /**
- * Build ACTS-2 search query: planner query_variants[0] or rule-based family lexical anchor.
+ * Match stored act DB category against a planner family_key without title-word regexes.
+ * Checks normalized equality or containment in either direction.
+ */
+function actCategoryMatchesFamily(category: string | null | undefined, familyId: string): boolean {
+  if (!category) return false;
+  if (familyId === 'general') return true;
+  const normCat = normalizedCategoryKey(category);
+  if (!normCat) return false;
+  const normFam = familyId.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim();
+  return normCat === normFam || normCat.includes(normFam) || normFam.includes(normCat);
+}
+
+/**
+ * Build ACTS-2 search query: planner query_variants[0] or generic fallback. No query-word lexical anchors.
  */
 function buildActs2Query(
-  familyHints: Array<{ family: string; confidence: number }>,
+  _familyHints: Array<{ family: string; confidence: number }>,
   _query: string,
   actPlannerOutput: { goals?: Array<{ query_variants?: string[] }> } | null
 ): string {
   const variant = actPlannerOutput?.goals?.[0]?.query_variants?.[0]?.trim();
   if (variant && variant.length > 0) return variant.slice(0, 300);
-  const firstFamily = familyHints.length > 0 ? familyHints[0].family : null;
-  const anchor = firstFamily ? ACTS_2_LEXICAL_ANCHORS[firstFamily] : null;
-  return anchor ?? 'кодекс закон Україна';
+  return 'кодекс закон Україна';
 }
 
 function effectiveQuery(query: string): string {
@@ -411,6 +375,8 @@ export interface RunCacheRagInput {
   tenant_id?: string | null;
   /** User-scoped memory: required for mm_memory_items fetch. */
   user_id?: string;
+  /** Conversation for conversation-scoped memory (primary path). */
+  conversation_id?: string | null;
 }
 
 export interface RunCacheRagResult {
@@ -418,6 +384,24 @@ export interface RunCacheRagResult {
   retrievalTrace: RetrievalTrace;
   /** Memory refs fetched from mm_memory_items for downstream (U9 Assemble). Empty if memory disabled/unavailable. */
   memoryRefs?: import('../assemble/types.js').MemoryRef[];
+  /** Memory summaries for RunContext.memory_summaries (from mm_summaries / fetchRecentMemory). */
+  memorySummaries?: Array<{ scope?: string; summary_text: string }>;
+  /** Compact memory trace for RunContext (degraded, counts, latency, sources, scope). */
+  memoryTrace?: {
+    degraded?: boolean;
+    recent_count?: number;
+    semantic_count?: number;
+    latency_ms?: number;
+    sources_used?: string[];
+    reason_codes?: string[];
+    scope_primary?: 'conversation' | 'user_global';
+    scope_fallback_used?: boolean;
+    conversation_recent_count?: number;
+    conversation_semantic_count?: number;
+    global_recent_count?: number;
+    global_semantic_count?: number;
+    fallback_conversation_ids?: string[];
+  };
 }
 
 function dedupeHits(hits: RawHit[]): RawHit[] {
@@ -468,23 +452,9 @@ function applyCoverageFusion(
   return [...covered, ...remaining].slice(0, topN);
 }
 
-/** Heuristic noise: title patterns that are not primary legal content (e.g. separate opinion, trade order). */
-/** Titles often irrelevant when query is topic-specific (e.g. healthcare, МОЗ). Penalty applied only when primary-law alternative exists. */
-const NOISE_TITLE_PATTERNS = [
-  /окрем[ауі]\s+думк/i,
-  /порядок\s+торгівл/i,
-  /статус\s+народного\s+депутата|про\s+статус\s+народного\s+депутата/i,
-];
 const NOISE_PENALTY = 0.15;
-const NOISE_PENALTY_DELTA = 0.1;
-const NOISE_PENALTY_POLICY_VERSION = 1;
-/** Primary-law-like: codex, law, constitution, procedural codes (for guard: penalty only when alternative exists). */
-const PRIMARY_LAW_TITLE_PATTERN = /кодекс|закон|конституція|процесуальн|кримінальн|цивільн.*кодекс|господарськ.*кодекс/i;
-
-function isPrimaryLawLike(hit: RawHit): boolean {
-  const title = (hit.title ?? '').normalize('NFC');
-  return PRIMARY_LAW_TITLE_PATTERN.test(title);
-}
+const NOISE_PENALTY_POLICY_VERSION = 2;
+/** Structural noise: CASELAW_OPINION detected via document_type metadata (data-driven, no title regex). */
 
 export interface NoisePenaltyResult {
   hits: RawHit[];
@@ -505,15 +475,13 @@ function applyNoisePenalty(hits: RawHit[], topNForGuard: number = 30): NoisePena
     goalCountInTopN.set(gid, (goalCountInTopN.get(gid) ?? 0) + 1);
   }
   const withPenalty = hits.map((h) => {
-    const title = (h.title ?? '').normalize('NFC');
-    const isNoise = NOISE_TITLE_PATTERNS.some((re) => re.test(title));
+    // Data-driven noise detection: CASELAW_OPINION via document_type (no title regex)
+    const kind = classifyActKind(h.title ?? '', h.document_type ?? undefined, h.category ?? undefined);
+    const isNoise = kind === 'CASELAW_OPINION';
     if (!isNoise) return { hit: h, effectiveScore: h.score ?? 0 };
     const score = h.score ?? 0;
     const gid = h.goal_id ?? '_single';
     const onlySourceForGoal = (goalCountInTopN.get(gid) ?? 0) <= 1;
-    // NOISE_TITLE_PATTERNS acts always get penalized — no hasPrimaryInDelta guard needed,
-    // because known noise acts (e.g. "Про статус народного депутата") semantically match
-    // many unrelated queries and pollute top-30 even without a competing primary law.
     if (onlySourceForGoal) {
       guardBlockedCount += 1;
       if (!guardReasonCodes.includes('ONLY_SOURCE_FOR_GOAL')) guardReasonCodes.push('ONLY_SOURCE_FOR_GOAL');
@@ -553,28 +521,10 @@ function applyDiversityCap(hits: RawHit[]): RawHit[] {
   return [...inTop, ...afterTop];
 }
 
-function tokenSet(s: string): Set<string> {
-  const n = (s ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  return new Set(n.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2));
-}
-
-/** Title overlap score 0..1 (query vs hit title). */
-function titleOverlapScore(query: string, title: string | undefined): number {
-  if (!title?.trim()) return 0;
-  const qSet = tokenSet(query);
-  if (qSet.size === 0) return 0;
-  const tSet = tokenSet(title);
-  let match = 0;
-  for (const t of qSet) if (tSet.has(t)) match += 1;
-  return match / qSet.size;
-}
-
 /**
- * Hybrid score (no LLM): vector + alias + article_ref + category_hint + title_overlap.
+ * Hybrid score (no LLM): vector + alias + article_ref + category_hint.
  * Used for ordering only; hit.score stays the vector score for audit.
+ * Title overlap removed: prefer no lexical prior over query-vs-title token guessing.
  */
 function hybridScore(
   hit: RawHit,
@@ -582,6 +532,7 @@ function hybridScore(
   taxonomy: TaxonomyCandidatesResult,
   entities: { act_abbrev?: string; article_ref?: string }[] | undefined
 ): number {
+  void query;
   const vec = Math.min(1, Math.max(0, hit.score));
   const aliasMatch =
     hit.rada_nreg && taxonomy.rada_nreg_candidates.includes(hit.rada_nreg) ? 1 : 0;
@@ -598,13 +549,11 @@ function hybridScore(
     )
       ? 1
       : 0;
-  const titleOverlap = titleOverlapScore(query, hit.title);
   return (
     W_VEC * vec +
     W_ALIAS * aliasMatch +
     W_ARTICLE * articleMatch +
-    W_CATEGORY * categoryHint +
-    W_TITLE * titleOverlap
+    W_CATEGORY * categoryHint
   );
 }
 
@@ -815,8 +764,95 @@ async function runOneGoal(
 
 const RUN_CONTEXT_TTL_SEC = 3600;
 
+/** Single finalization: fetch memory and build meta. Ensures retrieval_trace.meta.memory always exists when memory enabled. */
+async function fetchMemoryForRun(params: {
+  query: string;
+  user_id: string | undefined;
+  tenant_id: string | null;
+  run_id: string | undefined;
+  conversation_id?: string | null;
+}): Promise<{
+  memoryRefs: import('../assemble/types.js').MemoryRef[];
+  memorySummaries: Array<{ scope?: string; summary_text: string }>;
+  memoryTraceCompact: RunCacheRagResult['memoryTrace'];
+  memoryMeta: { enabled: boolean; semantic_enabled: boolean; recent_count: number; semantic_count: number; degraded?: boolean; degraded_reason_codes?: string[]; latency_ms?: { recent: number }; sources_used?: string[] };
+  memoryDegraded: boolean;
+  memoryDegradedReasonCodes: string[] | undefined;
+}> {
+  const { query, user_id, tenant_id, run_id, conversation_id } = params;
+  const memoryEnabled = config.memoryRecentEnabled && !!user_id;
+  const memorySemanticEnabled = config.memorySemanticEnabled && memoryEnabled;
+  const stubMeta = {
+    enabled: memoryEnabled,
+    semantic_enabled: memorySemanticEnabled,
+    recent_count: 0,
+    semantic_count: 0,
+  };
+  if (!memoryEnabled) {
+    return {
+      memoryRefs: [],
+      memorySummaries: [],
+      memoryTraceCompact: undefined,
+      memoryMeta: stubMeta,
+      memoryDegraded: false,
+      memoryDegradedReasonCodes: undefined,
+    };
+  }
+  const memResult = await fetchRecentMemory({
+    tenantId: tenant_id ?? null,
+    userId: user_id!,
+    conversationId: conversation_id ?? undefined,
+    scopeMode: conversation_id ? 'conversation_only' : 'user_global_fallback',
+    runId: run_id,
+    queryText: query,
+  });
+  const memoryRecentCount = memResult.recent_count ?? 0;
+  const memorySemanticCount = memResult.semantic_count ?? 0;
+  const memorySources: string[] = [];
+  if (memResult.refs.length > 0) {
+    if (memorySemanticCount > 0) memorySources.push('qdrant_semantic');
+    else memorySources.push('supabase_recent');
+  }
+  const memorySummaries = memResult.summaryText
+    ? [{ summary_text: memResult.summaryText }]
+    : [];
+  const memoryTraceCompact: RunCacheRagResult['memoryTrace'] = {
+    degraded: memResult.degraded || undefined,
+    recent_count: memoryRecentCount,
+    semantic_count: memorySemanticCount,
+    latency_ms: memResult.latency_ms,
+    sources_used: memorySources.length ? memorySources : undefined,
+    reason_codes: memResult.degraded_reason_codes,
+    scope_primary: memResult.scope_primary,
+    scope_fallback_used: memResult.scope_fallback_used,
+    conversation_recent_count: memResult.conversation_recent_count,
+    conversation_semantic_count: memResult.conversation_semantic_count,
+    global_recent_count: memResult.global_recent_count,
+    global_semantic_count: memResult.global_semantic_count,
+    fallback_conversation_ids: memResult.fallback_conversation_ids,
+  };
+  const memoryMeta = {
+    enabled: memoryEnabled,
+    semantic_enabled: memorySemanticEnabled,
+    recent_count: memoryRecentCount,
+    semantic_count: memorySemanticCount,
+    degraded: memResult.degraded || undefined,
+    degraded_reason_codes: memResult.degraded_reason_codes,
+    latency_ms: memResult.latency_ms !== undefined ? { recent: memResult.latency_ms } : undefined,
+    sources_used: memorySources.length ? memorySources : undefined,
+  };
+  return {
+    memoryRefs: memResult.refs,
+    memorySummaries,
+    memoryTraceCompact,
+    memoryMeta,
+    memoryDegraded: memResult.degraded ?? false,
+    memoryDegradedReasonCodes: memResult.degraded_reason_codes,
+  };
+}
+
 export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagResult> {
-  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id, tenant_id, user_id } = input;
+  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id, tenant_id, user_id, conversation_id } = input;
   const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
   if (query.length === 0) {
     const emptyTrace: RetrievalTrace = {
@@ -888,7 +924,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     config.u4PlannerEnabled &&
     !isCircuitOpen() &&
     config.openRouterApiKey &&
-    (goalSplit.goals.length > 1 || (!!routing_flags?.input_is_large && !!routing_flags?.input_looks_like_contract));
+    (goalSplit.goals.length > 1 ||
+      (!!routing_flags?.input_is_large && !!routing_flags?.input_looks_like_contract) ||
+      (goalSplit.goals.length === 1 && hasMultiClauseStructure(query)));
 
   if (plannerTrigger) {
     const plannerTier: 1 | 2 = goalSplit.goals.length > 1 ? 2 : 1;
@@ -936,12 +974,57 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   const isMultiGoal = goalSplit.goals.length > 1;
 
-  if (!searchPlan.sources.use_lldbi) {
+  // No semantic route: either true degraded unresolved or an intentional docs-only/no-semantic plan.
+  const noSemanticRoute = !searchPlan.sources.use_lldbi && !searchPlan.sources.use_memory;
+  const degradedUnresolved = noSemanticRoute &&
+    (searchPlan.reason_codes?.includes('CONTEXT_MODE_UNRESOLVED') ?? false);
+  if (noSemanticRoute) {
+    const reasonCodes = degradedUnresolved
+      ? Array.from(
+          new Set([
+            ...(searchPlan.reason_codes ?? []),
+            'CONTEXT_MODE_UNRESOLVED',
+            'degraded_unresolved',
+          ])
+        )
+      : [...(searchPlan.reason_codes ?? ['no_semantic_route'])];
     const trace: RetrievalTrace = {
       version: 1,
       hits: [],
       top_score: null,
       latency_ms: 0,
+      degraded_sources: degradedUnresolved ? { lldbi: true, memory: true } : undefined,
+      meta: {
+        collections_used: [],
+        steps_latency_ms: [],
+        steps_requested: [],
+        steps_executed: [],
+        query_used: query.slice(0, 200),
+        hits_count: 0,
+        qdrant_calls_count_total: 0,
+        hits_total_before_cap: 0,
+        hits_total_after_cap: 0,
+        hits_cap_applied: false,
+        reason_codes: reasonCodes,
+      },
+    };
+    return {
+      rawHits: [],
+      retrievalTrace: trace,
+      memoryRefs: [],
+      memorySummaries: undefined,
+      memoryTrace: undefined,
+    };
+  }
+
+  if (!searchPlan.sources.use_lldbi) {
+    const reasonCodes: string[] = ['memory_only_mode'];
+    let mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
+    const trace: RetrievalTrace = {
+      version: 1,
+      hits: [],
+      top_score: null,
+      latency_ms: mem.memoryTraceCompact?.latency_ms ?? 0,
       degraded_sources: undefined,
       meta: {
         collections_used: [],
@@ -954,9 +1037,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         hits_total_before_cap: 0,
         hits_total_after_cap: 0,
         hits_cap_applied: false,
+        reason_codes: reasonCodes,
+        memory: mem.memoryMeta,
       },
     };
-    return { rawHits: [], retrievalTrace: trace };
+    return {
+      rawHits: [],
+      retrievalTrace: trace,
+      memoryRefs: mem.memoryRefs,
+      memorySummaries: mem.memorySummaries.length ? mem.memorySummaries : undefined,
+      memoryTrace: mem.memoryTraceCompact,
+    };
   }
 
   // U4 Query Rewriter: hoisted before multi-goal/single-goal branch so BOTH paths benefit from the
@@ -1273,7 +1364,18 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         }),
       },
     };
-    return { rawHits: finalMulti, retrievalTrace: multiTrace };
+    const mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
+    multiTrace.meta.memory = mem.memoryMeta;
+    if (mem.memoryDegraded) {
+      multiTrace.degraded_sources = { ...(multiTrace.degraded_sources ?? {}), memory: true };
+    }
+    return {
+      rawHits: finalMulti,
+      retrievalTrace: multiTrace,
+      memoryRefs: mem.memoryRefs,
+      memorySummaries: mem.memorySummaries.length ? mem.memorySummaries : undefined,
+      memoryTrace: mem.memoryTraceCompact,
+    };
   }
 
   const taxonomyResult =
@@ -1290,7 +1392,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   let actPlannerOutput: ActPlannerOutput | null = null;
   let actPlannerCalledThisRun = false;
   const actPlannerTier = selectActPlannerTier(
-    1,
+    goalSplit.goals?.length ?? 1,
     taxonomyResult.rada_nreg_candidates?.length ?? 0,
     query.length,
     !!routing_flags?.input_looks_like_contract
@@ -1676,6 +1778,78 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     allHits.push(...cappedAfterExp);
   }
 
+  // U4 Article-reference backfill: strong refs only; compare and query in normalized space (332-2 vs 3322).
+  let articleBackfillMeta: { added_count: number; not_found_refs: string[]; calls: number } | undefined;
+  if (config.u4ArticleBackfillEnabled && vector) {
+    function normalizedFormsForArticle(s: string): string[] {
+      const t = String(s).trim();
+      const dash = t.match(/^(\d{1,5})-(\d{1,3})$/);
+      if (dash) return [t, dash[1]! + dash[2]!];
+      return [t];
+    }
+    const strongRefs = extractArticleRefsStructured(query).filter((r) => r.signal_strength === 'strong');
+    const existingRefsNormalized = new Set<string>();
+    for (const h of allHits) {
+      if (h.article_number != null) {
+        for (const form of normalizedFormsForArticle(String(h.article_number))) {
+          existingRefsNormalized.add(form);
+        }
+      }
+    }
+    const missingRefs = strongRefs.filter(
+      (r) => !r.normalized_forms.some((f) => existingRefsNormalized.has(f))
+    );
+    if (missingRefs.length > 0) {
+      const initialCount = qdrantCallCounter.count;
+      const maxCalls = config.u4ArticleBackfillMaxCalls;
+      const maxAdded = config.u4ArticleBackfillMaxAddedHits;
+      const existingKeys = new Set(allHits.map((h) => `${h.r2_key}:${h.json_path}`));
+      const backfillHits: RawHit[] = [];
+      const notFoundRefs: string[] = [];
+      for (const ref of missingRefs) {
+        if (qdrantCallCounter.count >= initialCount + maxCalls) break;
+        if (backfillHits.length >= maxAdded) break;
+        try {
+          const hits = await qdrantSearch({
+            collection: collections.chunks,
+            vector: vector,
+            limit: 5,
+            filter: {
+              should: ref.normalized_forms.map((v) => ({ key: 'article_number', match: { value: v } })),
+            },
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
+          if (hits.length === 0) {
+            notFoundRefs.push(ref.raw_ref);
+          }
+          for (const h of hits) {
+            const raw = payloadToRawHit(h, 'lldbi_chunks');
+            if (!raw.r2_key || !raw.json_path) continue;
+            const key = `${raw.r2_key}:${raw.json_path}`;
+            if (!existingKeys.has(key) && backfillHits.length < maxAdded) {
+              existingKeys.add(key);
+              backfillHits.push(raw);
+            }
+          }
+        } catch {
+          notFoundRefs.push(ref.raw_ref);
+        }
+      }
+      if (backfillHits.length > 0) {
+        allHits.push(...backfillHits);
+        const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
+        allHits.length = 0;
+        allHits.push(...deduped);
+      }
+      articleBackfillMeta = {
+        added_count: backfillHits.length,
+        not_found_refs: notFoundRefs,
+        calls: qdrantCallCounter.count - initialCount,
+      };
+    }
+  }
+
   const totalLatency = stepsLatencyMs.reduce((a, b) => a + b, 0);
   const hitsTotalBeforeCapSingle = allHits.length;
   const finalHits = config.u4HitsCap > 0 ? allHits.slice(0, config.u4HitsCap) : allHits;
@@ -1708,24 +1882,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       .map((c) => c.rada_nreg as string)
   );
 
-  // Family hints: from planner act_families or fallback from query signals (soft prior only)
+  // Family hints: from planner act_families only. No query-word fallback.
   type FamilyHint = { family: string; confidence: number };
-  let familyHints: FamilyHint[] =
+  const familyHints: FamilyHint[] =
     actPlannerOutput?.goals?.[0]?.act_families?.map((f) => ({ family: f.family.trim().toLowerCase(), confidence: f.confidence })) ?? [];
-  if (familyHints.length === 0) {
-    const qSignals = queryFamilySignals(query);
-    if (qSignals.criminal) familyHints.push({ family: 'criminal', confidence: 0.6 });
-    if (qSignals.administrative) familyHints.push({ family: 'administrative_offenses', confidence: 0.6 });
-    if (qSignals.tax) familyHints.push({ family: 'tax_customs', confidence: 0.6 });
-    // Normalize "admin" -> administrative_offenses for matching
-    familyHints = familyHints.map((h) =>
-      h.family === 'admin' ? { ...h, family: 'administrative_offenses' } : h
-    );
-  }
   const maxHintConfidence = familyHints.length ? Math.max(...familyHints.map((h) => h.confidence)) : 0;
   const ambiguousGuard = familyHints.length > 2 || maxHintConfidence < 0.6;
   const familyPriorBoostMagnitude = ambiguousGuard ? FAMILY_PRIOR_BOOST_WEAK : FAMILY_PRIOR_BOOST;
-  const querySignals = queryFamilySignals(query);
 
   const actSelectionLowConfidence =
     (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) ||
@@ -1749,24 +1912,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const meta = await getActMeta(nreg);
     const { score, reasons } = await scoreActCandidate(nreg, queryTokens, domainHint);
     const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
-    const title = meta?.title ?? '';
-    const actFamily = actTitleToFamily(title);
+    const actCategory = meta?.category ?? null;
     let familyPriorBoost = 0;
     let priorApplied = false;
     for (const h of familyHints) {
-      if (actFamily && (h.family === actFamily || actTitleMatchesFamily(title, h.family))) {
+      if (actCategoryMatchesFamily(actCategory, h.family)) {
         familyPriorBoost = Math.min(familyPriorBoostMagnitude, h.confidence * 0.3);
         priorApplied = true;
         break;
       }
     }
-    let antiPenalty = 0;
-    if (querySignals.criminal && (actFamily === 'administrative' || actFamily === 'administrative_offenses')) {
-      antiPenalty = ANTI_FAMILY_PENALTY;
-    }
-    if (querySignals.administrative && actFamily === 'criminal') {
-      antiPenalty = ANTI_FAMILY_PENALTY;
-    }
+    const antiPenalty = 0;
 
     // LLDBI soft prior: data-driven boost for category/doc_type alignment with U2 hints.
     // Vocabulary values from Supabase; never hardcoded category names in code.
@@ -1797,7 +1953,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
     const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty + lldbiCategoryBoost + lldbiDocTypeBoost;
     const lldbiPriorApplied = lldbiCategoryBoost > 0 || lldbiDocTypeBoost > 0;
-    const whyTag = lldbiPriorApplied ? 'LLDBI_SOFT_PRIOR' : priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') || reasons?.includes('keyword_match') ? 'LEXICAL_MATCH' : 'TAXONOMY_TOP';
+    const whyTag = lldbiPriorApplied ? 'LLDBI_SOFT_PRIOR' : priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') ? 'ALIAS_MATCH' : 'TAXONOMY_TOP';
     return {
       rada_nreg: nreg,
       title: meta?.title ?? undefined,
@@ -1826,10 +1982,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const familiesInTopN = new Set(
     scoredPool
       .slice(0, ACTS_2_TOP_N_CHECK)
-      .map((a) => actTitleToFamily(a.title ?? ''))
+      .map((a) => normalizedCategoryKey(a.category))
       .filter((f): f is string => !!f)
   );
-  const hintedFamilyMissing = familyHints.some((h) => h.family && !familiesInTopN.has(h.family));
+  const hintedFamilyMissing = familyHints.some((h) => {
+    if (!h.family) return false;
+    const normFam = h.family.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim();
+    return !normFam || ![...familiesInTopN].some((cat) => cat === normFam || cat.includes(normFam) || normFam.includes(cat));
+  });
   if (hintedFamilyMissing) acts2Triggers.push('FAMILY_MISSING_IN_TOP');
 
   let acts2Used = false;
@@ -2158,17 +2318,21 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     confidentFamilyMismatch = !hasSelectedActFromDominantFamily;
   }
 
+  const goalsCount = goalSplit.goals?.length ?? 1;
   const routingTriggers: RoutingHintsTriggers = {
     family_weak_evidence: familyWeakOrNoPrimary,
     family_conflict: familyEvidence.family_conflict,
-    selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) < 0.55,
+    selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) <= 0.55,
     selected_acts_confidence_below_06: (selectedActsResult.selected_acts_confidence ?? 0) < 0.6,
+    selected_acts_confidence_below_065: (selectedActsResult.selected_acts_confidence ?? 0) < 0.65,
+    selected_acts_confidence_below_09: (selectedActsResult.selected_acts_confidence ?? 0) < 0.9,
     reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
       'COVERAGE_GUARD_FAILED'
     ),
     reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
     confident_family_mismatch: confidentFamilyMismatch,
-    goals_count: goalSplit.goals?.length ?? 1,
+    goals_count: goalsCount,
+    selected_acts_empty_or_very_low: selected_acts.length === 0,
   };
 
   if (!shouldCallRoutingHints(routingTriggers)) {
@@ -2183,12 +2347,21 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     for (const f of familyEvidence.debug.top_families) evidenceFamilyKeys.add(f.family_key);
     const toFamilyKeyPrecheck = (c: string | undefined | null) =>
       (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
+    // Pass document_type so classifyActKind uses structural metadata, not title fallback
     const hasTaxonomyPrimaryForEvidence = [...evidenceFamilyKeys].some((fam) =>
       actCandidatesTop.some(
-        (c) => toFamilyKeyPrecheck(c.category) === fam && classifyActKind(c.title ?? '') === 'PRIMARY_LAW'
+        (c) => toFamilyKeyPrecheck(c.category) === fam && classifyActKind(c.title ?? '', c.document_type) === 'PRIMARY_LAW'
       )
     );
-    if (!strongTrigger && !hasTaxonomyPrimaryForEvidence) {
+    const zeroRecallCall = routingTriggers.selected_acts_empty_or_very_low === true;
+    // Allow routing hints to fire even when taxonomy has a primary law candidate, if:
+    // - single-goal AND confidence < 0.9 (low-confidence single-goal trigger fired).
+    // Rationale: taxonomy may know the law exists (index hit) but Qdrant has at most one
+    // strongly-evidenced act. Routing hints can suggest alternative search angles or confirm.
+    const mediumLowConfTrigger =
+      (routingTriggers.goals_count ?? 1) === 1 &&
+      routingTriggers.selected_acts_confidence_below_09 === true;
+    if (!strongTrigger && !hasTaxonomyPrimaryForEvidence && !zeroRecallCall && !mediumLowConfTrigger) {
       routingHintsMeta = { ...routingHintsMeta, not_used_reason_codes: ['NOT_CALLED_NO_TAXONOMY_PRIMARY'] };
       incrementU4RoutingHintsNotUsed('NOT_CALLED_NO_TAXONOMY_PRIMARY');
     } else {
@@ -2283,7 +2456,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           const cand = actCandidatesTop.find((a) => a.rada_nreg === s.rada_nreg);
           if (!cand) continue;
           const meta = await getActMeta(s.rada_nreg);
-          if (classifyActKind(cand.title ?? '') === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) return true;
+          if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) return true;
         }
         return false;
       };
@@ -2291,7 +2464,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         actCandidatesTop.some(
           (c) =>
             toFamilyKey(c.category) === fam &&
-            classifyActKind(c.title ?? '') === 'PRIMARY_LAW' &&
+            classifyActKind(c.title ?? '', c.document_type, c.category) === 'PRIMARY_LAW' &&
             !existingNregs.has(c.rada_nreg)
         );
       let allRankedCovered = true;
@@ -2342,7 +2515,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             if (existingNregs.has(cand.rada_nreg)) return false;
             const famKey = toFamilyKey(cand.category);
             if (famKey !== family_key_target) return false;
-            if (classifyActKind(cand.title ?? '') !== 'PRIMARY_LAW') return false;
+            if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) !== 'PRIMARY_LAW') return false;
             return true;
           });
           const hadCandidatesForFamily = actCandidatesTop.some((cand) => {
@@ -2413,7 +2586,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                   const title = meta?.title ?? (h.payload?.title as string) ?? '';
                   const famKey = toFamilyKey(meta?.category);
                   if (famKey !== family_key_target) continue;
-                  if (classifyActKind(title) !== 'PRIMARY_LAW') continue;
+                  if (classifyActKind(title, meta?.document_type, meta?.category) !== 'PRIMARY_LAW') continue;
                   selected_acts_final = [
                     ...selected_acts_final,
                     {
@@ -2476,33 +2649,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
   }
 
-  // --- Memory Retrieval (LEX-MEM): fetch recent mm_memory_items for this user/tenant ---
-  // Runs AFTER main LLDBI retrieval so memory latency doesn't block critical path.
-  // Non-fatal: any failure → degraded=true, empty refs; pipeline always continues.
-  // Multi-tenant safe: always filters by tenant_id + user_id.
-  const memoryEnabled = config.memoryRecentEnabled && !!user_id;
-  const memorySemanticEnabled = config.memorySemanticEnabled && memoryEnabled;
-  let memoryRefs: import('../assemble/types.js').MemoryRef[] = [];
-  let memoryRecentLatencyMs: number | undefined;
-  let memoryDegraded = false;
-  let memoryDegradedReasonCodes: string[] | undefined;
-  const memorySources: string[] = [];
-
-  if (memoryEnabled) {
-    const memResult = await fetchRecentMemory({
-      tenantId: tenant_id ?? null,
-      userId: user_id!,
-      runId: run_id,
-    });
-    memoryRefs = memResult.refs;
-    memoryRecentLatencyMs = memResult.latency_ms;
-    if (memResult.degraded) {
-      memoryDegraded = true;
-      memoryDegradedReasonCodes = memResult.degraded_reason_codes;
-    }
-    if (memResult.refs.length > 0) memorySources.push('supabase_recent');
-  }
-
+  const mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
   const sampleHits = finalHits.slice(0, 5).map((h) => ({
     source: h.source,
     score: h.score,
@@ -2517,8 +2664,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     hits: finalHits,
     top_score: topScore,
     latency_ms: totalLatency,
-    degraded_sources: (Object.keys(degraded).length || memoryDegraded)
-      ? { ...degraded, ...(memoryDegraded ? { memory: true } : {}) }
+    degraded_sources: (Object.keys(degraded).length || mem.memoryDegraded)
+      ? { ...degraded, ...(mem.memoryDegraded ? { memory: true } : {}) }
       : undefined,
     meta: {
       collections_used: collectionsUsed,
@@ -2623,6 +2770,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       routing_hints: routingHintsMeta,
       reference_expansion: referenceExpansionMeta,
+      article_backfill: articleBackfillMeta,
       ood_guard: oodGuardResult,
       low_confidence_suppressed:
         specializedDomainNoPrimary || coverageGuardFiredButFamilyOk
@@ -2646,16 +2794,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         degraded: plannerMeta.degraded,
         reason_codes: plannerMeta.reason_codes,
       },
-      memory: {
-        enabled: memoryEnabled,
-        semantic_enabled: memorySemanticEnabled,
-        recent_count: memoryRefs.length,
-        semantic_count: 0,
-        degraded: memoryDegraded || undefined,
-        degraded_reason_codes: memoryDegradedReasonCodes,
-        latency_ms: memoryRecentLatencyMs !== undefined ? { recent: memoryRecentLatencyMs } : undefined,
-        sources_used: memorySources,
-      },
+      memory: mem.memoryMeta,
       retrieval_debug_bundle: {
         per_goal_act_candidates_top: actCandidatesTop.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
         stages: (collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
@@ -2673,5 +2812,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     },
   };
 
-  return { rawHits: finalHits, retrievalTrace, memoryRefs };
+  return {
+    rawHits: finalHits,
+    retrievalTrace,
+    memoryRefs: mem.memoryRefs,
+    memorySummaries: mem.memorySummaries.length ? mem.memorySummaries : undefined,
+    memoryTrace: mem.memoryTraceCompact,
+  };
 }

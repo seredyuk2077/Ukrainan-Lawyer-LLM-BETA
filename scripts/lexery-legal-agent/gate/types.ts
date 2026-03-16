@@ -30,6 +30,10 @@ export const GateDecisionSignalsSchema = z.object({
   ambiguous: z.boolean().optional(),
   degraded_lldbi: z.boolean().optional(),
   need_deep_retrieval: z.boolean().optional(),
+  direct_refs_total: z.number().int().min(0).optional(),
+  direct_refs_hit: z.number().int().min(0).optional(),
+  direct_act_hints_total: z.number().int().min(0).optional(),
+  direct_act_hints_hit: z.number().int().min(0).optional(),
 });
 export type GateDecisionSignals = z.infer<typeof GateDecisionSignalsSchema>;
 

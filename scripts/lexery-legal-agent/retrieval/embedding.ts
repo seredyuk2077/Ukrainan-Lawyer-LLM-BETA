@@ -15,7 +15,7 @@ export interface EmbedResult {
 export async function embedQuery(text: string): Promise<EmbedResult> {
   const apiKey = config.openRouterApiKeyRag;
   if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY_ONLINE is not set for U4 embeddings');
+    throw new Error('OPENROUTER_API_KEY_BRAIN or OPENROUTER_API_KEY_ONLINE required for U4 embeddings');
   }
   const trimmed = text.trim();
   const input = trimmed.length > 0 ? trimmed : 'query';
@@ -82,4 +82,75 @@ export async function embedQuery(text: string): Promise<EmbedResult> {
     }
     throw firstErr;
   }
+}
+
+/** Batch embeddings (OpenRouter array input). Timeout and 1 retry on 5xx as in embedQuery. */
+export async function embedMany(texts: string[]): Promise<EmbedResult[]> {
+  const apiKey = config.openRouterApiKeyRag;
+  if (!apiKey) {
+    throw new Error('OPENROUTER_API_KEY_BRAIN or OPENROUTER_API_KEY_ONLINE required for embeddings');
+  }
+  const batchSize = config.lldbiEmbedBatchSize ?? 16;
+  const timeoutMs = config.lldbiEmbedTimeoutSec * 1000;
+  const results: EmbedResult[] = [];
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const chunk = texts.slice(i, i + batchSize).map((t) => (t.trim() || 'query').slice(0, 12000));
+    const doFetch = async (): Promise<EmbedResult[]> => {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/embeddings', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://lexery-legal-agent/u4-embeddings-batch',
+            'X-Title': 'Lexery Brain U4 Embeddings Batch',
+          },
+          body: JSON.stringify({
+            model: config.lldbiEmbedModelId,
+            input: chunk.length === 1 ? chunk[0] : chunk,
+          }),
+        });
+        clearTimeout(t);
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`OpenRouter embeddings ${res.status}: ${errText.slice(0, 200)}`);
+        }
+        const data = (await res.json()) as {
+          data?: Array<{ embedding?: number[] }>;
+          error?: { message?: string };
+        };
+        if (data.error) throw new Error(String(data.error.message || 'OpenRouter error'));
+        const arr = data.data ?? [];
+        const out: EmbedResult[] = [];
+        for (let j = 0; j < chunk.length; j++) {
+          const emb = arr[j]?.embedding;
+          if (!emb || !Array.isArray(emb) || emb.length !== EXPECTED_DIM) {
+            throw new Error(`Invalid embedding at index ${j}: expected length ${EXPECTED_DIM}`);
+          }
+          out.push({ embedding: emb, dimensions: emb.length, model: config.lldbiEmbedModelId });
+        }
+        return out;
+      } catch (e) {
+        clearTimeout(t);
+        throw e;
+      }
+    };
+    try {
+      const part = await doFetch();
+      results.push(...part);
+    } catch (firstErr) {
+      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      const is5xx = msg.includes(' 5') || msg.includes('502') || msg.includes('503');
+      if (is5xx) {
+        await new Promise((r) => setTimeout(r, 500));
+        results.push(...(await doFetch()));
+      } else {
+        throw firstErr;
+      }
+    }
+  }
+  return results;
 }

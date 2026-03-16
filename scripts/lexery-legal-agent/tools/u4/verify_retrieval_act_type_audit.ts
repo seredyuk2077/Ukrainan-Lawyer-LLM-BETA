@@ -224,7 +224,7 @@ function checkMultiactBorder(rt: RunResult['retrievalTrace'], c: ActTypeAuditCas
   let hasSecondary = false;
   let hasPrimary = false;
   for (const a of sel) {
-    const k = classifyActKind(a.act_title ?? '');
+    const k = classifyActKind(a.act_title ?? '', a.document_type, a.category);
     if (k === 'SECONDARY_ORDER') hasSecondary = true;
     if (k === 'PRIMARY_LAW') hasPrimary = true;
   }
