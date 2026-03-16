@@ -32,6 +32,15 @@ const HEALTH_TIMEOUT_MS = 20_000;
 const POLL_MS = 400;
 const POLL_TIMEOUT_MS = 90_000;
 const SHUTDOWN_WAIT_MS = 5_000;
+const ONLY_ARG = process.argv.find((arg) => arg.startsWith('--only='));
+const ONLY_MODE = ONLY_ARG?.slice('--only='.length)?.toUpperCase();
+const RETRIEVAL_ONLY_MODE =
+  process.argv.includes('--retrieval-only') ||
+  process.env.RETRIEVAL_REAL_DEV_RETRIEVAL_ONLY === '1' ||
+  ONLY_MODE === 'FAST' ||
+  ONLY_MODE === 'SMOKE';
+const SKIP_U10_POSTCHECK =
+  RETRIEVAL_ONLY_MODE || process.env.RETRIEVAL_REAL_DEV_SKIP_U10_POSTCHECK === '1';
 
 /** family_id -> regex to match act title (Ukrainian). "general" matches any. labor/labor_social aligned with taxonomy. */
 const FAMILY_TITLE_SIGNALS: Record<string, RegExp> = {
@@ -273,12 +282,14 @@ async function waitRunTerminalViaDb(runId: string): Promise<{ terminal: boolean;
 
 export function isRetrievalTraceReadyForScoring(
   status: string | undefined,
-  retrievalTrace: RunResult['retrievalTrace'] | undefined | null
+  retrievalTrace: RunResult['retrievalTrace'] | undefined | null,
+  requireTerminal: boolean = true
 ): boolean {
-  if (!status || !TERMINAL_STATUSES.includes(status)) return false;
+  if (requireTerminal && (!status || !TERMINAL_STATUSES.includes(status))) return false;
   if (retrievalTrace == null || typeof retrievalTrace !== 'object') return false;
   const hitsCount = retrievalTrace.meta?.hits_count;
-  return typeof hitsCount === 'number' && hitsCount >= 0;
+  if (typeof hitsCount === 'number' && hitsCount >= 0) return true;
+  return retrievalTrace.meta?.low_confidence === true;
 }
 
 async function fetchRunPayload(baseUrl: string, runId: string): Promise<RunGetPayload | null> {
@@ -297,7 +308,8 @@ async function runQuery(
   baseUrl: string,
   query: string,
   tenantId: string,
-  userId: string
+  userId: string,
+  requireTerminalForScoring: boolean
 ): Promise<RunResult> {
   const start = Date.now();
   let runId: string;
@@ -305,7 +317,11 @@ async function runQuery(
     const postRes = await fetch(`${baseUrl}/v1/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dev-API-Key': DEV_KEY },
-      body: JSON.stringify({ query, tenant_id: tenantId, user_id: userId }),
+      body: JSON.stringify({
+        query,
+        tenant_id: tenantId,
+        user_id: userId,
+      }),
     });
     if (postRes.status !== 202) {
       return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: undefined };
@@ -323,7 +339,7 @@ async function runQuery(
     const payload = await fetchRunPayload(baseUrl, runId);
     if (payload) {
       latestPayload = payload;
-      if (isRetrievalTraceReadyForScoring(payload.status, payload.retrieval_trace)) {
+      if (isRetrievalTraceReadyForScoring(payload.status, payload.retrieval_trace, requireTerminalForScoring)) {
         return {
           run_id: runId,
           retrievalTrace: payload.retrieval_trace ?? null,
@@ -334,14 +350,23 @@ async function runQuery(
     await sleep(POLL_MS);
   }
 
-  let waitResult = await waitRunTerminalWithRetries(baseUrl, runId);
-  if (!waitResult.terminal) {
-    waitResult = await waitRunTerminalViaDb(runId);
+  let waitResult = { terminal: false as boolean, status: undefined as string | undefined };
+  if (requireTerminalForScoring) {
+    waitResult = await waitRunTerminalWithRetries(baseUrl, runId);
+    if (!waitResult.terminal) {
+      waitResult = await waitRunTerminalViaDb(runId);
+    }
   }
 
   if (waitResult.terminal) {
     const finalPayload = await fetchRunPayload(baseUrl, runId);
-    if (isRetrievalTraceReadyForScoring(finalPayload?.status, finalPayload?.retrieval_trace)) {
+    if (
+      isRetrievalTraceReadyForScoring(
+        finalPayload?.status,
+        finalPayload?.retrieval_trace,
+        requireTerminalForScoring
+      )
+    ) {
       return {
         run_id: runId,
         retrievalTrace: finalPayload?.retrieval_trace ?? null,
@@ -351,7 +376,7 @@ async function runQuery(
     try {
       const fromDb = await runRepo.findByRunId(runId);
       const dbTrace = fromDb?.retrieval_trace as RunResult['retrievalTrace'] | undefined;
-      if (isRetrievalTraceReadyForScoring(fromDb?.status, dbTrace)) {
+      if (isRetrievalTraceReadyForScoring(fromDb?.status, dbTrace, requireTerminalForScoring)) {
         return {
           run_id: runId,
           retrievalTrace: dbTrace ?? null,
@@ -363,7 +388,7 @@ async function runQuery(
     }
   }
 
-  if (isRetrievalTraceReadyForScoring(latestPayload?.status, latestPayload?.retrieval_trace)) {
+  if (isRetrievalTraceReadyForScoring(latestPayload?.status, latestPayload?.retrieval_trace, requireTerminalForScoring)) {
     return {
       run_id: runId,
       retrievalTrace: latestPayload?.retrieval_trace ?? null,
@@ -449,6 +474,9 @@ async function main(): Promise<void> {
     DEV_API_KEY: DEV_KEY,
     LEGAL_AGENT_DISABLE_LLM: 'true',
     U10_DRY_RUN_KEEP_TRIAGE: 'true',
+    U9_META_TRIAGE_ENABLED: RETRIEVAL_ONLY_MODE ? 'false' : process.env.U9_META_TRIAGE_ENABLED,
+    MEMORY_RECENT_ENABLED: RETRIEVAL_ONLY_MODE ? 'false' : process.env.MEMORY_RECENT_ENABLED,
+    U5_STOP_AFTER_GATE: RETRIEVAL_ONLY_MODE ? 'true' : process.env.U5_STOP_AFTER_GATE,
   };
   if (!serverEnv.REDIS_QUEUE_NAMESPACE) {
     serverEnv.REDIS_QUEUE_NAMESPACE = `lexery:verify:retrieval-real-dev:${randomUUID()}`;
@@ -502,7 +530,7 @@ async function main(): Promise<void> {
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
     for (const { index: i, row } of devToRun) {
-      const run = await runQuery(baseUrl, row.query, tenantId, userId);
+      const run = await runQuery(baseUrl, row.query, tenantId, userId, !RETRIEVAL_ONLY_MODE);
       const rt = run.retrievalTrace;
       const exp = row.expectations;
       const actFamilyHit = checkActFamilyHit(rt, exp.expected_act_families);
@@ -559,68 +587,72 @@ async function main(): Promise<void> {
       }
     }
 
-    // U10 post-check: wait for terminal status (with retries) then GET ?include_snapshot=1 (canonical). Non-200 or exception = post-check fail.
-    for (const r of results) {
-      if (!r.run_id) continue;
-      let waitResult = await waitRunTerminalWithRetries(baseUrl, r.run_id);
-      if (!waitResult.terminal) {
-        waitResult = await waitRunTerminalViaDb(r.run_id);
-      }
-      if (!waitResult.terminal) {
-        incompleteRunIds.push(r.run_id);
-        console.error('[verify_retrieval_real_dev] U10 post-check: run_not_terminal run_id=', r.run_id);
-        u10PostCheckFail++;
-        postCheckReasonCodes.push('run_not_terminal');
-        continue;
-      }
-      try {
-        const getRes = await fetch(`${baseUrl}/v1/runs/${r.run_id}?include_snapshot=1`, {
-          headers: { 'X-Dev-API-Key': DEV_KEY },
-        });
-        if (getRes.status !== 200) {
+    if (SKIP_U10_POSTCHECK) {
+      console.log('[verify_retrieval_real_dev] U10 post-check skipped (retrieval-only mode)');
+    } else {
+      // U10 post-check: wait for terminal status (with retries) then GET ?include_snapshot=1 (canonical).
+      for (const r of results) {
+        if (!r.run_id) continue;
+        let waitResult = await waitRunTerminalWithRetries(baseUrl, r.run_id);
+        if (!waitResult.terminal) {
+          waitResult = await waitRunTerminalViaDb(r.run_id);
+        }
+        if (!waitResult.terminal) {
+          incompleteRunIds.push(r.run_id);
+          console.error('[verify_retrieval_real_dev] U10 post-check: run_not_terminal run_id=', r.run_id);
           u10PostCheckFail++;
-          postCheckReasonCodes.push('API_NON_200');
-          console.error('[verify_retrieval_real_dev] U10 post-check: GET /v1/runs/:id returned', getRes.status, 'run_id=', r.run_id);
+          postCheckReasonCodes.push('run_not_terminal');
           continue;
         }
-        let runBody = (await getRes.json()) as { snapshot?: { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
-        if (runBody.snapshot == null) {
-          const fromDb = await runRepo.findByRunId(r.run_id);
-          if (fromDb?.snapshot != null && typeof fromDb.snapshot === 'object') {
-            runBody = { snapshot: fromDb.snapshot as { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
+        try {
+          const getRes = await fetch(`${baseUrl}/v1/runs/${r.run_id}?include_snapshot=1`, {
+            headers: { 'X-Dev-API-Key': DEV_KEY },
+          });
+          if (getRes.status !== 200) {
+            u10PostCheckFail++;
+            postCheckReasonCodes.push('API_NON_200');
+            console.error('[verify_retrieval_real_dev] U10 post-check: GET /v1/runs/:id returned', getRes.status, 'run_id=', r.run_id);
+            continue;
           }
-        }
-        const u10 = runBody.snapshot?.u10_selection;
-        if (r.hasTrace && !u10) {
-          console.error('[verify_retrieval_real_dev] U10 post-check: snapshot_missing_on_completed run_id=', r.run_id);
+          let runBody = (await getRes.json()) as { snapshot?: { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
+          if (runBody.snapshot == null) {
+            const fromDb = await runRepo.findByRunId(r.run_id);
+            if (fromDb?.snapshot != null && typeof fromDb.snapshot === 'object') {
+              runBody = { snapshot: fromDb.snapshot as { u10_selection?: { triage_used?: boolean; triage_attempt_trail?: unknown[] } } };
+            }
+          }
+          const u10 = runBody.snapshot?.u10_selection;
+          if (r.hasTrace && !u10) {
+            console.error('[verify_retrieval_real_dev] U10 post-check: snapshot_missing_on_completed run_id=', r.run_id);
+            u10PostCheckFail++;
+            postCheckReasonCodes.push('snapshot_missing_on_completed');
+          } else if (u10?.triage_used && (!u10.triage_attempt_trail || u10.triage_attempt_trail.length === 0)) {
+            console.error('[verify_retrieval_real_dev] U10 post-check: triage_trail_empty_when_triage_used run_id=', r.run_id);
+            u10PostCheckFail++;
+            postCheckReasonCodes.push('triage_trail_empty_when_triage_used');
+          }
+        } catch (err) {
           u10PostCheckFail++;
-          postCheckReasonCodes.push('snapshot_missing_on_completed');
-        } else if (u10?.triage_used && (!u10.triage_attempt_trail || u10.triage_attempt_trail.length === 0)) {
-          console.error('[verify_retrieval_real_dev] U10 post-check: triage_trail_empty_when_triage_used run_id=', r.run_id);
-          u10PostCheckFail++;
-          postCheckReasonCodes.push('triage_trail_empty_when_triage_used');
+          postCheckReasonCodes.push('POST_CHECK_EXCEPTION');
+          console.error('[verify_retrieval_real_dev] U10 post-check: exception run_id=', r.run_id, err);
         }
-      } catch (err) {
-        u10PostCheckFail++;
-        postCheckReasonCodes.push('POST_CHECK_EXCEPTION');
-        console.error('[verify_retrieval_real_dev] U10 post-check: exception run_id=', r.run_id, err);
+      }
+      if (u10PostCheckFail > 0) {
+        console.error('[verify_retrieval_real_dev] U10 post-check failed:', u10PostCheckFail, 'runs');
+      } else if (results.some((r) => r.run_id && r.hasTrace)) {
+        console.log('[verify_retrieval_real_dev] U10 post-check: u10_selection present and triage_attempt_trail ok for triage-eligible runs');
+      }
+      const postCheckReasonCounts: Record<string, number> = {};
+      for (const code of postCheckReasonCodes) {
+        postCheckReasonCounts[code] = (postCheckReasonCounts[code] ?? 0) + 1;
+      }
+      if (Object.keys(postCheckReasonCounts).length > 0) {
+        console.log('[verify_retrieval_real_dev] U10 post-check reason_codes:', Object.entries(postCheckReasonCounts).map(([k, v]) => `${k}=${v}`).join(', '));
+      }
+      if (incompleteRunIds.length > 0) {
+        console.log('[verify_retrieval_real_dev] Incomplete run IDs (not terminal):', incompleteRunIds.join(', '));
       }
     }
-  if (u10PostCheckFail > 0) {
-    console.error('[verify_retrieval_real_dev] U10 post-check failed:', u10PostCheckFail, 'runs');
-  } else if (results.some((r) => r.run_id && r.hasTrace)) {
-    console.log('[verify_retrieval_real_dev] U10 post-check: u10_selection present and triage_attempt_trail ok for triage-eligible runs');
-  }
-  const postCheckReasonCounts: Record<string, number> = {};
-  for (const code of postCheckReasonCodes) {
-    postCheckReasonCounts[code] = (postCheckReasonCounts[code] ?? 0) + 1;
-  }
-  if (Object.keys(postCheckReasonCounts).length > 0) {
-    console.log('[verify_retrieval_real_dev] U10 post-check reason_codes:', Object.entries(postCheckReasonCounts).map(([k, v]) => `${k}=${v}`).join(', '));
-  }
-  if (incompleteRunIds.length > 0) {
-    console.log('[verify_retrieval_real_dev] Incomplete run IDs (not terminal):', incompleteRunIds.join(', '));
-  }
 
     // Flaky check: re-run each hard-fail case once; set FAIL_STABLE (2/2 fail) or FAIL_FLAKY (1st fail, 2nd pass)
     if (FLAKY_CHECK_ENABLED && healthOk) {
@@ -628,7 +660,7 @@ async function main(): Promise<void> {
         .map((r, idx) => ({ idx, row: devToRun[idx].row, exp: devToRun[idx].row.expectations }))
         .filter(({ idx }) => !results[idx].pass && !results[idx].softFail);
       for (const { idx, row, exp } of hardFailIndices) {
-        const run2 = await runQuery(baseUrl, row.query, tenantId, userId);
+        const run2 = await runQuery(baseUrl, row.query, tenantId, userId, !RETRIEVAL_ONLY_MODE);
         const rt2 = run2.retrievalTrace;
         const actFamilyHit2 = checkActFamilyHit(rt2, exp.expected_act_families);
         const multiGoalCorrect2 = checkMultiGoalCorrect(rt2, exp.must_have_multi_goal);
@@ -707,6 +739,7 @@ async function main(): Promise<void> {
 
   console.log('\n--- DEV Summary ---');
   console.log('Health:', healthOk ? 'PASS' : 'FAIL');
+  console.log('retrieval_only_mode:', RETRIEVAL_ONLY_MODE ? 'ON' : 'OFF');
   console.log('Cases:', `${passCount}/${total}`, allPass ? 'PASS' : 'FAIL');
   console.log('status: PASS=', passCount, 'FAIL_STABLE=', failStableCount, 'FAIL_FLAKY=', failFlakyCount, 'soft_fail=', softFailCount);
   console.log('hard_pass:', hardPass, 'hard_fail (stable only):', hardFailCount);
@@ -832,12 +865,12 @@ async function main(): Promise<void> {
 
   const qualityGatePass = allPass || gatePass;
   const exitCode =
-    u10PostCheckFail > 0
+    !SKIP_U10_POSTCHECK && u10PostCheckFail > 0
       ? 1
       : qualityGatePass
         ? 0
         : 1;
-  if (u10PostCheckFail > 0) {
+  if (!SKIP_U10_POSTCHECK && u10PostCheckFail > 0) {
     console.error('[verify_retrieval_real_dev] exit 1: U10 post-check failed on', u10PostCheckFail, 'runs');
   }
   process.exit(exitCode);

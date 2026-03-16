@@ -3,6 +3,7 @@ import type { RawHit } from './types.js';
 import type { TaxonomyCandidatesResult } from './act-taxonomy-store.js';
 import { classifyActKind } from './selected-acts.js';
 import {
+  buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
   computeChunkStructuralScore,
   getHitOrderingScore,
@@ -53,7 +54,8 @@ export function hybridScore(
   hit: RawHit,
   query: string,
   taxonomy: TaxonomyCandidatesResult,
-  entities: { act_abbrev?: string; article_ref?: string }[] | undefined
+  entities: { act_abbrev?: string; article_ref?: string }[] | undefined,
+  queryTokenWeights?: Map<string, number>
 ): number {
   const vec = Math.min(1, Math.max(0, hit.score));
   const aliasMatch =
@@ -71,7 +73,7 @@ export function hybridScore(
     )
       ? 1
       : 0;
-  const structuralScore = computeChunkStructuralScore(hit, query);
+  const structuralScore = computeChunkStructuralScore(hit, query, queryTokenWeights);
   return (
     W_VEC * vec +
     W_ALIAS * aliasMatch +
@@ -88,8 +90,9 @@ export function applyHybridOrdering(
   taxonomy: TaxonomyCandidatesResult,
   entities: { act_abbrev?: string; article_ref?: string }[] | undefined
 ): void {
+  const queryTokenWeights = buildDiscriminativeQueryTokenWeights(hits, query);
   for (const hit of hits) {
-    hit.ordering_score = hybridScore(hit, query, taxonomy, entities);
+    hit.ordering_score = hybridScore(hit, query, taxonomy, entities, queryTokenWeights);
   }
   hits.sort(compareHitsByOrderingScore);
 }

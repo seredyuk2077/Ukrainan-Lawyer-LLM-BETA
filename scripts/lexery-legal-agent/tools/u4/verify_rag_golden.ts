@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { config as loadEnv } from 'dotenv';
 import { evaluateGoldenCase, type GoldenCase, type RetrievalTraceLike } from './rag_golden_eval.js';
 import { RunRepository } from '../../gateway/storage.js';
@@ -147,7 +148,12 @@ async function main(): Promise<void> {
     ...process.env,
     BRAIN_PORT: String(port),
     DEV_API_KEY: DEV_KEY,
+    LEGAL_AGENT_DISABLE_LLM: 'true',
     U10_DRY_RUN_KEEP_TRIAGE: 'true',
+    U9_META_TRIAGE_ENABLED: 'false',
+    MEMORY_RECENT_ENABLED: 'false',
+    U5_STOP_AFTER_GATE: 'true',
+    REDIS_QUEUE_NAMESPACE: `lexery:verify:rag-golden:${randomUUID()}`,
   };
 
   const child = spawn(

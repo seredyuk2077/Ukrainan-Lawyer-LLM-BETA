@@ -6,6 +6,7 @@ import { RunRepository } from '../gateway/storage.js';
 import { getTaskQueue } from '../gateway/handler.js';
 import { logger } from '../lib/logger.js';
 import { runContextGet, runContextSet } from '../lib/run-context.js';
+import { config } from '../lib/config.js';
 import {
   incrementU5Processed,
   incrementU5Failed,
@@ -99,6 +100,12 @@ export async function handleU5Event(event: RunEvent): Promise<void> {
       top_score: decision.signals.top_score,
       duration_ms: decision.meta?.duration_ms,
     });
+
+    if (config.u5StopAfterGate) {
+      await runRepo.completeRun(run_id);
+      logger.info('U5 stop-after-gate completed run', { run_id, trace_id, expand: decision.expand });
+      return;
+    }
 
     const now = new Date().toISOString();
     const taskQueue = getTaskQueue();

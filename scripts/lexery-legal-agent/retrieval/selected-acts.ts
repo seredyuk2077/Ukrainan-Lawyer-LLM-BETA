@@ -654,6 +654,43 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  const isSingleGoal = (input.goals_summary?.length ?? 0) <= 1;
+  if (isSingleGoal && selected.length > 3) {
+    const evidenceByNreg = new Map(
+      chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
+    );
+    const rankedByEvidence = [...selected].sort((left, right) => {
+      const leftEvidence = evidenceByNreg.get(left.rada_nreg);
+      const rightEvidence = evidenceByNreg.get(right.rada_nreg);
+      const countDiff =
+        (rightEvidence?.count_in_top30 ?? 0) - (leftEvidence?.count_in_top30 ?? 0);
+      if (countDiff !== 0) return countDiff;
+      const maxScoreDiff =
+        (rightEvidence?.max_score ?? 0) - (leftEvidence?.max_score ?? 0);
+      if (maxScoreDiff !== 0) return maxScoreDiff;
+      return (right.score ?? 0) - (left.score ?? 0);
+    });
+    const evidenceAll = rankedByEvidence.reduce(
+      (sum, act) => sum + (evidenceByNreg.get(act.rada_nreg)?.count_in_top30 ?? 0),
+      0
+    );
+    const top3 = rankedByEvidence.slice(0, 3);
+    const evidenceTop3 = top3.reduce(
+      (sum, act) => sum + (evidenceByNreg.get(act.rada_nreg)?.count_in_top30 ?? 0),
+      0
+    );
+    const trailingWeak = rankedByEvidence
+      .slice(3)
+      .every((act) => (evidenceByNreg.get(act.rada_nreg)?.count_in_top30 ?? 0) <= CHUNKS_EVIDENCE_COUNT_THRESHOLD);
+    if (top3.length === 3 && (trailingWeak || (evidenceAll > 0 && evidenceTop3 / evidenceAll >= 0.8))) {
+      const keep = new Set(top3.map((act) => act.rada_nreg));
+      for (let i = selected.length - 1; i >= 0; i -= 1) {
+        if (!keep.has(selected[i].rada_nreg)) selected.splice(i, 1);
+      }
+      reasonCodes.push('SINGLE_GOAL_TAIL_TRIMMED');
+    }
+  }
+
   // Enrich selected items for Writer: document_type, category, act_kind, flags (E.2)
   for (const s of selected) {
     const cand = candidateByNreg.get(s.rada_nreg);

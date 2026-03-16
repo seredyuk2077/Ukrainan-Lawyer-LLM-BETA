@@ -63,6 +63,8 @@ import { runValidityRegressionTests } from './Lexery Legislation DB Infra/src/co
 import { testLatestValidity } from './Lexery Legislation DB Infra/src/commands/test-latest-validity.js';
 import { repairQdrantDedup } from './Lexery Legislation DB Infra/src/commands/repair-qdrant-dedup.js';
 import { auditQdrantPayloadCompleteness } from './Lexery Legislation DB Infra/src/commands/audit-qdrant-payload-completeness.js';
+import { refreshQdrantPayloadBatch } from './Lexery Legislation DB Infra/src/commands/refresh-qdrant-payload-batch.js';
+import { reloadCorpusBatch } from './Lexery Legislation DB Infra/src/commands/reload-corpus-batch.js';
 
 const program = new Command();
 
@@ -704,6 +706,54 @@ program
       concurrency: options.concurrency ? Number(options.concurrency) : 4,
       outputFile: options.output,
       outputMarkdown: options.outputMarkdown,
+    });
+  });
+
+program
+  .command('refresh-qdrant-payload-batch')
+  .description('Дешевий batch refresh Qdrant payload з audit-driven fallback на full update')
+  .option('--limit <n>', 'Обмежити кількість документів')
+  .option('--nregs <nregs>', 'Список nreg через кому')
+  .option('--concurrency <n>', 'Паралельність refresh workers', '2')
+  .option('--batch-size <n>', 'Кількість документів у одному batch', '25')
+  .option('--audit-file <path>', 'JSON audit file з audit-qdrant-payload', 'runs/audit/QDRANT_PAYLOAD_AUDIT.json')
+  .option('--report-file <path>', 'Шлях до JSON refresh report', 'runs/audit/QDRANT_PAYLOAD_REFRESH_REPORT.json')
+  .option('--resume', 'Продовжити з існуючого refresh report')
+  .action(async (options) => {
+    const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
+    await refreshQdrantPayloadBatch({
+      limit: options.limit ? Number(options.limit) : undefined,
+      nregs,
+      concurrency: options.concurrency ? Number(options.concurrency) : 2,
+      batchSize: options.batchSize ? Number(options.batchSize) : 25,
+      auditFile: options.auditFile,
+      reportFile: options.reportFile,
+      resume: Boolean(options.resume),
+    });
+  });
+
+program
+  .command('reload-corpus-batch')
+  .description('Повний batch force-reindex LLDBI корпусу з resume/reporting')
+  .option('--limit <n>', 'Обмежити кількість документів')
+  .option('--nregs <nregs>', 'Список nreg через кому')
+  .option('--file <path>', 'Файл з nreg (по одному на рядок)')
+  .option('--concurrency <n>', 'Паралельність reload workers', '2')
+  .option('--batch-size <n>', 'Кількість документів у одному batch', '10')
+  .option('--report-file <path>', 'Шлях до JSON reload report', 'runs/audit/LLDBI_CORPUS_RELOAD_REPORT.json')
+  .option('--resume', 'Продовжити з існуючого reload report')
+  .option('--resume-jobs', 'Продовжити існуючі per-document import jobs якщо є')
+  .action(async (options) => {
+    const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
+    await reloadCorpusBatch({
+      limit: options.limit ? Number(options.limit) : undefined,
+      nregs,
+      file: options.file,
+      concurrency: options.concurrency ? Number(options.concurrency) : 2,
+      batchSize: options.batchSize ? Number(options.batchSize) : 10,
+      reportFile: options.reportFile,
+      resume: Boolean(options.resume),
+      resumeJobs: Boolean(options.resumeJobs),
     });
   });
 

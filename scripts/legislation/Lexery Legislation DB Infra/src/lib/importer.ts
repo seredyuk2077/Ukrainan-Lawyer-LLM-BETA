@@ -21,6 +21,7 @@ import { createSupabaseAdminClient, nowIso } from './supabaseAdmin.js';
 import { createRunContext, logLine, writeJson, uploadRunToR2 } from './runs.js';
 import { updateJobProgress, completeJob, failJob, findResumeJob, ImportStage } from './jobProgress.js';
 import { normalizeCategory, TaxonomySlug } from '../taxonomy/taxonomy.js';
+import { buildActPayloadFromCanonical, buildChunkPayloadsFromCanonical } from './qdrantPayloadBuilder.js';
 
 export interface ImportOptions {
   mode: 'add' | 'update';
@@ -40,12 +41,6 @@ export interface ImportResult {
   qdrant: { acts: number; chunks: number };
   skipped?: boolean;
   run_dir: string;
-}
-
-function toDatredDatetime(datred: string): string {
-  // If already contains time, return as is; else convert YYYY-MM-DD to ISO at midnight UTC
-  if (datred.includes('T')) return datred;
-  return `${datred}T00:00:00Z`;
 }
 
 function buildActsEmbeddingText(params: { title: string; summary: string; keywords: string[] }): string {
@@ -510,62 +505,29 @@ export async function importOne(opts: ImportOptions): Promise<ImportResult> {
 
     // Qdrant upsert
     const qdrantClient = new QdrantRagClient();
+    const payloadDocRow = {
+      category: finalCategory,
+      document_type: canonical.metadata.document_type,
+      document_type_slug: canonical.metadata.document_type_slug || null,
+      r2_key: r2Key,
+      summary: enrichment.summary,
+      keywords: enrichment.keywords,
+      topics: enrichment.topics,
+      aliases: enrichment.aliases,
+      validity_status: canonical.metadata.validity_status || 'unknown',
+      source_status_location: canonical.metadata.source_status_location || 'fallback.no_evidence',
+      source_status_text: canonical.metadata.source_status_text || 'N/A',
+      status_note: canonical.metadata.status_note || 'no_evidence',
+    };
+
     await qdrantClient.upsertAct(
-      {
-        rada_nreg: canonical.metadata.rada_nreg,
-        content_hash: canonical.metadata.content_hash,
-        previous_hash: canonical.metadata.previous_hash || null,
-        title: canonical.metadata.title,
-        category: finalCategory, // category тепер є taxonomy slug (не label)
-        document_type: canonical.metadata.document_type,
-        document_type_slug: canonical.metadata.document_type_slug || undefined, // PHASE 14
-        rada_datred: toDatredDatetime(canonical.metadata.rada_datred),
-        source_url: canonical.metadata.source_url,
-        r2_key: r2Key,
-        summary: enrichment.summary,
-        keywords: enrichment.keywords,
-        topics: enrichment.topics,
-        aliases: enrichment.aliases,
-        // Act Group
-        act_group_key: actGroup.act_group_key,
-        act_part_label: actGroup.act_part_label,
-        // Validity fields (PROD PIPELINE: IDEAL DATA CONTRACT)
-        validity_status: canonical.metadata.validity_status || 'unknown',
-        source_status_location: canonical.metadata.source_status_location || 'fallback.no_evidence',
-        source_status_text: canonical.metadata.source_status_text || 'N/A',
-        status_note: canonical.metadata.status_note || 'no_evidence',
-      },
+      buildActPayloadFromCanonical(canonical, payloadDocRow),
       actsEmbedding.embedding
     );
 
-    const chunkPoints = canonical.content.chunks.map((chunk, i) => ({
-      payload: {
-        rada_nreg: canonical.metadata.rada_nreg,
-        content_hash: canonical.metadata.content_hash,
-        chunk_index: chunk.chunk_index,
-        article_number: chunk.article_number || null,
-        chunk_title: chunk.title || null,
-        unit_number: (chunk as any).unit_number || chunk.article_number || null,
-        unit_type: (chunk as any).unit_type || (chunk.article_number ? 'article' : null),
-        token_count: typeof chunk.token_count === 'number' ? chunk.token_count : null,
-        r2_key: r2Key,
-        json_path: `$.content.chunks[${chunk.chunk_index}].text`,
-        category: finalCategory, // category тепер є taxonomy slug (не label)
-        document_type: canonical.metadata.document_type,
-        document_type_slug: canonical.metadata.document_type_slug || undefined, // PHASE 14
-        rada_datred: toDatredDatetime(canonical.metadata.rada_datred),
-        title: canonical.metadata.title,
-        source_url: canonical.metadata.source_url,
-        previous_hash: canonical.metadata.previous_hash || null,
-        // Act Group
-        act_group_key: actGroup.act_group_key,
-        act_part_label: actGroup.act_part_label,
-        // Validity fields (PROD PIPELINE: IDEAL DATA CONTRACT)
-        validity_status: canonical.metadata.validity_status || 'unknown',
-        source_status_location: canonical.metadata.source_status_location || 'fallback.no_evidence',
-        source_status_text: canonical.metadata.source_status_text || 'N/A',
-        status_note: canonical.metadata.status_note || 'no_evidence',
-      },
+    const chunkPayloads = buildChunkPayloadsFromCanonical(canonical, payloadDocRow);
+    const chunkPoints = chunkPayloads.map((payload, i) => ({
+      payload,
       vector: chunkEmbeddings[i].embedding,
     }));
 

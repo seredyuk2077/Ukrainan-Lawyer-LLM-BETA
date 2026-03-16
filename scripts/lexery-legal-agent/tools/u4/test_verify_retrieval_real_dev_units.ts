@@ -82,6 +82,19 @@ function testRetrievalTraceReadyOnlyWhenTerminal(): void {
   console.log('[OK] retrieval trace scoring waits for terminal status');
 }
 
+function testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode(): void {
+  const retrievalTrace = {
+    meta: {
+      hits_count: 12,
+    },
+  };
+  assert(
+    isRetrievalTraceReadyForScoring('U4_DONE', retrievalTrace as never, false) === true,
+    'retrieval-only mode should score as soon as retrieval_trace is present'
+  );
+  console.log('[OK] retrieval-only scoring can start before terminal status');
+}
+
 function main(): void {
   console.log('verify_retrieval_real_dev gate unit tests\n');
   testSmokeRunRequiresZeroStableFails();
@@ -90,6 +103,7 @@ function main(): void {
   testActFamilyHitUsesDominantFamilySummary();
   testActFamilyHitStillFallsBackToTitleSignals();
   testRetrievalTraceReadyOnlyWhenTerminal();
+  testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode();
   console.log('\nAll verify_retrieval_real_dev gate unit tests passed.');
 }
 

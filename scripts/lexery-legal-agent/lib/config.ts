@@ -147,6 +147,8 @@ export const config = {
   doclistEnabled: process.env.DOCLIST_ENABLED !== 'false',
   forceExpand: process.env.FORCE_EXPAND === 'true',
   gateDecisionVersion: Math.max(1, parseInt(process.env.GATE_DECISION_VERSION || '1', 10)),
+  /** Verifier-only mode: persist gate decision, then mark run completed without enqueuing U6/U9. */
+  u5StopAfterGate: process.env.U5_STOP_AFTER_GATE === 'true',
 
   // U10 Legal Agent (LEX-133; DEV RUN v17: GPT-5.2 via OpenRouter)
   legalAgentModelId:

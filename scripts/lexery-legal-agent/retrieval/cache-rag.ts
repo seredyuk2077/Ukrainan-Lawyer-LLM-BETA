@@ -252,6 +252,8 @@ const SELECTED_ACTS_CAP_LOW = 7;
 const SELECTED_ACTS_MAX = 9;
 /** Chunks per act in within-act retrieval (so relevant article can appear within each act). */
 const TWO_STAGE_CHUNKS_PER_ACT = 35;
+/** Multi-goal retrieval gets a slightly wider per-act chunk budget because each goal is narrower. */
+const TWO_STAGE_CHUNKS_PER_ACT_MULTI_GOAL = 50;
 
 /** Stable sort for act candidates / ScoredActItem: score desc → rada_nreg asc → title asc. */
 function compareScoredActByScore(
@@ -335,6 +337,41 @@ function payloadToRawHit(
     title: typeof p?.title === 'string' ? p.title : undefined,
     metadata: p ? { ...p } : undefined,
   };
+}
+
+async function fetchFilteredChunkHitsByActs(params: {
+  radaNregs: string[];
+  vector: number[];
+  collection: string;
+  limit: number;
+  timeoutMs: number;
+  callCounter?: { count: number };
+  goalId?: string;
+}): Promise<RawHit[]> {
+  const settled = await Promise.allSettled(
+    params.radaNregs.map(async (radaNreg) => {
+      const hits = await qdrantSearch({
+        collection: params.collection,
+        vector: params.vector,
+        limit: params.limit,
+        filter: { must: [{ key: 'rada_nreg', match: { value: radaNreg } }] },
+        timeoutMs: params.timeoutMs,
+        callCounter: params.callCounter,
+      });
+      return hits
+        .map((hit) => payloadToRawHit(hit, 'lldbi_chunks'))
+        .filter((raw) => raw.r2_key && raw.json_path)
+        .map((raw) => ({
+          ...raw,
+          ...(params.goalId ? { goal_id: params.goalId } : {}),
+        }));
+    })
+  );
+  const rawHits: RawHit[] = [];
+  for (const result of settled) {
+    if (result.status === 'fulfilled') rawHits.push(...result.value);
+  }
+  return rawHits;
 }
 
 export interface RunCacheRagInput {
@@ -549,23 +586,16 @@ async function runOneGoal(
     try {
       actNregsForSummary.push(...topNregs);
       const chunkStart = Date.now();
-      for (const nreg of topNregs) {
-        const ch = await qdrantSearch({
-          collection: collections.chunks,
-          vector,
-          limit: TWO_STAGE_CHUNKS_PER_ACT,
-          filter: { must: [{ key: 'rada_nreg', match: { value: nreg } }] },
-          timeoutMs: config.qdrantTimeoutSec * 1000,
-          callCounter,
-        });
-        for (const h of ch) {
-          const raw = payloadToRawHit(h, 'lldbi_chunks');
-          if (raw.r2_key && raw.json_path) {
-            raw.goal_id = goal.id;
-            hits.push(raw);
-          }
-        }
-      }
+      const filteredHits = await fetchFilteredChunkHitsByActs({
+        radaNregs: topNregs,
+        vector,
+        collection: collections.chunks,
+        limit: TWO_STAGE_CHUNKS_PER_ACT_MULTI_GOAL,
+        timeoutMs: config.qdrantTimeoutSec * 1000,
+        callCounter,
+        goalId: goal.id,
+      });
+      hits.push(...filteredHits);
       stepsLatencyMs.push(Date.now() - chunkStart);
       collectionsUsed.push(`${collections.chunks}(filtered)`);
       usedFilteredChunks = true;
@@ -741,13 +771,18 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   type PlannerMeta = { tier: 0 | 1 | 2; model_id?: string; duration_ms?: number; degraded?: boolean; reason_codes?: string[] };
   let plannerMeta: PlannerMeta = { tier: 0 };
   let plannerCalledThisRun = false;
+  const explicitHeuristicMultiGoal =
+    goalSplit.goals.length > 1 &&
+    goalSplit.used_heuristic &&
+    goalSplit.reason_codes.some((code) => code === 'multi_question' || code === 'contrastive_liability_split');
+  const multiGoalNeedsPlanner = goalSplit.goals.length > 1 && !explicitHeuristicMultiGoal;
 
   const plannerTrigger =
     run_id &&
     config.u4PlannerEnabled &&
     !isCircuitOpen() &&
     config.openRouterApiKey &&
-    (goalSplit.goals.length > 1 ||
+    (multiGoalNeedsPlanner ||
       (!!routing_flags?.input_is_large && !!routing_flags?.input_looks_like_contract) ||
       (goalSplit.goals.length === 1 && hasMultiClauseStructure(query)));
 
@@ -1530,25 +1565,18 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         if (topNregs.length > 0) {
           const chunkStart = Date.now();
           // Per-act retrieval: top N chunks per act so relevant article (e.g. ст.130) can appear within act.
-          const filteredChunkHits: { score: number; payload: Record<string, unknown> }[] = [];
-          for (const nreg of topNregs) {
-            const actHits = await qdrantSearch({
-              collection: collections.chunks,
-              vector,
-              limit: TWO_STAGE_CHUNKS_PER_ACT,
-              filter: { must: [{ key: 'rada_nreg', match: { value: nreg } }] },
-              timeoutMs: config.qdrantTimeoutSec * 1000,
-              callCounter: qdrantCallCounter,
-            });
-            filteredChunkHits.push(...actHits);
-          }
+          const filteredChunkHits = await fetchFilteredChunkHitsByActs({
+            radaNregs: topNregs,
+            vector,
+            collection: collections.chunks,
+            limit: TWO_STAGE_CHUNKS_PER_ACT,
+            timeoutMs: config.qdrantTimeoutSec * 1000,
+            callCounter: qdrantCallCounter,
+          });
           stepsLatencyMs.push(Date.now() - chunkStart);
           collectionsUsed.push(`${collections.chunks}(filtered)`);
           usedFilteredChunksSearch = true;
-          for (const h of filteredChunkHits) {
-            const raw = payloadToRawHit(h, 'lldbi_chunks');
-            if (raw.r2_key && raw.json_path) allHits.push(raw);
-          }
+          allHits.push(...filteredChunkHits);
           const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
           allHits.length = 0;
           allHits.push(...deduped);

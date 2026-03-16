@@ -4,10 +4,14 @@
  * Run: pnpm brain:test:rag-units
  */
 import { heuristicGoalSplit, hasMultiClauseStructure } from '../../retrieval/goal-splitter.js';
-import { classifyActKind } from '../../retrieval/selected-acts.js';
+import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
 import { scoreActCandidate, findActByTitleFragment } from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
-import { compareHitsByOrderingScore, computeChunkStructuralScore } from '../../retrieval/chunk-rerank.js';
+import {
+  buildDiscriminativeQueryTokenWeights,
+  compareHitsByOrderingScore,
+  computeChunkStructuralScore,
+} from '../../retrieval/chunk-rerank.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -40,6 +44,25 @@ function testNoTopicBasedMultiGoal(): void {
   const r = heuristicGoalSplit(q, undefined, undefined);
   if (r.goals.length !== 1) throw new Error(`Expected 1 goal when no ? or conjunction structure, got ${r.goals.length}`);
   console.log('[OK] heuristicGoalSplit(no structure) → one goal, no topic regex multi');
+}
+
+function testContrastiveLiabilityGoalSplit(): void {
+  const q = 'Яка відповідальність за ухилення від мобілізації та коли це адміністративна, а коли кримінальна?';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 3) throw new Error(`Expected 3 goals for contrastive liability query, got ${r.goals.length}`);
+  if (!r.reason_codes.includes('contrastive_liability_split')) {
+    throw new Error(`Expected contrastive_liability_split reason code, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  const subqueries = r.goals.map((g) => g.subquery);
+  const administrativeGoal = subqueries.find((subquery) => subquery.includes('адміністративна відповідальність'));
+  const criminalGoal = subqueries.find((subquery) => subquery.includes('кримінальна відповідальність'));
+  if (!administrativeGoal || !administrativeGoal.includes('ухилення від мобілізації') || !administrativeGoal.includes('мобілізації')) {
+    throw new Error(`Expected administrative subquery to keep shared subject and semantic focus, got ${JSON.stringify(subqueries)}`);
+  }
+  if (!criminalGoal || !criminalGoal.includes('ухилення від мобілізації') || !criminalGoal.includes('мобілізації')) {
+    throw new Error(`Expected criminal subquery to keep shared subject and semantic focus, got ${JSON.stringify(subqueries)}`);
+  }
+  console.log('[OK] heuristicGoalSplit(contrastive liability) → shared-subject multi-goal split');
 }
 
 function testHasMultiClauseStructure(): void {
@@ -203,12 +226,103 @@ function testOrderingScoreBeatsRawVectorScore(): void {
   console.log('[OK] ordering score outranks raw vector score in post-rerank sorting');
 }
 
+function testDiscriminativeStructuralScorePrefersMobilizationArticle(): void {
+  const query =
+    'Яка відповідальність за ухилення від мобілізації та коли це адміністративна, а коли кримінальна?';
+  const mobilizationHit = {
+    r2_key: 'legislation/administrative/80731-10.json',
+    json_path: '$.content.chunks[455].text',
+    score: 0.46,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '80731-10',
+    article_number: '2101',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Порушення законодавства про оборону, мобілізаційну підготовку та мобілізацію',
+    },
+  };
+  const genericLiabilityHit = {
+    r2_key: 'legislation/administrative/80731-10.json',
+    json_path: '$.content.chunks[30].text',
+    score: 0.49,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '80731-10',
+    article_number: '35',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Обставини, що обтяжують відповідальність за адміністративне правопорушення',
+    },
+  };
+  const tokenWeights = buildDiscriminativeQueryTokenWeights([mobilizationHit, genericLiabilityHit], query);
+  const mobilizationScore = computeChunkStructuralScore(mobilizationHit, query, tokenWeights);
+  const genericScore = computeChunkStructuralScore(genericLiabilityHit, query, tokenWeights);
+  if (mobilizationScore <= genericScore) {
+    throw new Error(
+      `Expected mobilization-specific article title to outrank generic liability title. mobilization=${mobilizationScore} generic=${genericScore}`
+    );
+  }
+  console.log('[OK] discriminative structural score prefers mobilization-specific article over generic liability title');
+}
+
+function testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder(): void {
+  const query = 'Чи можна звільнити працівника за ініціативою роботодавця?';
+  const hit = {
+    r2_key: 'legislation/labor/322-08.json',
+    json_path: '$.content.chunks[37].text',
+    score: 0.52,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '322-08',
+    article_number: '38',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Розірвання трудового договору, укладеного на невизначений строк, з ініціативи працівника',
+    },
+  };
+  const score = computeChunkStructuralScore(hit, query);
+  if (!Number.isFinite(score)) {
+    throw new Error(`Expected finite structural score for out-of-order token matches, got ${score}`);
+  }
+  console.log('[OK] structural score stays finite when matched title tokens appear out of query order');
+}
+
+function testSingleGoalSelectedActsTailTrim(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      { rada_nreg: '57-95-п', title: 'Правила перетинання державного кордону', score: 0.61, category: 'admin', document_type: 'Постанова КМУ' },
+      { rada_nreg: '2341-14', title: 'Кримінальний кодекс України', score: 0.54, category: 'criminal', document_type: 'Кодекс' },
+      { rada_nreg: '2747-15', title: 'Кодекс адміністративного судочинства України', score: 0.4, category: 'admin', document_type: 'Кодекс' },
+      { rada_nreg: '995_153', title: 'Конвенція про щось', score: 0.53, category: 'civil', document_type: 'Конвенція' },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['57-95-п', '2341-14', '2747-15', '995_153']),
+    actsSearchNregs: ['57-95-п', '2341-14', '2747-15', '995_153'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '57-95-п', count_in_top30: 13, avg_score_in_top30: 0.53, max_score: 0.61 },
+      { rada_nreg: '2341-14', count_in_top30: 8, avg_score_in_top30: 0.49, max_score: 0.54 },
+      { rada_nreg: '2747-15', count_in_top30: 6, avg_score_in_top30: 0.39, max_score: 0.4 },
+      { rada_nreg: '995_153', count_in_top30: 3, avg_score_in_top30: 0.48, max_score: 0.53 },
+    ],
+  });
+  if (result.selected_acts.length !== 3) {
+    throw new Error(`Expected single-goal tail trim to keep 3 acts, got ${result.selected_acts.length}`);
+  }
+  if (result.selected_acts.some((act) => act.rada_nreg === '995_153')) {
+    throw new Error(`Expected weakest tail act to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('SINGLE_GOAL_TAIL_TRIMMED')) {
+    throw new Error(`Expected SINGLE_GOAL_TAIL_TRIMMED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts trims weak single-goal tail acts when top-3 evidence dominates');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
   testGoalSplitMultiQuestion();
   testGoalSplitSingleQueryNoSplit();
   testNoTopicBasedMultiGoal();
+  testContrastiveLiabilityGoalSplit();
   testHasMultiClauseStructure();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
@@ -219,6 +333,9 @@ async function main(): Promise<void> {
   await testDocsOnlyNoSemanticPlanIsNotMarkedDegraded();
   testChunkStructuralScorePrefersBaseArticleTitle();
   testOrderingScoreBeatsRawVectorScore();
+  testDiscriminativeStructuralScorePrefersMobilizationArticle();
+  testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
+  testSingleGoalSelectedActsTailTrim();
   console.log('\nAll RAG unit tests passed.');
 }
 

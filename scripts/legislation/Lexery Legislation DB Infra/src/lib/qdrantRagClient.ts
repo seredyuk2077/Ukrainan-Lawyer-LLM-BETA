@@ -164,6 +164,45 @@ export class QdrantRagClient {
     });
   }
 
+  async overwriteActPayload(payload: ActPayload): Promise<void> {
+    const pointId = generateActPointId(payload.rada_nreg, payload.content_hash);
+
+    await this.client.overwritePayload(COLLECTION_ACTS, {
+      wait: true,
+      points: [pointId],
+      payload,
+    } as any);
+  }
+
+  async overwriteChunkPayloads(
+    chunks: ChunkPayload[],
+    onProgress?: (batchIndex: number, totalBatches: number) => void
+  ): Promise<void> {
+    if (chunks.length === 0) return;
+
+    const batchSize = 64;
+    const totalBatches = Math.ceil(chunks.length / batchSize);
+
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const operations = batch.map((payload) => ({
+        overwrite_payload: {
+          points: [generateChunkPointId(payload.rada_nreg, payload.content_hash, payload.chunk_index)],
+          payload,
+        },
+      }));
+
+      await this.client.batchUpdate(COLLECTION_CHUNKS, {
+        wait: true,
+        operations,
+      } as any);
+
+      if (onProgress) {
+        onProgress(Math.floor(i / batchSize) + 1, totalBatches);
+      }
+    }
+  }
+
   /**
    * Видаляє всі points для документа за rada_nreg та content_hash
    */

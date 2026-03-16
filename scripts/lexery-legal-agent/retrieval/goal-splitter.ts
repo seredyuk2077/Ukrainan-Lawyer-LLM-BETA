@@ -96,6 +96,55 @@ function splitIntoSubqueries(query: string): string[] {
   return [q];
 }
 
+function extractSharedSubject(prefix: string): string {
+  const normalizedPrefix = prefix.normalize('NFC').replace(/\?+$/g, '').trim();
+  const liabilityMatch = normalizedPrefix.match(
+    /(?:яка|який|яке|які)?\s*відповідаль(?:ність|ності)\s+за\s+(.+)$/i
+  );
+  if (liabilityMatch?.[1]?.trim()) return liabilityMatch[1].trim();
+  return normalizedPrefix;
+}
+
+function extractSubjectFocus(subject: string): string {
+  const normalized = subject.normalize('NFC').replace(/\?+$/g, '').trim();
+  const prepositionMatch = normalized.match(
+    /(?:^|[\s,])(?:від|про|щодо|для|при|після|під\s+час|у|в)\s+(.+)$/iu
+  );
+  if (prepositionMatch?.[1]?.trim()) return prepositionMatch[1].trim();
+  const tokens = normalized
+    .split(/[^\p{L}\p{N}-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+  return tokens.slice(-2).join(' ').trim() || normalized;
+}
+
+function buildContrastiveLiabilitySubqueries(query: string): string[] | null {
+  const q = query.normalize('NFC').trim();
+  const match = q.match(
+    /^(.+?)\s+(?:і|та)\s+коли\s+(?:це\s+)?([^,?]+?)\s*,\s*а\s+коли\s+(?:це\s+)?([^?]+?)\??$/i
+  );
+  if (!match) return null;
+  const prefix = match[1]?.trim() ?? '';
+  const leftAspect = match[2]?.trim() ?? '';
+  const rightAspect = match[3]?.trim() ?? '';
+  if (prefix.length < 8 || leftAspect.length < 3 || rightAspect.length < 3) return null;
+
+  const sharedSubject = extractSharedSubject(prefix);
+  const subjectFocus = extractSubjectFocus(sharedSubject);
+  const carriesLiabilityTerm = /відповідаль(?:ність|ності)/i.test(prefix);
+  const aspectQueries = [leftAspect, rightAspect].map((aspect) => {
+    const needsLiabilityTail =
+      carriesLiabilityTerm && !/відповідаль(?:ність|ності)/i.test(aspect);
+    const focusPrefix =
+      subjectFocus && subjectFocus !== sharedSubject ? `${subjectFocus} ` : '';
+    const sharedSuffix =
+      subjectFocus && subjectFocus !== sharedSubject ? ` ${sharedSubject}` : '';
+    return `${focusPrefix}${aspect}${needsLiabilityTail ? ' відповідальність' : ''}${sharedSuffix}`.trim();
+  });
+  const deduped = [...new Set([prefix, ...aspectQueries].map((part) => part.trim()).filter(Boolean))];
+  return deduped.length >= 2 ? deduped.slice(0, GOALS_MAX) : null;
+}
+
 /**
  * Heuristic goal splitter. No LLM. Uses multi_question, multi_topic, routing_flags.
  */
@@ -117,9 +166,12 @@ export function heuristicGoalSplit(
   if (inputLikeContract) reasonCodes.push('input_looks_like_contract');
   if (inputLikeTable) reasonCodes.push('input_looks_like_table');
 
-  const subqueries = splitIntoSubqueries(query);
+  const contrastiveLiabilitySubqueries = buildContrastiveLiabilitySubqueries(query);
+  if (contrastiveLiabilitySubqueries) reasonCodes.push('contrastive_liability_split');
+  const subqueries = contrastiveLiabilitySubqueries ?? splitIntoSubqueries(query);
   // Structure-only: multi-goal only from multiple "?" or contract-like input. Semantic multi-goal from planner/taxonomy.
   const useMultiGoal =
+    (contrastiveLiabilitySubqueries != null && subqueries.length >= 2) ||
     (multiQ && subqueries.length >= 2) ||
     (inputLikeContract && query.length > 100);
 

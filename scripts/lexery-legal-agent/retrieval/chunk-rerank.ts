@@ -31,6 +31,20 @@ const QUERY_STOPWORDS = new Set([
   'який',
   'які',
   'як',
+  'відповідальність',
+  'відповідальності',
+  'адміністративна',
+  'адміністративне',
+  'адміністративної',
+  'адміністративну',
+  'кримінальна',
+  'кримінальне',
+  'кримінальної',
+  'кримінальну',
+  'правопорушення',
+  'правопорушенням',
+  'законодавства',
+  'законодавство',
 ]);
 
 function normalizeToken(token: string): string {
@@ -67,19 +81,58 @@ function collectInformativeTokens(text: string): string[] {
   return tokenize(text).filter((token) => token.length >= 3 && !QUERY_STOPWORDS.has(token));
 }
 
-function countOverlap(queryTokens: string[], titleTokens: string[]): number {
+type MatchSummary = {
+  overlap: number;
+  matchedWeight: number;
+  matchedIndexes: number[];
+};
+
+export type QueryTokenWeightMap = Map<string, number>;
+
+function matchTitleTokens(
+  queryTokens: string[],
+  titleTokens: string[],
+  queryTokenWeights?: QueryTokenWeightMap
+): MatchSummary {
   let overlap = 0;
+  let matchedWeight = 0;
+  const matchedIndexes: number[] = [];
   const usedTitleIdx = new Set<number>();
+  const weights = queryTokenWeights ?? new Map<string, number>();
   for (const queryToken of queryTokens) {
     const matchedIdx = titleTokens.findIndex(
       (titleToken, idx) => !usedTitleIdx.has(idx) && softTokenMatch(queryToken, titleToken)
     );
     if (matchedIdx >= 0) {
       overlap += 1;
+      matchedWeight += weights.get(queryToken) ?? 1;
+      matchedIndexes.push(matchedIdx);
       usedTitleIdx.add(matchedIdx);
     }
   }
-  return overlap;
+  return { overlap, matchedWeight, matchedIndexes };
+}
+
+export function buildDiscriminativeQueryTokenWeights(
+  hits: RawHit[],
+  query: string
+): QueryTokenWeightMap {
+  const queryTokens = [...new Set(collectInformativeTokens(query))];
+  const weights = new Map<string, number>();
+  if (queryTokens.length === 0 || hits.length === 0) return weights;
+  const titleTokenSets = hits.map((hit) => new Set(collectInformativeTokens(getChunkTitle(hit))));
+  const corpusSize = titleTokenSets.length;
+  for (const token of queryTokens) {
+    let docFreq = 0;
+    for (const titleTokens of titleTokenSets) {
+      if ([...titleTokens].some((titleToken) => softTokenMatch(token, titleToken))) {
+        docFreq += 1;
+      }
+    }
+    const idf = 1 + Math.log((corpusSize + 1) / (docFreq + 1));
+    weights.set(token, Number.isFinite(idf) ? idf : 1);
+  }
+  return weights;
 }
 
 export function getHitOrderingScore(hit: RawHit): number {
@@ -119,15 +172,41 @@ export function getChunkUnitType(hit: RawHit): string | null {
   return typeof unitType === 'string' && unitType.trim().length > 0 ? unitType : null;
 }
 
-export function computeChunkStructuralScore(hit: RawHit, query: string): number {
+export function computeChunkStructuralScore(
+  hit: RawHit,
+  query: string,
+  queryTokenWeights?: QueryTokenWeightMap
+): number {
   const queryTokens = collectInformativeTokens(query);
   const chunkTitle = getChunkTitle(hit);
   const titleTokens = collectInformativeTokens(chunkTitle);
-  const overlap = queryTokens.length > 0 && titleTokens.length > 0 ? countOverlap(queryTokens, titleTokens) : 0;
+  const totalQueryWeight =
+    queryTokens.length > 0
+      ? queryTokens.reduce((sum, token) => sum + (queryTokenWeights?.get(token) ?? 1), 0)
+      : 0;
+  const { overlap, matchedWeight, matchedIndexes } =
+    queryTokens.length > 0 && titleTokens.length > 0
+      ? matchTitleTokens(queryTokens, titleTokens, queryTokenWeights)
+      : { overlap: 0, matchedWeight: 0, matchedIndexes: [] };
   const coverage = queryTokens.length > 0 ? overlap / queryTokens.length : 0;
+  const weightedCoverage = totalQueryWeight > 0 ? matchedWeight / totalQueryWeight : 0;
   const precision = titleTokens.length > 0 ? overlap / titleTokens.length : 0;
-  const titleF1 =
-    coverage > 0 && precision > 0 ? (2 * coverage * precision) / (coverage + precision) : 0;
+  const overlapCoverage = queryTokens.length > 0 ? overlap / Math.min(queryTokens.length, 3) : 0;
+  const spanStart = matchedIndexes.length > 0 ? Math.min(...matchedIndexes) : 0;
+  const spanEnd = matchedIndexes.length > 0 ? Math.max(...matchedIndexes) : 0;
+  const compactSpan =
+    overlap >= 2
+      ? overlap / (spanEnd - spanStart + 1)
+      : overlap === 1
+        ? 0.15
+        : 0;
+  const earlyFocus =
+    overlap > 0 && titleTokens.length > 0
+      ? matchedIndexes.reduce(
+          (sum, idx) => sum + (1 - idx / Math.max(1, titleTokens.length - 1)),
+          0
+        ) / overlap
+      : 0;
   const titleIsQuerySubset =
     titleTokens.length > 0 && titleTokens.every((titleToken) => queryTokens.some((queryToken) => softTokenMatch(queryToken, titleToken)))
       ? 1
@@ -136,5 +215,15 @@ export function computeChunkStructuralScore(hit: RawHit, query: string): number 
   const articleShapeBoost = unitType === 'article' ? 0.05 : unitType === 'point' ? 0.02 : 0;
   const articleNumberBoost = hit.article_number ? 0.03 : 0;
   const zeroOverlapPenalty = queryTokens.length > 0 && titleTokens.length > 0 && overlap === 0 ? -0.35 : 0;
-  return zeroOverlapPenalty + articleShapeBoost + articleNumberBoost + titleF1 * 0.32 + titleIsQuerySubset * 0.32;
+  return (
+    zeroOverlapPenalty +
+    articleShapeBoost +
+    articleNumberBoost +
+    weightedCoverage * 0.28 +
+    overlapCoverage * 0.16 +
+    compactSpan * 0.2 +
+    earlyFocus * 0.08 +
+    precision * 0.06 +
+    titleIsQuerySubset * 0.16
+  );
 }

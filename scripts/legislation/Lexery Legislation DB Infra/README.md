@@ -39,6 +39,8 @@ pnpm exec tsx scripts/legislation/admin-cli.ts remove --nreg "322-08" --confirm
 pnpm exec tsx scripts/legislation/admin-cli.ts search --query "трудовий договір" --topk 5
 pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-08"
 pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload --limit 50
+pnpm exec tsx scripts/legislation/admin-cli.ts refresh-qdrant-payload-batch --concurrency 2 --batch-size 25 --resume
+pnpm exec tsx scripts/legislation/admin-cli.ts reload-corpus-batch --concurrency 2 --batch-size 10 --resume
 ```
 
 ---
@@ -65,6 +67,41 @@ pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload --nregs "275
 
 - Аудит перевіряє current-hash presence, старі версії в Qdrant, completeness полів `chunk_title/unit_type/unit_number/article_number/r2_key/json_path`, а також act payload (`summary/keywords/topics/aliases/validity_status`).
 - Практичне правило: якщо audit показує `QDRANT_OLD_*` → спочатку `repair qdrant-dedup`; якщо показує missing/drift на current hash → `update --nreg ... --force`.
+
+### Cheap payload refresh path
+
+- Якщо audit показує тільки payload issues на current-hash points (`QDRANT_MISSING_CHUNK_TITLE`, metadata gaps) і/або старі версії, не обов'язково робити дорогий full re-embed.
+- Для таких кейсів використовуйте:
+- Для таких кейсів використовуйте:
+
+```bash
+pnpm exec tsx scripts/legislation/admin-cli.ts refresh-qdrant-payload-batch --resume
+pnpm exec tsx scripts/legislation/admin-cli.ts refresh-qdrant-payload-batch --nregs "48/26-рг,v0007700-81"
+```
+
+- Команда:
+  - читає audit report або явний список `nreg`
+  - відновлює act/chunk payload з canonical в R2 + Supabase metadata
+  - прибирає old versions у Qdrant
+  - робить fallback на `update --force`, якщо current-hash points неповні або audit показує не лише refreshable issues
+- Операційне правило: перед дорогим corpus-wide `update --force` спочатку спробуйте `refresh-qdrant-payload-batch`; це суттєво дешевше і швидше для чисто payload-driven регресій retrieval.
+
+### Full corpus reload path
+
+- Якщо змінюється canonical parser, embedding strategy, act/chunk payload schema або треба примусово перепакувати весь корпус, використовуйте:
+
+```bash
+pnpm exec tsx scripts/legislation/admin-cli.ts reload-corpus-batch --concurrency 2 --batch-size 10 --resume
+```
+
+- Команда:
+  - читає весь `legislation_documents` корпус або явний список `nreg`
+  - запускає `importOne(mode=update, force=true)` батчами
+  - зберігає resumable report у `runs/audit/LLDBI_CORPUS_RELOAD_REPORT.json`
+  - підходить для контрольованого corpus-wide reindex без ручного циклу по `update --force`
+- Практичне правило:
+  - `refresh-qdrant-payload-batch` для cheap metadata/payload repair
+  - `reload-corpus-batch` для дорогих, але повних reindex кампаній
 
 ---
 
