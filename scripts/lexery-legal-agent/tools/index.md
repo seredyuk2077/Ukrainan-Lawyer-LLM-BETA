@@ -85,6 +85,7 @@
 | `u4/manual_query_run.ts` | `brain:manual:query` | Детальний ручний query run |
 | `u4/manual_run_inspect.ts` | `brain:inspect:run` | Інспекція конкретного `run_id` |
 | `u4/run_one_query.ts` | — | Разовий запуск retrieval case |
+| `u4/query_retrieval_debug.ts` | — | Ad hoc retrieval-focused debug для довільного legal query |
 | `u4/dataset_retrieval_real.ts` | `brain:dataset:retrieval-real` | Збір prod-like queries |
 | `u4/dataset_act_type_audit.ts` | `brain:dataset:act-type-audit` | Snapshot act types |
 | `u4/dataset_lldbi_vocabulary_snapshot.ts` | `brain:dataset:lldbi-vocabulary` | Vocabulary snapshot |

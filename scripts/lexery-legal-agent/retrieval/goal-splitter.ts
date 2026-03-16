@@ -9,8 +9,16 @@ import { config } from '../lib/config.js';
 
 const GOALS_MAX = config.u4GoalsMax;
 
+export function normalizeCategoryKey(category: string | null | undefined): string {
+  return (category ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .trim();
+}
+
 /** Categories that denote "substance" (material law) from taxonomy schema. */
-const SUBSTANCE_CATEGORIES = new Set([
+export const SUBSTANCE_CATEGORIES = new Set([
   'tax_customs',
   'labor_social',
   'labor',
@@ -23,12 +31,25 @@ const SUBSTANCE_CATEGORIES = new Set([
   'corporate',
 ]);
 /** Categories that denote procedure/judiciary from taxonomy schema. */
-const PROCEDURE_CATEGORIES = new Set([
+export const PROCEDURE_CATEGORIES = new Set([
   'judiciary_justice',
   'criminal_procedure',
   'civil_procedure',
   'civil_procedure_administrative',
 ]);
+
+export function isProcedureCategory(category: string | null | undefined): boolean {
+  return PROCEDURE_CATEGORIES.has(normalizeCategoryKey(category));
+}
+
+export function getProcedureCategoryEnvelope(categoryHints: Array<string | null | undefined>): string[] {
+  const normalized = [
+    ...new Set(categoryHints.map((hint) => normalizeCategoryKey(hint)).filter(Boolean)),
+  ];
+  const existingProcedureHints = normalized.filter((hint) => PROCEDURE_CATEGORIES.has(hint));
+  if (existingProcedureHints.length > 0) return existingProcedureHints;
+  return [...PROCEDURE_CATEGORIES];
+}
 
 /** Min support (unique acts per category in taxonomy) to consider for cluster split. */
 const CATEGORY_SPLIT_MIN_SUPPORT = 2;
@@ -72,6 +93,22 @@ export function hasMultiClauseStructure(query: string, minSegmentLength = 5): bo
   return andMatch[1].trim().length >= minSegmentLength && andMatch[2].trim().length >= minSegmentLength;
 }
 
+function injectSharedTailIntoSplit(left: string, right: string): [string, string] {
+  const rightMatch = right.match(
+    /^(.+?)\s+((?:при|після|під\s+час|у\s+разі|в\s+разі|щодо|для|через)\s+.+)$/iu
+  );
+  if (!rightMatch) return [left.trim(), right.trim()];
+
+  const rightHead = rightMatch[1]?.trim() ?? '';
+  const sharedTail = rightMatch[2]?.trim() ?? '';
+  if (!rightHead || !sharedTail) return [left.trim(), right.trim()];
+
+  const normalizedLeft = left.normalize('NFC').toLowerCase();
+  const normalizedTail = sharedTail.normalize('NFC').toLowerCase();
+  const leftWithTail = normalizedLeft.includes(normalizedTail) ? left.trim() : `${left.trim()} ${sharedTail}`.trim();
+  return [leftWithTail, `${rightHead} ${sharedTail}`.trim()];
+}
+
 /** Split query into subqueries by "?" or by conjunctions "і" / "та" before second question. */
 function splitIntoSubqueries(query: string): string[] {
   const q = query.normalize('NFC').trim();
@@ -90,7 +127,8 @@ function splitIntoSubqueries(query: string): string[] {
 
   const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
   if (andMatch && andMatch[1].length >= 5 && andMatch[2].length >= 5) {
-    return [andMatch[1].trim(), andMatch[2].trim()].slice(0, GOALS_MAX);
+    const [left, right] = injectSharedTailIntoSplit(andMatch[1], andMatch[2]);
+    return [left, right].slice(0, GOALS_MAX);
   }
 
   return [q];
@@ -160,9 +198,11 @@ export function heuristicGoalSplit(
   const inputIsLarge = !!routingFlags?.input_is_large;
 
   const multiQ = detectMultiQuestion(query);
+  const multiClause = hasMultiClauseStructure(query);
   const { domains } = getDomainsFromHint(domainHint);
 
   if (multiQ) reasonCodes.push('multi_question');
+  if (multiClause) reasonCodes.push('multi_clause_structure');
   if (inputLikeContract) reasonCodes.push('input_looks_like_contract');
   if (inputLikeTable) reasonCodes.push('input_looks_like_table');
 
@@ -173,6 +213,7 @@ export function heuristicGoalSplit(
   const useMultiGoal =
     (contrastiveLiabilitySubqueries != null && subqueries.length >= 2) ||
     (multiQ && subqueries.length >= 2) ||
+    (multiClause && subqueries.length >= 2) ||
     (inputLikeContract && query.length > 100);
 
   if (!useMultiGoal || subqueries.length === 0) {
@@ -248,10 +289,10 @@ export function tryCategoryClusterSplitV2(
   if (top2Support < top1Support * CATEGORY_SPLIT_MIN_RATIO) return null;
   if (top1Cat === '_' || top2Cat === '_') return null;
 
-  const top1IsSubstance = SUBSTANCE_CATEGORIES.has(top1Cat);
-  const top2IsProcedure = PROCEDURE_CATEGORIES.has(top2Cat);
-  const top2IsSubstance = SUBSTANCE_CATEGORIES.has(top2Cat);
-  const top1IsProcedure = PROCEDURE_CATEGORIES.has(top1Cat);
+  const top1IsSubstance = SUBSTANCE_CATEGORIES.has(normalizeCategoryKey(top1Cat));
+  const top2IsProcedure = PROCEDURE_CATEGORIES.has(normalizeCategoryKey(top2Cat));
+  const top2IsSubstance = SUBSTANCE_CATEGORIES.has(normalizeCategoryKey(top2Cat));
+  const top1IsProcedure = PROCEDURE_CATEGORIES.has(normalizeCategoryKey(top1Cat));
   const substanceCat = top1IsSubstance ? top1Cat : top2IsSubstance ? top2Cat : top1Cat;
   const procedureCat = top2IsProcedure ? top2Cat : top1IsProcedure ? top1Cat : top2Cat;
   if (substanceCat === procedureCat) return null;

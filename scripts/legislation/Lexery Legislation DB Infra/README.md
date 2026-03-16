@@ -92,12 +92,14 @@ pnpm exec tsx scripts/legislation/admin-cli.ts refresh-qdrant-payload-batch --nr
 
 ```bash
 pnpm exec tsx scripts/legislation/admin-cli.ts reload-corpus-batch --concurrency 2 --batch-size 10 --resume
+pnpm exec tsx scripts/legislation/admin-cli.ts reload-corpus-batch --resume --retry-failed
 ```
 
 - Команда:
   - читає весь `legislation_documents` корпус або явний список `nreg`
   - запускає `importOne(mode=update, force=true)` батчами
   - зберігає resumable report у `runs/audit/LLDBI_CORPUS_RELOAD_REPORT.json`
+  - вміє повторно проганяти transient fail-и з того самого report через `--retry-failed`
   - підходить для контрольованого corpus-wide reindex без ручного циклу по `update --force`
 - Практичне правило:
   - `refresh-qdrant-payload-batch` для cheap metadata/payload repair

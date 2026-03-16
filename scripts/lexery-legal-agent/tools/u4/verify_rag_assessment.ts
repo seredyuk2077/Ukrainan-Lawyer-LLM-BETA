@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { config as loadEnv } from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -208,7 +209,16 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log('[verify_rag_assessment] port', port, 'cases', toRun.length, onlyValue ? `(--only=${onlyValue})` : '');
 
-  const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
+  const serverEnv = {
+    ...process.env,
+    BRAIN_PORT: String(port),
+    DEV_API_KEY: DEV_KEY,
+    LEGAL_AGENT_DISABLE_LLM: 'true',
+    U9_META_TRIAGE_ENABLED: 'false',
+    MEMORY_RECENT_ENABLED: 'false',
+    U5_STOP_AFTER_GATE: 'true',
+    REDIS_QUEUE_NAMESPACE: `lexery:verify:rag-assessment:${randomUUID()}`,
+  };
   const child = spawn(
     process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
     ['exec', 'tsx', resolve(process.cwd(), 'scripts/lexery-legal-agent/server.ts')],

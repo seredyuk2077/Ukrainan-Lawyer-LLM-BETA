@@ -127,6 +127,7 @@ export async function reloadCorpusBatch(options?: {
   reportFile?: string;
   resume?: boolean;
   resumeJobs?: boolean;
+  retryFailed?: boolean;
 }): Promise<void> {
   const reportFile = resolve(
     process.cwd(),
@@ -162,7 +163,12 @@ export async function reloadCorpusBatch(options?: {
     }
   }
 
-  const done = new Set([...report.completed, ...report.failed].map((item) => item.rada_nreg));
+  const done = new Set(
+    [
+      ...report.completed,
+      ...(options?.retryFailed ? [] : report.failed),
+    ].map((item) => item.rada_nreg)
+  );
   const pendingDocs = limitedDocs.filter((doc) => !done.has(doc.rada_nreg));
 
   console.log('\n═══════════════════════════════════════════════════════════');
@@ -201,6 +207,9 @@ export async function reloadCorpusBatch(options?: {
           qdrant: result.qdrant,
           run_dir: result.run_dir,
         });
+        if (options?.retryFailed) {
+          report.failed = report.failed.filter((item) => item.rada_nreg !== doc.rada_nreg);
+        }
         await writeReport(reportFile, report);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

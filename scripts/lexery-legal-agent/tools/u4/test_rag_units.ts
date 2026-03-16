@@ -3,7 +3,11 @@
  * No server, no Qdrant/OpenRouter.
  * Run: pnpm brain:test:rag-units
  */
-import { heuristicGoalSplit, hasMultiClauseStructure } from '../../retrieval/goal-splitter.js';
+import {
+  heuristicGoalSplit,
+  hasMultiClauseStructure,
+  getProcedureCategoryEnvelope,
+} from '../../retrieval/goal-splitter.js';
 import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
 import { scoreActCandidate, findActByTitleFragment } from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
@@ -71,6 +75,31 @@ function testHasMultiClauseStructure(): void {
   if (hasMultiClauseStructure('a і b', 10)) throw new Error('Expected false when segments too short');
   if (hasMultiClauseStructure('single clause')) throw new Error('Expected false for single clause');
   console.log('[OK] hasMultiClauseStructure structure-only');
+}
+
+function testGoalSplitMultiClauseWithoutPlannerDependency(): void {
+  const q = 'Податкова перевірка та оскарження її результатів';
+  const r = heuristicGoalSplit(q, 'tax_customs', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected structural multi-clause split, got ${r.goals.length} goals`);
+  }
+  if (!r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Expected multi_clause_structure reason code, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit(multi-clause) produces cheap structural multi-goal split');
+}
+
+function testGoalSplitCarriesSharedTailAcrossClauses(): void {
+  const q = 'Порядок звільнення та компенсації при скороченні';
+  const r = heuristicGoalSplit(q, 'labor_social', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected shared-tail split to produce 2 goals, got ${r.goals.length}`);
+  }
+  const subqueries = r.goals.map((goal) => goal.subquery);
+  if (!subqueries[0]?.includes('при скороченні')) {
+    throw new Error(`Expected first clause to inherit shared tail, got ${JSON.stringify(subqueries)}`);
+  }
+  console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
 }
 
 function testClassifyActKindPrimaryLaw(): void {
@@ -316,6 +345,100 @@ function testSingleGoalSelectedActsTailTrim(): void {
   console.log('[OK] selected_acts trims weak single-goal tail acts when top-3 evidence dominates');
 }
 
+function testProcedureCategoryEnvelopeFallsBackToProcedureFamilies(): void {
+  const envelope = getProcedureCategoryEnvelope(['tax_customs']);
+  const expected = [
+    'judiciary_justice',
+    'criminal_procedure',
+    'civil_procedure',
+    'civil_procedure_administrative',
+  ];
+  for (const category of expected) {
+    if (!envelope.includes(category)) {
+      throw new Error(`Expected procedure envelope to include ${category}, got ${JSON.stringify(envelope)}`);
+    }
+  }
+  console.log('[OK] procedure category envelope injects procedure families when hints are substantive only');
+}
+
+function testSelectedActsAvoidWeakSingleGoalSupportNoise(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '322-08',
+        title: 'Кодекс законів про працю України',
+        score: 2.8,
+        category: 'labor_social',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.9,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_2',
+      },
+      {
+        rada_nreg: '2597-19',
+        title: 'Кодекс України з процедур банкрутства',
+        score: 0.7,
+        category: 'business_corporate',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_2',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['322-08', '80731-10', '2597-19']),
+    actsSearchNregs: ['322-08', '80731-10', '2597-19'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '322-08', count_in_top30: 11, avg_score_in_top30: 0.57, max_score: 0.62 },
+      { rada_nreg: '80731-10', count_in_top30: 1, avg_score_in_top30: 0.31, max_score: 0.31 },
+      { rada_nreg: '2597-19', count_in_top30: 1, avg_score_in_top30: 0.28, max_score: 0.28 },
+    ],
+  });
+  if (result.selected_acts.length !== 1) {
+    throw new Error(`Expected single-goal dominant evidence to keep only one act, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (result.selected_acts[0]?.rada_nreg !== '322-08') {
+    throw new Error(`Expected labor code to remain as sole selected act, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (result.selected_acts_reason_codes.includes('SELECTED_ACTS_DIVERSITY_ENFORCED')) {
+    throw new Error(`Did not expect diversity reason code for blocked weak support noise, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts avoids weak ACTS_2 noise on single-goal dominant evidence');
+}
+
+function testSelectedActsTrimWeakMultiGoalTail(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      { rada_nreg: '322-08', title: 'КЗпП', score: 0.81, category: 'labor_social', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: '100-95-п', title: 'Порядок обчислення середньої заробітної плати', score: 0.62, category: 'labor_social', document_type: 'Постанова КМУ', source_tier: 'ACTS_1' },
+      { rada_nreg: '4651-17', title: 'КПК України', score: 0.59, category: 'criminal_procedure', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: '580-19', title: 'Про Національну поліцію', score: 0.55, category: 'administrative', document_type: 'Закон', source_tier: 'ACTS_1' },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['322-08', '100-95-п', '4651-17', '580-19']),
+    actsSearchNregs: ['322-08', '100-95-п', '4651-17', '580-19'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '322-08', count_in_top30: 12, avg_score_in_top30: 0.58, max_score: 0.61 },
+      { rada_nreg: '100-95-п', count_in_top30: 5, avg_score_in_top30: 0.38, max_score: 0.4 },
+      { rada_nreg: '4651-17', count_in_top30: 2, avg_score_in_top30: 0.33, max_score: 0.34 },
+      { rada_nreg: '580-19', count_in_top30: 1, avg_score_in_top30: 0.31, max_score: 0.31 },
+    ],
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === '580-19')) {
+    throw new Error(`Expected weak multi-goal tail act to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_TAIL_TRIMMED')) {
+    throw new Error(`Expected MULTI_GOAL_TAIL_TRIMMED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts trims weak multi-goal tail noise');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -324,6 +447,8 @@ async function main(): Promise<void> {
   testNoTopicBasedMultiGoal();
   testContrastiveLiabilityGoalSplit();
   testHasMultiClauseStructure();
+  testGoalSplitMultiClauseWithoutPlannerDependency();
+  testGoalSplitCarriesSharedTailAcrossClauses();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
   testClassifyActKindUnknown();
@@ -336,6 +461,9 @@ async function main(): Promise<void> {
   testDiscriminativeStructuralScorePrefersMobilizationArticle();
   testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
   testSingleGoalSelectedActsTailTrim();
+  testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
+  testSelectedActsAvoidWeakSingleGoalSupportNoise();
+  testSelectedActsTrimWeakMultiGoalTail();
   console.log('\nAll RAG unit tests passed.');
 }
 

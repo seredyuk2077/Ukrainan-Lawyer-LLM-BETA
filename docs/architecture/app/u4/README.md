@@ -54,14 +54,17 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/routing-hints-llm.ts` — LLM routing hints (U2→U4 bridge)
 
 **Tools (не входять в runtime):** → `scripts/lexery-legal-agent/tools/u4/`
+- `query_retrieval_debug.ts` — ad hoc retrieval debugger для довільного юридичного запиту (`selected_acts`, top hits, reason_codes, qdrant_calls) у retrieval-focused harness
 
 ## Поточний refactor напрямок
 
 - `cache-rag.ts` лишається orchestration layer, а не місцем для всіх scoring/policy деталей.
 - Ranking/pipeline post-processing виноситься в окремі retrieval-модулі, щоб безпечніше тюнити quality/latency без ризику змішати orchestration, data access і ranking policy в одному файлі.
 - Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
+- Для простих двоклаузних legal queries (`X та Y`) U4 тепер покладається на дешевий structural multi-goal split із shared-tail carry-over, а не на обов'язковий LLM planner override; це зменшує latency/cost і прибирає planner-induced шум у procedural queries.
 - Corpus hygiene теж є частиною retrieval quality: якщо в LLDBI/Qdrant payload відсутні `chunk_title`, `unit_type`, `article_number` або висять старі `content_hash` версії, structural rerank у U4 втрачає точність навіть коли правильний акт уже є в корпусі.
 - Для масового cheap-repair такого drift використовується `refresh-qdrant-payload-batch` у LLDBI admin CLI; full `update --force` потрібен лише коли current-hash points реально відсутні або неповні.
+- Для контрольованого full reindex усього корпуса використовується `reload-corpus-batch`; він працює батчами, має resumable report і підходить для parser/payload/embedding кампаній на тисячах актів. Для повторного прогону transient fail-ів у тому самому report додається `--retry-failed`.
 
 ## ENV
 
@@ -105,6 +108,6 @@ pnpm brain:verify:retrieval-real-dev:fast --flaky-check
 pnpm brain:verify:act-type-audit:fast
 ```
 
-`verify_rag_golden` and `verify:retrieval-real-dev:fast/smoke` now run in a retrieval-focused harness:
+`verify_rag_golden`, `verify:retrieval-real-dev:fast/smoke`, `verify_rag_secondary_acts`, and `verify_rag_assessment` now run in a retrieval-focused harness:
 `U10` is dry-run, `U9` meta-triage is disabled, memory fetch is disabled, verifier runs stop after `U5`, and each verifier gets its own Redis queue namespace.
 This keeps RAG iteration fast, cheaper, and isolated from unrelated queued runs while leaving production runtime behavior unchanged.

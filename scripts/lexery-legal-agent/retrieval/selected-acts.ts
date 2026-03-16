@@ -8,7 +8,8 @@ import type { RawHit } from './types.js';
 
 export const CHUNKS_EVIDENCE_COUNT_THRESHOLD = 3;
 export const CHUNKS_EVIDENCE_SCORE_THRESHOLD = 0.55;
-export const SELECTED_ACTS_MIN = 2;
+export const SELECTED_ACTS_MIN_SINGLE = 1;
+export const SELECTED_ACTS_MIN_MULTI = 2;
 export const SELECTED_ACTS_MAX_OUT = 8;
 
 /** Act kind by structural metadata only (document_type/category). */
@@ -253,6 +254,17 @@ const FAMILY_CONFLICT_TOP2_MIN = 0.45;
  */
 const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION'];
 
+const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
+const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
+
+function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean {
+  if (!item) return false;
+  return (
+    item.count_in_top30 >= DIVERSITY_EVIDENCE_COUNT_MIN ||
+    item.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
+  );
+}
+
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
   const {
     finalHits,
@@ -272,6 +284,12 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       .filter((a) => a.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD)
       .map((a) => a.rada_nreg)
   );
+  const chunksEvidenceByNreg = new Map(
+    chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
+  );
+  const isMultiGoal = (input.goals_summary?.length ?? 0) >= 2;
+  const selectedActsMin = isMultiGoal ? Math.max(SELECTED_ACTS_MIN_MULTI, input.goals_summary.length) : SELECTED_ACTS_MIN_SINGLE;
+  const topCandidateScore = Math.max(...actCandidatesTop.map((candidate) => candidate.score ?? 0), 0);
 
   const candidateByNreg = new Map(actCandidatesTop.map((a) => [a.rada_nreg, a]));
   const reasonCodes: string[] = [];
@@ -299,7 +317,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   // B) Add 1–2 from taxonomy/acts_search not yet covered by chunks (support). Noise control: BILL_DRAFT/CASELAW_OPINION/UNKNOWN only with evidence or doc_type hint.
   const cap = actSelectionLowConfidence ? Math.min(7, SELECTED_ACTS_MAX_OUT) : Math.min(5, SELECTED_ACTS_MAX_OUT);
-  let wantMore = Math.max(SELECTED_ACTS_MIN, Math.min(cap, selected.length + 2)) - selected.length;
+  let wantMore = Math.max(selectedActsMin, Math.min(cap, selected.length + (isMultiGoal ? 2 : 1))) - selected.length;
   let docTypeHintAllowedUsed = false;
   if (wantMore > 0) {
     for (const a of actCandidatesTop) {
@@ -311,7 +329,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (source.length === 0) continue;
       const kind = classifyActKind(a.title ?? '', a.document_type, a.category);
       const hasEvidence = chunksEvidenceNregs.has(a.rada_nreg);
+      const evidence = chunksEvidenceByNreg.get(a.rada_nreg);
+      const hasMaterialEvidence = hasMaterialChunkEvidence(evidence);
       const allowedByHint = documentTypeHintMatches(a.document_type, documentTypeHints ?? []);
+      const supportScoreFloor =
+        topCandidateScore > 0
+          ? topCandidateScore * (isMultiGoal ? MULTI_GOAL_SUPPORT_RATIO_MIN : SINGLE_GOAL_SUPPORT_RATIO_MIN)
+          : 0;
       if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
         if (kind === 'BILL_DRAFT') reasonCodes.push('DRAFT_BLOCKED_NO_EVIDENCE');
         else if (kind === 'CASELAW_OPINION') reasonCodes.push('OPINION_BLOCKED_NO_EVIDENCE');
@@ -334,6 +358,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           continue;
         }
       }
+      const supportEligible =
+        hasMaterialEvidence ||
+        allowedByHint ||
+        (a.source_tier === 'ACTS_1' && (a.score ?? 0) >= supportScoreFloor);
+      if (!supportEligible) continue;
       if (NOISE_KINDS.includes(kind) && allowedByHint && !hasEvidence) docTypeHintAllowedUsed = true;
       selected.push({
         rada_nreg: a.rada_nreg,
@@ -352,7 +381,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   }
 
   // Enforce minimum: if we have fewer than SELECTED_ACTS_MIN, fill from actCandidatesTop
-  while (selected.length < SELECTED_ACTS_MIN && selected.length < actCandidatesTop.length) {
+  while (selected.length < selectedActsMin && selected.length < actCandidatesTop.length) {
     const next = actCandidatesTop.find((a) => !selected.some((s) => s.rada_nreg === a.rada_nreg));
     if (!next) break;
     const source: string[] = [];
@@ -438,6 +467,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     const cand = candidateByNreg.get(s.rada_nreg);
     return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
   }));
+  let diversityGuardAdded = false;
   if (kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN && kindsInSelected.size < 2) {
     // Add one act from candidates with a different kind if possible
     const existingKinds = new Set(kindsInSelected);
@@ -446,6 +476,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (selected.length >= SELECTED_ACTS_MAX_OUT) break;
       const k = classifyActKind(a.title ?? '', a.document_type, a.category);
       if (existingKinds.has(k)) continue;
+      if (!hasMaterialChunkEvidence(chunksEvidenceByNreg.get(a.rada_nreg))) continue;
       const source: string[] = [];
       if (taxonomyNregs.has(a.rada_nreg)) source.push('TAXONOMY');
       if (actsSearchNregs.includes(a.rada_nreg)) source.push('ACTS_SEARCH');
@@ -461,6 +492,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (taxonomyNregs.has(a.rada_nreg)) fromTaxonomy.push(a.rada_nreg);
       if (actsSearchNregs.includes(a.rada_nreg)) fromActsSearch.push(a.rada_nreg);
       reasonCodes.push('DIVERSITY_GUARD_ENFORCED');
+      diversityGuardAdded = true;
       break;
     }
   }
@@ -691,6 +723,33 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  if (isMultiGoal && selected.length > input.goals_summary.length + 1) {
+    const rankedByEvidence = [...selected].sort((left, right) => {
+      const leftEvidence = chunksEvidenceByNreg.get(left.rada_nreg);
+      const rightEvidence = chunksEvidenceByNreg.get(right.rada_nreg);
+      const countDiff =
+        (rightEvidence?.count_in_top30 ?? 0) - (leftEvidence?.count_in_top30 ?? 0);
+      if (countDiff !== 0) return countDiff;
+      const maxScoreDiff =
+        (rightEvidence?.max_score ?? 0) - (leftEvidence?.max_score ?? 0);
+      if (maxScoreDiff !== 0) return maxScoreDiff;
+      return (right.score ?? 0) - (left.score ?? 0);
+    });
+    const targetCount = Math.max(selectedActsMin, input.goals_summary.length + 1);
+    const trailingActs = rankedByEvidence.slice(targetCount);
+    const trailingWeak = trailingActs.every((act) => {
+      const evidence = chunksEvidenceByNreg.get(act.rada_nreg);
+      return !hasMaterialChunkEvidence(evidence) || (evidence?.count_in_top30 ?? 0) <= CHUNKS_EVIDENCE_COUNT_THRESHOLD;
+    });
+    if (trailingActs.length > 0 && trailingWeak) {
+      const keep = new Set(rankedByEvidence.slice(0, targetCount).map((act) => act.rada_nreg));
+      for (let index = selected.length - 1; index >= 0; index -= 1) {
+        if (!keep.has(selected[index].rada_nreg)) selected.splice(index, 1);
+      }
+      reasonCodes.push('MULTI_GOAL_TAIL_TRIMMED');
+    }
+  }
+
   // Enrich selected items for Writer: document_type, category, act_kind, flags (E.2)
   for (const s of selected) {
     const cand = candidateByNreg.get(s.rada_nreg);
@@ -711,7 +770,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   const selectedCapped = selected.slice(0, SELECTED_ACTS_MAX_OUT);
 
   if (fromChunksEvidence.length > 0) reasonCodes.push('SELECTED_ACTS_FROM_CHUNKS_EVIDENCE');
-  if (actCandidatesTop.length >= 2 && !reasonCodes.includes('DIVERSITY_GUARD_ENFORCED')) {
+  if (diversityGuardAdded) {
     reasonCodes.push('SELECTED_ACTS_DIVERSITY_ENFORCED');
   }
 

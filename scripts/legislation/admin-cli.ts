@@ -743,6 +743,7 @@ program
   .option('--report-file <path>', 'Шлях до JSON reload report', 'runs/audit/LLDBI_CORPUS_RELOAD_REPORT.json')
   .option('--resume', 'Продовжити з існуючого reload report')
   .option('--resume-jobs', 'Продовжити існуючі per-document import jobs якщо є')
+  .option('--retry-failed', 'Повторно прогнати failed записи з існуючого reload report')
   .action(async (options) => {
     const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
     await reloadCorpusBatch({
@@ -754,6 +755,7 @@ program
       reportFile: options.reportFile,
       resume: Boolean(options.resume),
       resumeJobs: Boolean(options.resumeJobs),
+      retryFailed: Boolean(options.retryFailed),
     });
   });
 

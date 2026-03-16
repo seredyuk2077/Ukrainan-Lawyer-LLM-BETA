@@ -11,7 +11,12 @@ import { embedQuery } from './embedding.js';
 import { qdrantSearch, getQdrantCollections } from './qdrant-client.js';
 import { config } from '../lib/config.js';
 import { shapeQueryForRetrieval } from './query-shaping.js';
-import { heuristicGoalSplit, tryCategoryClusterSplitV2, hasMultiClauseStructure } from './goal-splitter.js';
+import {
+  heuristicGoalSplit,
+  tryCategoryClusterSplitV2,
+  getProcedureCategoryEnvelope,
+  isProcedureCategory,
+} from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
 import {
   selectActPlannerTier,
@@ -83,6 +88,22 @@ function toLldbiHintsUsed(
     (hu.injected_counts?.by_category_hints ?? 0) + (hu.injected_counts?.by_doc_type_hints ?? 0);
   if (categories_used_count === 0 && doc_types_used_count === 0 && injected_acts_count === 0) return undefined;
   return { categories_used_count, doc_types_used_count, injected_acts_count };
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+}
+
+async function prioritizeProcedureActs(nregs: string[]): Promise<string[]> {
+  if (nregs.length <= 1) return nregs;
+  const metas = await Promise.all(nregs.map((nreg) => getActMeta(nreg)));
+  const aligned: string[] = [];
+  const other: string[] = [];
+  for (let index = 0; index < nregs.length; index += 1) {
+    if (isProcedureCategory(metas[index]?.category)) aligned.push(nregs[index]);
+    else other.push(nregs[index]);
+  }
+  return [...aligned, ...other];
 }
 
 /**
@@ -444,11 +465,18 @@ async function runOneGoal(
   const hits: RawHit[] = [];
   const topK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
   const minScore = searchPlan.thresholds?.min_score ?? config.minScoreThreshold;
+  const goalCategoryHints = uniqueStrings([
+    ...(lldbiHints?.categoryHints ?? []),
+    ...(goal.required_categories ?? []),
+    ...(goal.goal_type === 'procedure'
+      ? getProcedureCategoryEnvelope([...(lldbiHints?.categoryHints ?? []), ...(goal.required_categories ?? [])])
+      : []),
+  ]);
 
   let taxonomyResult = await getTaxonomyCandidates({
     query: goal.subquery,
     domainHint: goal.domain_hint,
-    categoryHints: lldbiHints?.categoryHints,
+    categoryHints: goalCategoryHints,
     documentTypeHints: lldbiHints?.documentTypeHints,
     entities,
   });
@@ -464,6 +492,12 @@ async function runOneGoal(
         rada_nreg_candidates: taxonomyResult.rada_nreg_candidates.filter((n) => allowedNregs.has(n)),
       };
     }
+  }
+  if (goal.goal_type === 'procedure' && taxonomyResult.rada_nreg_candidates.length > 1) {
+    taxonomyResult = {
+      ...taxonomyResult,
+      rada_nreg_candidates: await prioritizeProcedureActs(taxonomyResult.rada_nreg_candidates),
+    };
   }
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
     goal.subquery,
@@ -508,10 +542,16 @@ async function runOneGoal(
         taxonomyResult = await getTaxonomyCandidates({
           query: goal.subquery,
           domainHint: domainBootstrap.chosen_family_key,
-          categoryHints: lldbiHints?.categoryHints,
+          categoryHints: goalCategoryHints,
           documentTypeHints: lldbiHints?.documentTypeHints,
           entities,
         });
+        if (goal.goal_type === 'procedure' && taxonomyResult.rada_nreg_candidates.length > 1) {
+          taxonomyResult = {
+            ...taxonomyResult,
+            rada_nreg_candidates: await prioritizeProcedureActs(taxonomyResult.rada_nreg_candidates),
+          };
+        }
       }
     } catch {
       domainBootstrap = { attempted: true, used: false, reason_codes: ['ACTS_SEARCH_FAILED'] };
@@ -774,7 +814,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const explicitHeuristicMultiGoal =
     goalSplit.goals.length > 1 &&
     goalSplit.used_heuristic &&
-    goalSplit.reason_codes.some((code) => code === 'multi_question' || code === 'contrastive_liability_split');
+    goalSplit.reason_codes.some((code) =>
+      ['multi_question', 'contrastive_liability_split', 'multi_clause_structure'].includes(code)
+    );
   const multiGoalNeedsPlanner = goalSplit.goals.length > 1 && !explicitHeuristicMultiGoal;
 
   const plannerTrigger =
@@ -783,8 +825,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     !isCircuitOpen() &&
     config.openRouterApiKey &&
     (multiGoalNeedsPlanner ||
-      (!!routing_flags?.input_is_large && !!routing_flags?.input_looks_like_contract) ||
-      (goalSplit.goals.length === 1 && hasMultiClauseStructure(query)));
+      (!!routing_flags?.input_is_large && !!routing_flags?.input_looks_like_contract));
 
   if (plannerTrigger) {
     const plannerTier: 1 | 2 = goalSplit.goals.length > 1 ? 2 : 1;

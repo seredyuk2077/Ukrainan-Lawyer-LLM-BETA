@@ -7,11 +7,17 @@
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/embeddings';
 const EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 const EXPECTED_DIMENSIONS = 1536;
+const EMBEDDING_RETRY_ATTEMPTS = 3;
+const EMBEDDING_RETRY_BASE_DELAY_MS = 700;
 
 export interface EmbeddingResult {
   embedding: number[];
   dimensions: number;
   model: string;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -80,6 +86,24 @@ export async function generateEmbedding(
   };
 }
 
+async function generateEmbeddingWithRetry(
+  text: string,
+  apiKey: string,
+  attempts = EMBEDDING_RETRY_ATTEMPTS
+): Promise<EmbeddingResult> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await generateEmbedding(text, apiKey);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= attempts) break;
+      await sleep(EMBEDDING_RETRY_BASE_DELAY_MS * attempt);
+    }
+  }
+  throw lastError ?? new Error('Embedding retry failed');
+}
+
 /**
  * Генерує embeddings для масиву текстів (batch)
  * 
@@ -95,7 +119,7 @@ export async function generateEmbeddingsBatch(
   concurrency: number = 5,
   onProgress?: (batchIndex: number, totalBatches: number, processed: number) => void
 ): Promise<EmbeddingResult[]> {
-  const results: EmbeddingResult[] = [];
+  const results: Array<EmbeddingResult | undefined> = new Array(texts.length);
   const errors: Array<{ index: number; error: Error }> = [];
   
   const totalBatches = Math.ceil(texts.length / concurrency);
@@ -111,9 +135,9 @@ export async function generateEmbeddingsBatch(
       try {
         // Невелика затримка між запитами для rate limiting
         if (batchIndex > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await sleep(100);
         }
-        return await generateEmbedding(text, apiKey);
+        return await generateEmbeddingWithRetry(text, apiKey);
       } catch (error) {
         errors.push({
           index: globalIndex,
@@ -125,9 +149,10 @@ export async function generateEmbeddingsBatch(
 
     const batchResults = await Promise.allSettled(batchPromises);
     
-    for (const result of batchResults) {
+    for (let batchOffset = 0; batchOffset < batchResults.length; batchOffset += 1) {
+      const result = batchResults[batchOffset];
       if (result.status === 'fulfilled') {
-        results.push(result.value);
+        results[i + batchOffset] = result.value;
         processed++;
       }
     }
@@ -139,23 +164,44 @@ export async function generateEmbeddingsBatch(
 
     // Пауза між батчами
     if (i + concurrency < texts.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await sleep(500);
+    }
+  }
+
+  const missingIndexes = results
+    .map((item, index) => (item ? -1 : index))
+    .filter((index) => index >= 0);
+
+  if (missingIndexes.length > 0) {
+    for (const index of missingIndexes) {
+      try {
+        results[index] = await generateEmbeddingWithRetry(texts[index], apiKey, EMBEDDING_RETRY_ATTEMPTS + 1);
+        processed++;
+      } catch (error) {
+        errors.push({
+          index,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
     }
   }
 
   if (errors.length > 0) {
-    console.warn(`⚠️  Помилки при генерації embeddings: ${errors.length} з ${texts.length}`);
-    errors.forEach(({ index, error }) => {
+    const uniqueErrors = new Map<number, Error>();
+    for (const { index, error } of errors) {
+      uniqueErrors.set(index, error);
+    }
+    console.warn(`⚠️  Помилки при генерації embeddings: ${uniqueErrors.size} з ${texts.length}`);
+    uniqueErrors.forEach((error, index) => {
       console.warn(`  [${index}]: ${error.message}`);
     });
   }
 
-  if (results.length !== texts.length) {
+  if (results.some((item) => !item)) {
     throw new Error(
-      `Не всі embeddings згенеровано: ${results.length}/${texts.length}`
+      `Не всі embeddings згенеровано: ${results.filter(Boolean).length}/${texts.length}`
     );
   }
 
-  return results;
+  return results as EmbeddingResult[];
 }
-
