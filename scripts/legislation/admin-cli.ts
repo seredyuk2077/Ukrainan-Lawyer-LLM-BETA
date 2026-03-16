@@ -62,6 +62,7 @@ import { backfillValidity } from './Lexery Legislation DB Infra/src/commands/bac
 import { runValidityRegressionTests } from './Lexery Legislation DB Infra/src/commands/regression-validity.js';
 import { testLatestValidity } from './Lexery Legislation DB Infra/src/commands/test-latest-validity.js';
 import { repairQdrantDedup } from './Lexery Legislation DB Infra/src/commands/repair-qdrant-dedup.js';
+import { auditQdrantPayloadCompleteness } from './Lexery Legislation DB Infra/src/commands/audit-qdrant-payload-completeness.js';
 
 const program = new Command();
 
@@ -684,6 +685,25 @@ program
       file: options.file,
       limit: options.limit ? Number(options.limit) : undefined,
       outputFile: options.output,
+    });
+  });
+
+program
+  .command('audit-qdrant-payload')
+  .description('Аудит payload completeness і version drift для LLDBI Qdrant')
+  .option('--limit <n>', 'Обмежити кількість документів')
+  .option('--nregs <nregs>', 'Список nreg через кому')
+  .option('--concurrency <n>', 'Паралельність audit workers', '4')
+  .option('--output <path>', 'Шлях до JSON файлу', 'runs/audit/QDRANT_PAYLOAD_AUDIT.json')
+  .option('--output-markdown <path>', 'Шлях до Markdown звіту', 'runs/audit/QDRANT_PAYLOAD_AUDIT.md')
+  .action(async (options) => {
+    const nregs = options.nregs ? (options.nregs as string).split(',').map((s: string) => s.trim()) : undefined;
+    await auditQdrantPayloadCompleteness({
+      limit: options.limit ? Number(options.limit) : undefined,
+      nregs,
+      concurrency: options.concurrency ? Number(options.concurrency) : 4,
+      outputFile: options.output,
+      outputMarkdown: options.outputMarkdown,
     });
   });
 

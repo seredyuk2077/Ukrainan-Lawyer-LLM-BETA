@@ -82,11 +82,45 @@ function testEvaluateGoldenCaseRequiresSelectedActsCoverage(): void {
   console.log('[OK] golden eval enforces selected_acts coverage');
 }
 
+function testEvaluateGoldenCaseFailsOnForbiddenSelectedActNoise(): void {
+  const goldenCase: GoldenCase = {
+    id: 'noise',
+    query: '...',
+    description: '...',
+    expected_selected_acts: ['1023-12'],
+    forbidden_selected_act_kinds: ['CASELAW_OPINION'],
+    max_selected_acts: 2,
+  };
+  const trace: RetrievalTraceLike = {
+    hits: [{ rada_nreg: '1023-12', article_number: '9' }],
+    meta: {
+      selected_acts: [
+        { rada_nreg: '1023-12', act_kind: 'PRIMARY_LAW' },
+        { rada_nreg: 'v0007700-08', act_kind: 'CASELAW_OPINION' },
+        { rada_nreg: '435-15', act_kind: 'PRIMARY_LAW' },
+      ],
+      hits_count: 1,
+    },
+  };
+  const result = evaluateGoldenCase(goldenCase, trace);
+  assert(result.pass === false, 'forbidden selected_act noise must fail');
+  assert(
+    result.reasons.some((reason) => reason.includes('forbidden kind CASELAW_OPINION')),
+    'must explain forbidden selected_act kind'
+  );
+  assert(
+    result.reasons.some((reason) => reason.includes('selected_acts size 3 > 2')),
+    'must enforce selected_acts size budget'
+  );
+  console.log('[OK] golden eval enforces forbidden selected_act noise and size budget');
+}
+
 function main(): void {
   console.log('rag_golden_eval unit tests\n');
   testFindExpectationRankNormalizesHyphenatedArticles();
   testEvaluateGoldenCaseFailsOnLatePrimaryHit();
   testEvaluateGoldenCaseRequiresSelectedActsCoverage();
+  testEvaluateGoldenCaseFailsOnForbiddenSelectedActNoise();
   console.log('\nAll rag_golden_eval unit tests passed.');
 }
 

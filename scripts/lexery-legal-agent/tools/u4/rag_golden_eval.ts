@@ -11,6 +11,9 @@ export interface GoldenCase {
   expected_primary?: GoldenHitExpectation;
   expected_hits?: GoldenHitExpectation[];
   expected_selected_acts?: string[];
+  forbidden_selected_acts?: string[];
+  forbidden_selected_act_kinds?: string[];
+  max_selected_acts?: number;
 }
 
 export interface RetrievalHitLike {
@@ -24,7 +27,7 @@ export interface RetrievalHitLike {
 export interface RetrievalTraceLike {
   hits?: RetrievalHitLike[];
   meta?: {
-    selected_acts?: Array<{ rada_nreg?: string; act_title?: string }>;
+    selected_acts?: Array<{ rada_nreg?: string; act_title?: string; act_kind?: string }>;
     hits_count?: number;
     low_confidence?: boolean;
   };
@@ -79,6 +82,11 @@ export function evaluateGoldenCase(
   const selectedActNregs = new Set(
     selectedActs.map((act) => act.rada_nreg ?? '').filter((nreg) => nreg.length > 0)
   );
+  const selectedActKinds = new Set(
+    selectedActs
+      .map((act) => String(act.act_kind ?? '').trim().toUpperCase())
+      .filter((actKind) => actKind.length > 0)
+  );
 
   let primaryRank: number | undefined;
   if (goldenCase.expected_primary) {
@@ -112,6 +120,27 @@ export function evaluateGoldenCase(
     } else {
       reasons.push(`selected_acts missing ${expectedNreg}`);
     }
+  }
+
+  for (const forbiddenNreg of goldenCase.forbidden_selected_acts ?? []) {
+    if (selectedActNregs.has(forbiddenNreg)) {
+      reasons.push(`selected_acts contains forbidden ${forbiddenNreg}`);
+    }
+  }
+
+  for (const forbiddenKind of goldenCase.forbidden_selected_act_kinds ?? []) {
+    const normalizedKind = String(forbiddenKind).trim().toUpperCase();
+    if (normalizedKind.length > 0 && selectedActKinds.has(normalizedKind)) {
+      reasons.push(`selected_acts contains forbidden kind ${normalizedKind}`);
+    }
+  }
+
+  if (
+    typeof goldenCase.max_selected_acts === 'number' &&
+    goldenCase.max_selected_acts >= 0 &&
+    selectedActs.length > goldenCase.max_selected_acts
+  ) {
+    reasons.push(`selected_acts size ${selectedActs.length} > ${goldenCase.max_selected_acts}`);
   }
 
   return {

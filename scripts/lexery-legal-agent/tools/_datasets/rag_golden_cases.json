@@ -71,5 +71,27 @@
       }
     ],
     "expected_selected_acts": ["2341-14", "80731-10"]
+  },
+  {
+    "id": "avg_salary_dismissal",
+    "query": "Як правильно обчислити середню заробітну плату при звільненні з роботи для розрахунку відпускних?",
+    "description": "Трудовий multi-act кейс: порядок КМУ має бути попереду, а КЗпП залишатися у selected_acts як supporting law.",
+    "expected_primary": {
+      "rada_nreg": "100-95-п",
+      "max_rank": 2
+    },
+    "expected_selected_acts": ["100-95-п", "322-08"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "border_crossing_martial_law",
+    "query": "Чи може в умовах воєнного стану перетнути кордон чоловік 45 років, який є військовослужбовцем?",
+    "description": "Прикордонний secondary-act кейс: Правила перетинання кордону мають бути основним актом у видачі.",
+    "expected_primary": {
+      "rada_nreg": "57-95-п",
+      "max_rank": 2
+    },
+    "expected_selected_acts": ["57-95-п"],
+    "max_selected_acts": 3
   }
 ]

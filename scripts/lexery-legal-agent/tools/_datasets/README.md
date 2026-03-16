@@ -16,6 +16,7 @@
 | `reference_expansion_cases.json` | verify_retrieval_act_type_audit | Кейси для reference expansion |
 | `special_multiact_cases.json` | verify_retrieval_act_type_audit | Мульти-актові спеціальні кейси |
 | `rag_assessment_cases.json` | verify_rag_assessment | RAG assessment кейси (explicit/implicit/natural) |
+| `rag_golden_cases.json` | verify_rag_golden | Strong legal golden cases з article/rank assertions і selected_acts budgets |
 | `rag_secondary_acts_cases.json` | verify_rag_secondary_acts | Кейси для вторинних актів |
 | `u2_domain_audit_cases.json` | verify_u2_domain_audit | U2 domain audit кейси |
 | `u2_routing_audit_cases.json` | verify_u2_routing_audit | U2 routing audit кейси |

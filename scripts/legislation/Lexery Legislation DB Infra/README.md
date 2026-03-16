@@ -38,6 +38,7 @@ pnpm exec tsx scripts/legislation/admin-cli.ts inspect --nreg "322-08"
 pnpm exec tsx scripts/legislation/admin-cli.ts remove --nreg "322-08" --confirm
 pnpm exec tsx scripts/legislation/admin-cli.ts search --query "трудовий договір" --topk 5
 pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-08"
+pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload --limit 50
 ```
 
 ---
@@ -55,6 +56,15 @@ pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-0
 
 - Операційне правило: після масових update/import batch треба або переконатися, що importer завершив cleanup, або явно прогнати `repair qdrant-dedup` для підозрілих актів.
 - Якщо LLDBI corpus розширюється, canonical/R2, Supabase metadata і Qdrant мають залишатися в sync. Старі версії в Qdrant не можна залишати, бо вони прямо збільшують retrieval noise.
+- Для системного контролю payload completeness і drift використовуйте:
+
+```bash
+pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload
+pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload --nregs "2755-17,z1257-07"
+```
+
+- Аудит перевіряє current-hash presence, старі версії в Qdrant, completeness полів `chunk_title/unit_type/unit_number/article_number/r2_key/json_path`, а також act payload (`summary/keywords/topics/aliases/validity_status`).
+- Практичне правило: якщо audit показує `QDRANT_OLD_*` → спочатку `repair qdrant-dedup`; якщо показує missing/drift на current hash → `update --nreg ... --force`.
 
 ---
 
