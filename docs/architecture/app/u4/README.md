@@ -35,6 +35,8 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 **Runtime (src):**
 - `scripts/lexery-legal-agent/retrieval/types.ts` — TypeScript типи + Zod схеми (RawHit, RetrievalTrace, MemoryRef)
 - `scripts/lexery-legal-agent/retrieval/cache-rag.ts` — runCacheRag: головний pipeline (embed → search → score → select → memory)
+- `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap
+- `scripts/lexery-legal-agent/retrieval/chunk-rerank.ts` — structural chunk scoring (`ordering_score`, title/article relevance)
 - `scripts/lexery-legal-agent/retrieval/consumer.ts` — handleU4Event: load run, runCacheRag, persist trace, emit metrics, enqueue U5
 - `scripts/lexery-legal-agent/retrieval/qdrant-client.ts` — Qdrant search, timeout + 1 retry
 - `scripts/lexery-legal-agent/retrieval/embedding.ts` — embedQuery (OpenRouter OPENROUTER_API_KEY_ONLINE, 1536d)
@@ -52,6 +54,12 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/routing-hints-llm.ts` — LLM routing hints (U2→U4 bridge)
 
 **Tools (не входять в runtime):** → `scripts/lexery-legal-agent/tools/u4/`
+
+## Поточний refactor напрямок
+
+- `cache-rag.ts` лишається orchestration layer, а не місцем для всіх scoring/policy деталей.
+- Ranking/pipeline post-processing виноситься в окремі retrieval-модулі, щоб безпечніше тюнити quality/latency без ризику змішати orchestration, data access і ranking policy в одному файлі.
+- Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
 
 ## ENV
 

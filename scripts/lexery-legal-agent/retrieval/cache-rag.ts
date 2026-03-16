@@ -61,10 +61,14 @@ import {
 } from '../gateway/observability.js';
 import { extractArticleRefsStructured } from '../lib/articleRefs.js';
 import {
-  compareHitsByOrderingScore,
-  computeChunkStructuralScore,
-  getHitOrderingScore,
-} from './chunk-rerank.js';
+  applyCoverageFusion,
+  applyDiversityCap,
+  applyHybridOrdering,
+  applyNoisePenalty,
+  compareRawHitByScore,
+  dedupeHits,
+  NOISE_PENALTY_POLICY_VERSION,
+} from './hit-ranking.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -248,48 +252,6 @@ const SELECTED_ACTS_CAP_LOW = 7;
 const SELECTED_ACTS_MAX = 9;
 /** Chunks per act in within-act retrieval (so relevant article can appear within each act). */
 const TWO_STAGE_CHUNKS_PER_ACT = 35;
-/** Diversity cap: max hits from same act in top N (avoids one act dominating). */
-const DIVERSITY_TOP_N = 25;
-// Limit same-act dominance: max 8/25 in top positions (~27% of evidence window).
-// Reduced from 16 which allowed 16/30=53% slots to one act (КПК dominated task12, 2790-12 dominated task1).
-const DIVERSITY_MAX_SAME_ACT = 8;
-
-/** Stable tie-breaker: score desc → rada_nreg asc → r2_key asc → json_path asc. Same input => same order. */
-function compareRawHitByScore(a: RawHit, b: RawHit): number {
-  const sa = a.score ?? 0;
-  const sb = b.score ?? 0;
-  if (sb !== sa) return sb - sa;
-  const na = (a.rada_nreg ?? '').trim();
-  const nb = (b.rada_nreg ?? '').trim();
-  if (na !== nb) return na.localeCompare(nb);
-  const ra = (a.r2_key ?? '').trim();
-  const rb = (b.r2_key ?? '').trim();
-  if (ra !== rb) return ra.localeCompare(rb);
-  const ja = (a.json_path ?? '').trim();
-  const jb = (b.json_path ?? '').trim();
-  return ja.localeCompare(jb);
-}
-
-function applyHybridOrdering(
-  hits: RawHit[],
-  query: string,
-  taxonomy: TaxonomyCandidatesResult,
-  entities: { act_abbrev?: string; article_ref?: string }[] | undefined
-): void {
-  for (const hit of hits) {
-    hit.ordering_score = hybridScore(hit, query, taxonomy, entities);
-  }
-  hits.sort(compareHitsByOrderingScore);
-}
-
-/** Stable tie-breaker for effectiveScore (noise penalty): effectiveScore desc → hit keys. */
-function compareByEffectiveScore(
-  a: { hit: RawHit; effectiveScore: number },
-  b: { hit: RawHit; effectiveScore: number }
-): number {
-  if (b.effectiveScore !== a.effectiveScore) return b.effectiveScore - a.effectiveScore;
-  return compareHitsByOrderingScore(a.hit, b.hit);
-}
 
 /** Stable sort for act candidates / ScoredActItem: score desc → rada_nreg asc → title asc. */
 function compareScoredActByScore(
@@ -420,160 +382,6 @@ export interface RunCacheRagResult {
     global_semantic_count?: number;
     fallback_conversation_ids?: string[];
   };
-}
-
-function dedupeHits(hits: RawHit[]): RawHit[] {
-  const seen = new Set<string>();
-  return hits.filter((h) => {
-    const key = `${h.r2_key}:${h.json_path}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-/**
- * Coverage fusion: in top N ensure at least minPerGoal hits from each goal (when available).
- * Order: top minPerGoal per goal by score, then fill rest by score.
- */
-function applyCoverageFusion(
-  hits: RawHit[],
-  goals: EvidenceGoal[],
-  topN: number,
-  minPerGoal: number
-): RawHit[] {
-  const byGoal = new Map<string, RawHit[]>();
-  for (const h of hits) {
-    const gid = h.goal_id ?? '_single';
-    if (!byGoal.has(gid)) byGoal.set(gid, []);
-    byGoal.get(gid)!.push(h);
-  }
-  for (const [_, list] of byGoal) list.sort(compareHitsByOrderingScore);
-
-  const coveredKeys = new Set<string>();
-  const covered: RawHit[] = [];
-  for (const g of goals) {
-    const list = byGoal.get(g.id) ?? [];
-    const take = Math.min(minPerGoal, list.length);
-    for (let i = 0; i < take; i++) {
-      const h = list[i];
-      const key = `${h.r2_key}:${h.json_path}`;
-      if (!coveredKeys.has(key)) {
-        coveredKeys.add(key);
-        covered.push(h);
-      }
-    }
-  }
-  covered.sort(compareHitsByOrderingScore);
-  const remaining = hits.filter((h) => !coveredKeys.has(`${h.r2_key}:${h.json_path}`));
-  remaining.sort(compareHitsByOrderingScore);
-  return [...covered, ...remaining].slice(0, topN);
-}
-
-const NOISE_PENALTY = 0.15;
-const NOISE_PENALTY_POLICY_VERSION = 2;
-/** Structural noise: CASELAW_OPINION detected via document_type metadata (data-driven, no title regex). */
-
-export interface NoisePenaltyResult {
-  hits: RawHit[];
-  penaltyCount: number;
-  guardBlockedCount: number;
-  guardReasonCodes: string[];
-}
-
-function applyNoisePenalty(hits: RawHit[], topNForGuard: number = 30): NoisePenaltyResult {
-  let penaltyCount = 0;
-  let guardBlockedCount = 0;
-  const guardReasonCodes: string[] = [];
-  const topN = Math.min(topNForGuard, hits.length);
-  const topHits = hits.slice(0, topN);
-  const goalCountInTopN = new Map<string, number>();
-  for (const h of topHits) {
-    const gid = h.goal_id ?? '_single';
-    goalCountInTopN.set(gid, (goalCountInTopN.get(gid) ?? 0) + 1);
-  }
-  const withPenalty = hits.map((h) => {
-    // Data-driven noise detection: CASELAW_OPINION via document_type (no title regex)
-    const kind = classifyActKind(h.title ?? '', h.document_type ?? undefined, h.category ?? undefined);
-    const isNoise = kind === 'CASELAW_OPINION';
-    const score = getHitOrderingScore(h);
-    if (!isNoise) return { hit: h, effectiveScore: score };
-    const gid = h.goal_id ?? '_single';
-    const onlySourceForGoal = (goalCountInTopN.get(gid) ?? 0) <= 1;
-    if (onlySourceForGoal) {
-      guardBlockedCount += 1;
-      if (!guardReasonCodes.includes('ONLY_SOURCE_FOR_GOAL')) guardReasonCodes.push('ONLY_SOURCE_FOR_GOAL');
-      return { hit: h, effectiveScore: score };
-    }
-    penaltyCount += 1;
-    return { hit: h, effectiveScore: Math.max(0, score - NOISE_PENALTY) };
-  });
-  withPenalty.sort(compareByEffectiveScore);
-  return {
-    hits: withPenalty.map((x) => x.hit),
-    penaltyCount,
-    guardBlockedCount,
-    guardReasonCodes,
-  };
-}
-
-/**
- * Diversity cap: in top DIVERSITY_TOP_N, allow at most DIVERSITY_MAX_SAME_ACT from same rada_nreg.
- * Pushes excess same-act hits after top N (generalizable; no act name hardcode).
- */
-function applyDiversityCap(hits: RawHit[]): RawHit[] {
-  const inTop: RawHit[] = [];
-  const afterTop: RawHit[] = [];
-  const countByAct = new Map<string, number>();
-  for (let i = 0; i < hits.length; i++) {
-    const h = hits[i];
-    const nreg = h.rada_nreg ?? '_unknown';
-    const count = countByAct.get(nreg) ?? 0;
-    if (inTop.length < DIVERSITY_TOP_N && count < DIVERSITY_MAX_SAME_ACT) {
-      inTop.push(h);
-      countByAct.set(nreg, count + 1);
-    } else {
-      afterTop.push(h);
-    }
-  }
-  return [...inTop, ...afterTop];
-}
-
-/**
- * Hybrid score (no LLM): vector + alias + article_ref + category_hint.
- * Used for ordering only; hit.score stays the vector score for audit.
- * Title overlap removed: prefer no lexical prior over query-vs-title token guessing.
- */
-function hybridScore(
-  hit: RawHit,
-  query: string,
-  taxonomy: TaxonomyCandidatesResult,
-  entities: { act_abbrev?: string; article_ref?: string }[] | undefined
-): number {
-  const vec = Math.min(1, Math.max(0, hit.score));
-  const aliasMatch =
-    hit.rada_nreg && taxonomy.rada_nreg_candidates.includes(hit.rada_nreg) ? 1 : 0;
-  const articleMatch =
-    entities?.some(
-      (e) => e?.article_ref && hit.article_number !== null && hit.article_number === e.article_ref
-    )
-      ? 1
-      : 0;
-  const categoryHint =
-    hit.rada_nreg &&
-    taxonomy.alias_hits.some(
-      (a) => a.rada_nreg === hit.rada_nreg && a.category && taxonomy.category_hints.includes(a.category)
-    )
-      ? 1
-      : 0;
-  const structuralScore = computeChunkStructuralScore(hit, query);
-  return (
-    W_VEC * vec +
-    W_ALIAS * aliasMatch +
-    W_ARTICLE * articleMatch +
-    W_CATEGORY * categoryHint +
-    W_STRUCTURAL * structuralScore
-  );
 }
 
 /** Single-goal retrieval: embed + taxonomy + optional domain bootstrap + steps + within-act + hybrid sort. Returns hits with goal_id set. */
@@ -1834,7 +1642,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         if (taxonomyResult.debug.source === 'supabase') {
           applyHybridOrdering(deduped, query, taxonomyResult, entities);
         } else {
-          deduped.sort(compareHitsByOrderingScore);
+          deduped.sort(compareRawHitByScore);
         }
         allHits.length = 0;
         allHits.push(...deduped);
@@ -1919,7 +1727,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         if (taxonomyResult.debug.source === 'supabase') {
           applyHybridOrdering(deduped, query, taxonomyResult, entities);
         } else {
-          deduped.sort(compareHitsByOrderingScore);
+          deduped.sort(compareRawHitByScore);
         }
         allHits.length = 0;
         allHits.push(...deduped);

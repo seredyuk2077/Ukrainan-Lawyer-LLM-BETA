@@ -37,7 +37,24 @@ pnpm exec tsx scripts/legislation/admin-cli.ts verify --nreg "322-08" --write-he
 pnpm exec tsx scripts/legislation/admin-cli.ts inspect --nreg "322-08"
 pnpm exec tsx scripts/legislation/admin-cli.ts remove --nreg "322-08" --confirm
 pnpm exec tsx scripts/legislation/admin-cli.ts search --query "трудовий договір" --topk 5
+pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-08"
 ```
+
+---
+
+## Qdrant hygiene / version control
+
+- `update --nreg ... --force` переіндексовує canonical поточну версію документа.
+- Після успішного reindex importer автоматично видаляє старі Qdrant points з тим самим `rada_nreg`, але іншим `content_hash`.
+- Для ручного контролю доступна команда:
+
+```bash
+pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-08" --dry-run
+pnpm exec tsx scripts/legislation/admin-cli.ts repair qdrant-dedup --nreg "322-08"
+```
+
+- Операційне правило: після масових update/import batch треба або переконатися, що importer завершив cleanup, або явно прогнати `repair qdrant-dedup` для підозрілих актів.
+- Якщо LLDBI corpus розширюється, canonical/R2, Supabase metadata і Qdrant мають залишатися в sync. Старі версії в Qdrant не можна залишати, бо вони прямо збільшують retrieval noise.
 
 ---
 
