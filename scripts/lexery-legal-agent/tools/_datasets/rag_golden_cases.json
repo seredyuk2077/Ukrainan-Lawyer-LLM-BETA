@@ -1,0 +1,75 @@
+[
+  {
+    "id": "dui_first_offense",
+    "query": "Яка відповідальність за керування авто в стані алкогольного сп'яніння вперше?",
+    "description": "Базовий адміністративний кейс: очікуємо ст. 130 КУпАП високо в ранжуванні.",
+    "expected_primary": {
+      "rada_nreg": "80731-10",
+      "article_numbers": ["130"],
+      "max_rank": 2
+    },
+    "expected_selected_acts": ["80731-10"]
+  },
+  {
+    "id": "premeditated_murder",
+    "query": "Що таке умисне вбивство і яке покарання?",
+    "description": "Кримінальне право: ст. 115 ККУ має бути на самому верху.",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 2
+    },
+    "expected_selected_acts": ["2341-14"]
+  },
+  {
+    "id": "dismissal_during_sick_leave",
+    "query": "Чи можна звільнити працівника під час лікарняного за ініціативою роботодавця?",
+    "description": "Трудове право: КЗпП повинен домінувати у видачі.",
+    "expected_primary": {
+      "rada_nreg": "322-08",
+      "article_numbers": ["40"],
+      "max_rank": 4
+    },
+    "expected_selected_acts": ["322-08"]
+  },
+  {
+    "id": "tax_notice_appeal",
+    "query": "Який строк оскарження податкового повідомлення-рішення та чи можна одразу йти до суду?",
+    "description": "Податковий + адміністративний процес: ПКУ і КАСУ обидва потрібні.",
+    "expected_primary": {
+      "rada_nreg": "2755-17",
+      "article_numbers": ["56", "58"],
+      "max_rank": 4
+    },
+    "expected_selected_acts": ["2755-17", "2747-15"]
+  },
+  {
+    "id": "spousal_consent_apartment_sale",
+    "query": "Чи потрібна згода другого з подружжя на продаж квартири, купленої у шлюбі?",
+    "description": "Сімейне право: норми СКУ мають бути попереду, ЦКУ як supporting act.",
+    "expected_primary": {
+      "rada_nreg": "2947-14",
+      "article_numbers": ["60", "65"],
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["2947-14", "435-15"]
+  },
+  {
+    "id": "mobilization_evasion_split",
+    "query": "Яка відповідальність за ухилення від мобілізації та коли це адміністративна, а коли кримінальна?",
+    "description": "Багатоактний кейс: має покривати і ККУ, і КУпАП, без випадкових другорядних актів у фокусі.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2341-14",
+        "article_numbers": ["336"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "80731-10",
+        "article_numbers": ["2101"],
+        "max_rank": 10
+      }
+    ],
+    "expected_selected_acts": ["2341-14", "80731-10"]
+  }
+]
