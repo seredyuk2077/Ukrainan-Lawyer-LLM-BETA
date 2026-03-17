@@ -213,6 +213,10 @@ function categoryToFamilyKey(category: string | undefined | null): string {
     .trim() || 'unknown';
 }
 
+function pushReasonCode(reasonCodes: string[], code: string): void {
+  if (!reasonCodes.includes(code)) reasonCodes.push(code);
+}
+
 function toKey(s: string): string {
   return (s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -256,6 +260,8 @@ const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION'];
 
 const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
 const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
+const CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE = 5;
+const CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE = 0.68;
 
 function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
@@ -263,6 +269,31 @@ function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean
     item.count_in_top30 >= DIVERSITY_EVIDENCE_COUNT_MIN ||
     item.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
   );
+}
+
+function isFamilyAlignedSupportAct(
+  category: string | undefined,
+  familyEvidence: FamilyEvidenceSummaryInput | undefined
+): boolean {
+  if (!familyEvidence) return true;
+  const familyKey = categoryToFamilyKey(category);
+  if (!familyKey || familyKey === 'unknown') return true;
+  if (
+    familyEvidence.dominant_family_key &&
+    familyEvidence.family_confidence >= FAMILY_GUARD_CONFIDENCE_THRESHOLD &&
+    !familyEvidence.family_conflict
+  ) {
+    return familyKey === familyEvidence.dominant_family_key;
+  }
+  if (
+    familyEvidence.family_conflict &&
+    familyEvidence.top2.length >= 2 &&
+    familyEvidence.top2[0].support_score >= FAMILY_CONFLICT_TOP2_MIN &&
+    familyEvidence.top2[1].support_score >= FAMILY_CONFLICT_TOP2_MIN
+  ) {
+    return familyEvidence.top2.some((item) => item.family_key === familyKey);
+  }
+  return true;
 }
 
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
@@ -304,6 +335,17 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     if (!chunksEvidenceNregs.has(e.rada_nreg)) continue;
     if (selected.some((s) => s.rada_nreg === e.rada_nreg)) continue;
     const cand = candidateByNreg.get(e.rada_nreg);
+    const kind = classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category);
+    const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
+    const allowCrossFamilyEvidence =
+      familyAligned ||
+      kind !== 'PRIMARY_LAW' ||
+      e.count_in_top30 >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
+      e.max_score >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
+    if (!allowCrossFamilyEvidence) {
+      pushReasonCode(reasonCodes, 'CHUNKS_FAMILY_MISMATCH_DEMOTED');
+      continue;
+    }
     selected.push({
       rada_nreg: e.rada_nreg,
       act_title: cand?.title,
@@ -332,18 +374,22 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       const evidence = chunksEvidenceByNreg.get(a.rada_nreg);
       const hasMaterialEvidence = hasMaterialChunkEvidence(evidence);
       const allowedByHint = documentTypeHintMatches(a.document_type, documentTypeHints ?? []);
+      const familyAligned = isFamilyAlignedSupportAct(a.category, familyEvidence);
+      const crossFamilyEvidenceOverride =
+        (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
+        (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
       const supportScoreFloor =
         topCandidateScore > 0
           ? topCandidateScore * (isMultiGoal ? MULTI_GOAL_SUPPORT_RATIO_MIN : SINGLE_GOAL_SUPPORT_RATIO_MIN)
           : 0;
       if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
-        if (kind === 'BILL_DRAFT') reasonCodes.push('DRAFT_BLOCKED_NO_EVIDENCE');
-        else if (kind === 'CASELAW_OPINION') reasonCodes.push('OPINION_BLOCKED_NO_EVIDENCE');
+        if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_NO_EVIDENCE');
+        else if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
         continue;
       }
       // BILL_DRAFT: allow only when query/hints are project-related (or has evidence).
       if (kind === 'BILL_DRAFT' && !hasEvidence && (!allowedByHint || !hintsAllowDraft(documentTypeHints ?? []))) {
-        reasonCodes.push('DRAFT_BLOCKED_NO_EVIDENCE');
+        pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_NO_EVIDENCE');
         continue;
       }
       // CASELAW_OPINION: allow only with strong evidence (count>=3) or when no PRIMARY_LAW in candidates.
@@ -354,9 +400,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           (x) => classifyActKind(x.title ?? '', x.document_type, x.category) === 'PRIMARY_LAW'
         );
         if (!strongEvidence && hasPrimaryInCandidates) {
-          reasonCodes.push('OPINION_BLOCKED_NO_EVIDENCE');
+          pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
           continue;
         }
+      }
+      if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride) {
+        pushReasonCode(reasonCodes, 'SUPPORT_FAMILY_MISMATCH_BLOCKED');
+        continue;
       }
       const supportEligible =
         hasMaterialEvidence ||
@@ -377,7 +427,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       wantMore -= 1;
       if (wantMore <= 0) break;
     }
-    if (docTypeHintAllowedUsed) reasonCodes.push('DOC_TYPE_HINT_ALLOWED');
+    if (docTypeHintAllowedUsed) pushReasonCode(reasonCodes, 'DOC_TYPE_HINT_ALLOWED');
   }
 
   // Enforce minimum: if we have fewer than SELECTED_ACTS_MIN, fill from actCandidatesTop
@@ -735,7 +785,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (maxScoreDiff !== 0) return maxScoreDiff;
       return (right.score ?? 0) - (left.score ?? 0);
     });
-    const targetCount = Math.max(selectedActsMin, input.goals_summary.length + 1);
+    const targetCount = selectedActsMin;
     const trailingActs = rankedByEvidence.slice(targetCount);
     const trailingWeak = trailingActs.every((act) => {
       const evidence = chunksEvidenceByNreg.get(act.rada_nreg);

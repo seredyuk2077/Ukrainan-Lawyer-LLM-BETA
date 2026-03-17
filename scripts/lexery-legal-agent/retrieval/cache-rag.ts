@@ -33,6 +33,7 @@ import {
   scoreActCandidate,
   findActByTitleFragment,
   findActByAlias,
+  buildTaxonomyQuerySignals,
   type TaxonomyCandidatesResult,
   type TaxonomyHintsUsed,
 } from './act-taxonomy-store.js';
@@ -1829,12 +1830,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     0,
     ACTS_1_POOL_SIZE
   );
-  const queryTokens = query
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((t) => t.length >= 2);
+  const querySignals = buildTaxonomyQuerySignals(query);
+  const actScoringSignals = [...new Set([...querySignals.tokens, ...querySignals.phrases])];
   const plannerPreferredNregs = new Set(
     (actPlannerOutput?.goals?.[0]?.act_candidates ?? [])
       .filter((c) => c.rada_nreg)
@@ -1869,7 +1866,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   const scoreOneCandidate = async (nreg: string, tier: 'ACTS_1' | 'ACTS_2'): Promise<ScoredActItem> => {
     const meta = await getActMeta(nreg);
-    const { score, reasons } = await scoreActCandidate(nreg, queryTokens, domainHint);
+    const { score, reasons } = await scoreActCandidate(nreg, actScoringSignals, domainHint);
     const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
     const actCategory = meta?.category ?? null;
     let familyPriorBoost = 0;

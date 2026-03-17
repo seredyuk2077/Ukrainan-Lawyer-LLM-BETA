@@ -9,7 +9,11 @@ import {
   getProcedureCategoryEnvelope,
 } from '../../retrieval/goal-splitter.js';
 import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
-import { scoreActCandidate, findActByTitleFragment } from '../../retrieval/act-taxonomy-store.js';
+import {
+  buildTaxonomyQuerySignals,
+  scoreActCandidate,
+  findActByTitleFragment,
+} from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
 import {
   buildDiscriminativeQueryTokenWeights,
@@ -361,6 +365,22 @@ function testProcedureCategoryEnvelopeFallsBackToProcedureFamilies(): void {
   console.log('[OK] procedure category envelope injects procedure families when hints are substantive only');
 }
 
+function testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases(): void {
+  const signals = buildTaxonomyQuerySignals(
+    'Який порядок оскарження податкового повідомлення-рішення та строки звернення до адміністративного суду?'
+  );
+  if (!signals.tokens.includes('податкового')) {
+    throw new Error(`Expected base token in taxonomy signals, got ${JSON.stringify(signals)}`);
+  }
+  if (!signals.phrases.some((phrase) => phrase.includes('адміністративного суду'))) {
+    throw new Error(`Expected phrase-level signal for administrative court, got ${JSON.stringify(signals.phrases)}`);
+  }
+  if (!signals.phrases.some((phrase) => phrase.includes('податкового повідомлення'))) {
+    throw new Error(`Expected phrase-level signal for tax notice, got ${JSON.stringify(signals.phrases)}`);
+  }
+  console.log('[OK] buildTaxonomyQuerySignals keeps multi-word legal phrases for metadata matching');
+}
+
 function testSelectedActsAvoidWeakSingleGoalSupportNoise(): void {
   const result = buildSelectedActs({
     finalHits: [],
@@ -439,6 +459,70 @@ function testSelectedActsTrimWeakMultiGoalTail(): void {
   console.log('[OK] selected_acts trims weak multi-goal tail noise');
 }
 
+function testSelectedActsBlockCrossFamilySupportWithoutEvidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      { rada_nreg: '322-08', title: 'КЗпП', score: 0.91, category: 'labor_social', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: '100-95-п', title: 'Порядок №100', score: 0.72, category: 'labor_social', document_type: 'Постанова КМУ', source_tier: 'ACTS_1' },
+      { rada_nreg: '580-19', title: 'Про Національну поліцію', score: 0.7, category: 'administrative', document_type: 'Закон', source_tier: 'ACTS_1' },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['322-08', '100-95-п', '580-19']),
+    actsSearchNregs: ['322-08', '100-95-п', '580-19'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '322-08', count_in_top30: 10, avg_score_in_top30: 0.58, max_score: 0.61 },
+      { rada_nreg: '100-95-п', count_in_top30: 4, avg_score_in_top30: 0.4, max_score: 0.42 },
+      { rada_nreg: '580-19', count_in_top30: 1, avg_score_in_top30: 0.31, max_score: 0.31 },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'labor_social',
+      family_confidence: 0.93,
+      family_conflict: false,
+      top2: [{ family_key: 'labor_social', support_score: 0.93 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === '580-19')) {
+    throw new Error(`Expected cross-family support act to be blocked, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('SUPPORT_FAMILY_MISMATCH_BLOCKED')) {
+    throw new Error(`Expected SUPPORT_FAMILY_MISMATCH_BLOCKED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts blocks weak cross-family support when family evidence is dominant');
+}
+
+function testSelectedActsDemoteCrossFamilyChunkEvidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      { rada_nreg: '322-08', title: 'КЗпП', score: 0.91, category: 'labor_social', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: '100-95-п', title: 'Порядок №100', score: 0.72, category: 'labor_social', document_type: 'Постанова КМУ', source_tier: 'ACTS_1' },
+      { rada_nreg: '2755-17', title: 'ПКУ', score: 0.69, category: 'tax_customs', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['322-08', '100-95-п', '2755-17']),
+    actsSearchNregs: ['322-08', '100-95-п', '2755-17'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '322-08', count_in_top30: 8, avg_score_in_top30: 0.58, max_score: 0.61 },
+      { rada_nreg: '100-95-п', count_in_top30: 6, avg_score_in_top30: 0.57, max_score: 0.63 },
+      { rada_nreg: '2755-17', count_in_top30: 3, avg_score_in_top30: 0.41, max_score: 0.46 },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'labor_social',
+      family_confidence: 0.9,
+      family_conflict: false,
+      top2: [{ family_key: 'labor_social', support_score: 0.9 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === '2755-17')) {
+    throw new Error(`Expected cross-family chunk evidence to be demoted, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('CHUNKS_FAMILY_MISMATCH_DEMOTED')) {
+    throw new Error(`Expected CHUNKS_FAMILY_MISMATCH_DEMOTED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts demotes weak cross-family chunk evidence under dominant family evidence');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -462,8 +546,11 @@ async function main(): Promise<void> {
   testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
   testSingleGoalSelectedActsTailTrim();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
+  testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testSelectedActsAvoidWeakSingleGoalSupportNoise();
   testSelectedActsTrimWeakMultiGoalTail();
+  testSelectedActsBlockCrossFamilySupportWithoutEvidence();
+  testSelectedActsDemoteCrossFamilyChunkEvidence();
   console.log('\nAll RAG unit tests passed.');
 }
 

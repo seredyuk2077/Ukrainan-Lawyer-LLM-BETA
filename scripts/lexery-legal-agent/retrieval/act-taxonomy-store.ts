@@ -1,6 +1,7 @@
 /**
- * U4 ActTaxonomyStore — runtime data-driven act candidates from Supabase legislation metadata.
- * No hardcoded categories/acts: aliases, keywords, topics, category from DB; TTL refresh; graceful no-taxonomy if Supabase unavailable.
+ * U4 ActTaxonomyStore — runtime act candidates from LLDBI metadata.
+ * Uses aliases, title, summary, keywords, topics, category/doc type, and validity from Supabase;
+ * keeps retrieval read-only and tolerant when taxonomy data is unavailable.
  */
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config } from '../lib/config.js';
@@ -18,11 +19,54 @@ const LEGISLATION_TABLE = 'legislation_documents';
 const MIN_TOKEN_LEN = 2;
 const MIN_METADATA_TOKEN_LEN = 4;
 const MAX_ANCHOR_TOKENS = 3;
+const MAX_QUERY_PHRASE_WORDS = 4;
+const TITLE_MATCH_BOOST = 1.4;
+const SUMMARY_MATCH_BOOST = 0.45;
+const KEYWORD_PHRASE_BOOST = 1.6;
+const TOPIC_PHRASE_BOOST = 1.3;
+const ALIAS_PHRASE_BOOST = 3;
+const VALIDITY_IN_FORCE_BOOST = 0.1;
+const VALIDITY_STALE_PENALTY = 0.35;
+
+const QUERY_STOPWORDS = new Set([
+  'а',
+  'або',
+  'але',
+  'в',
+  'від',
+  'до',
+  'за',
+  'з',
+  'і',
+  'й',
+  'із',
+  'коли',
+  'на',
+  'не',
+  'під',
+  'по',
+  'про',
+  'та',
+  'у',
+  'це',
+  'чи',
+  'що',
+  'щодо',
+  'яка',
+  'яке',
+  'який',
+  'які',
+  'як',
+]);
+
 interface ActEntry {
   rada_nreg: string;
   title: string;
+  summary: string | null;
   category: string | null;
+  storage_category: string | null;
   document_type: string | null;
+  document_type_slug: string | null;
   validity_status: string | null;
 }
 
@@ -30,8 +74,12 @@ interface TaxonomySnapshot {
   byAlias: Map<string, ActEntry[]>;
   byKeyword: Map<string, ActEntry[]>;
   byTopic: Map<string, ActEntry[]>;
+  byTitle: Map<string, ActEntry[]>;
+  bySummary: Map<string, ActEntry[]>;
   byCategory: Map<string, ActEntry[]>;
+  byStorageCategory: Map<string, ActEntry[]>;
   byDocumentType: Map<string, ActEntry[]>;
+  byDocumentTypeSlug: Map<string, ActEntry[]>;
   acts: Map<string, ActEntry>;
   version: number;
   loadedAt: number;
@@ -50,8 +98,21 @@ function tokenizeQuery(q: string): string[] {
     .normalize('NFC')
     .toLowerCase()
     .replace(/\s+/g, ' ');
-  const tokens = normalized.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= MIN_TOKEN_LEN);
+  const tokens = normalized
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length >= MIN_TOKEN_LEN);
   return [...new Set(tokens)];
+}
+
+function tokenizeWords(value: string): string[] {
+  return value
+    .normalize('NFC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((part) => part.trim())
+    .filter(
+      (part) => part.length >= MIN_TOKEN_LEN && !QUERY_STOPWORDS.has(part)
+    );
 }
 
 function addToMap(map: Map<string, ActEntry[]>, key: string, entry: ActEntry): void {
@@ -62,20 +123,44 @@ function addToMap(map: Map<string, ActEntry[]>, key: string, entry: ActEntry): v
   map.set(k, list);
 }
 
-function metadataTokens(value: unknown): string[] {
+function buildPhraseSignals(tokens: string[], maxWords: number): string[] {
+  const out = new Set<string>();
+  for (let size = 2; size <= Math.min(maxWords, tokens.length); size += 1) {
+    for (let index = 0; index <= tokens.length - size; index += 1) {
+      const slice = tokens.slice(index, index + size);
+      if (slice.some((token) => token.length < MIN_METADATA_TOKEN_LEN)) continue;
+      out.add(slice.join(' '));
+    }
+  }
+  return [...out];
+}
+
+function metadataSignals(value: unknown, options?: { includePhrases?: boolean; maxWords?: number }): string[] {
   const values = tolerantNormalizeToStrings(value);
   const out = new Set<string>();
   for (const item of values) {
     const normalized = toKey(item);
     if (!normalized) continue;
     out.add(normalized);
-    const parts = normalized
-      .split(/[^\p{L}\p{N}]+/u)
-      .map((part) => part.trim())
-      .filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
+    const parts = tokenizeWords(normalized).filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
     for (const part of parts) out.add(part);
+    if (options?.includePhrases) {
+      for (const phrase of buildPhraseSignals(parts, options.maxWords ?? MAX_QUERY_PHRASE_WORDS)) {
+        out.add(phrase);
+      }
+    }
   }
   return [...out];
+}
+
+export function buildTaxonomyQuerySignals(query: string): { tokens: string[]; phrases: string[] } {
+  const rawTokens = tokenizeQuery(query);
+  const informativeTokens = tokenizeWords(query);
+  const phrases = buildPhraseSignals(informativeTokens, MAX_QUERY_PHRASE_WORDS);
+  return {
+    tokens: [...new Set(rawTokens)],
+    phrases: [...new Set(phrases)],
+  };
 }
 
 let legislationClient: SupabaseClient | null = null;
@@ -98,7 +183,9 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
 
   const { data, error } = await client
     .from(LEGISLATION_TABLE)
-    .select('rada_nreg, title, category, document_type, aliases, keywords, topics, validity_status')
+    .select(
+      'rada_nreg, title, summary, category, storage_category, document_type, document_type_slug, aliases, keywords, topics, validity_status'
+    )
     .eq('qdrant_status', 'indexed');
 
   if (error) {
@@ -110,8 +197,12 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   const byAlias = new Map<string, ActEntry[]>();
   const byKeyword = new Map<string, ActEntry[]>();
   const byTopic = new Map<string, ActEntry[]>();
+  const byTitle = new Map<string, ActEntry[]>();
+  const bySummary = new Map<string, ActEntry[]>();
   const byCategory = new Map<string, ActEntry[]>();
+  const byStorageCategory = new Map<string, ActEntry[]>();
   const byDocumentType = new Map<string, ActEntry[]>();
+  const byDocumentTypeSlug = new Map<string, ActEntry[]>();
   const acts = new Map<string, ActEntry>();
 
   function normDocType(v: unknown): string | null {
@@ -123,20 +214,46 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   for (const row of rows) {
     const rada_nreg = typeof row?.rada_nreg === 'string' ? row.rada_nreg.trim() : '';
     const title = typeof row?.title === 'string' ? row.title.trim() : '';
+    const summary = typeof row?.summary === 'string' ? row.summary.trim() : null;
     const category = row?.category != null ? String(row.category).trim() : null;
+    const storage_category =
+      row?.storage_category != null ? String(row.storage_category).trim() : null;
     const document_type = normDocType(row?.document_type);
+    const document_type_slug =
+      row?.document_type_slug != null ? String(row.document_type_slug).trim() : null;
     const validity_status =
       row?.validity_status != null ? String(row.validity_status).trim().toLowerCase() : null;
     if (!rada_nreg) continue;
 
-    const entry: ActEntry = { rada_nreg, title, category, document_type, validity_status };
+    const entry: ActEntry = {
+      rada_nreg,
+      title,
+      summary,
+      category,
+      storage_category,
+      document_type,
+      document_type_slug,
+      validity_status,
+    };
     acts.set(rada_nreg, entry);
 
-    for (const a of tolerantNormalizeToStrings(row?.aliases)) addToMap(byAlias, a, entry);
-    for (const keyword of metadataTokens(row?.keywords)) addToMap(byKeyword, keyword, entry);
-    for (const topic of metadataTokens(row?.topics)) addToMap(byTopic, topic, entry);
+    for (const a of metadataSignals(row?.aliases, { includePhrases: true })) addToMap(byAlias, a, entry);
+    for (const keyword of metadataSignals(row?.keywords, { includePhrases: true })) {
+      addToMap(byKeyword, keyword, entry);
+    }
+    for (const topic of metadataSignals(row?.topics, { includePhrases: true })) {
+      addToMap(byTopic, topic, entry);
+    }
+    for (const titleSignal of metadataSignals(title, { includePhrases: true })) {
+      addToMap(byTitle, titleSignal, entry);
+    }
+    for (const summarySignal of metadataSignals(summary, { includePhrases: false })) {
+      addToMap(bySummary, summarySignal, entry);
+    }
     if (category) addToMap(byCategory, category, entry);
+    if (storage_category) addToMap(byStorageCategory, storage_category, entry);
     if (document_type) addToMap(byDocumentType, document_type, entry);
+    if (document_type_slug) addToMap(byDocumentTypeSlug, document_type_slug, entry);
   }
 
   incrementTaxonomyRefreshSuccess();
@@ -147,8 +264,12 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     byAlias,
     byKeyword,
     byTopic,
+    byTitle,
+    bySummary,
     byCategory,
+    byStorageCategory,
     byDocumentType,
+    byDocumentTypeSlug,
     acts,
     version: loadedAt,
     loadedAt,
@@ -248,33 +369,82 @@ export async function getTaxonomyCandidates(
   const categoryHintsSet = new Set<string>();
   if (domainHint) categoryHintsSet.add(domainHint);
 
-  const tokens = tokenizeQuery(query);
+  const { tokens, phrases } = buildTaxonomyQuerySignals(query);
+  const phraseSet = new Set(phrases);
 
-  for (const token of tokens) {
-    const key = toKey(token);
+  const applyMetadataMatches = (
+    signal: string,
+    options: {
+      aliasBoost: number;
+      keywordBoost: number;
+      topicBoost: number;
+      titleBoost: number;
+      summaryBoost: number;
+    }
+  ): void => {
+    const key = toKey(signal);
+    if (!key) return;
     for (const entry of snap.byAlias.get(key) ?? []) {
-      radaNregScores.set(entry.rada_nreg, (radaNregScores.get(entry.rada_nreg) ?? 0) + 2);
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + options.aliasBoost
+      );
       aliasHits.push({
         rada_nreg: entry.rada_nreg,
         title: entry.title,
-        alias: token,
+        alias: signal,
         category: entry.category,
       });
     }
     for (const entry of snap.byKeyword.get(key) ?? []) {
       radaNregScores.set(
         entry.rada_nreg,
-        (radaNregScores.get(entry.rada_nreg) ?? 0) + KEYWORD_MATCH_BOOST
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + options.keywordBoost
       );
       if (entry.category) categoryHintsSet.add(entry.category);
     }
     for (const entry of snap.byTopic.get(key) ?? []) {
       radaNregScores.set(
         entry.rada_nreg,
-        (radaNregScores.get(entry.rada_nreg) ?? 0) + TOPIC_MATCH_BOOST
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + options.topicBoost
       );
       if (entry.category) categoryHintsSet.add(entry.category);
     }
+    for (const entry of snap.byTitle.get(key) ?? []) {
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + options.titleBoost
+      );
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
+    for (const entry of snap.bySummary.get(key) ?? []) {
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + options.summaryBoost
+      );
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
+  };
+
+  for (const phrase of phrases) {
+    applyMetadataMatches(phrase, {
+      aliasBoost: ALIAS_PHRASE_BOOST,
+      keywordBoost: KEYWORD_PHRASE_BOOST,
+      topicBoost: TOPIC_PHRASE_BOOST,
+      titleBoost: TITLE_MATCH_BOOST,
+      summaryBoost: SUMMARY_MATCH_BOOST,
+    });
+  }
+
+  for (const token of tokens) {
+    if (phraseSet.has(token)) continue;
+    applyMetadataMatches(token, {
+      aliasBoost: 2,
+      keywordBoost: KEYWORD_MATCH_BOOST,
+      topicBoost: TOPIC_MATCH_BOOST,
+      titleBoost: TITLE_MATCH_BOOST * 0.6,
+      summaryBoost: SUMMARY_MATCH_BOOST,
+    });
   }
 
   for (const e of entities) {
@@ -406,8 +576,11 @@ export async function getTaxonomyCandidates(
 export interface ActMeta {
   rada_nreg: string;
   title: string;
+  summary?: string | null;
   category: string | null;
+  storage_category?: string | null;
   document_type: string | null;
+  document_type_slug?: string | null;
   validity_status?: string | null;
 }
 
@@ -420,8 +593,11 @@ export async function getActMeta(rada_nreg: string): Promise<ActMeta | null> {
   return {
     rada_nreg: entry.rada_nreg,
     title: entry.title,
+    summary: entry.summary,
     category: entry.category,
+    storage_category: entry.storage_category,
     document_type: entry.document_type,
+    document_type_slug: entry.document_type_slug,
     validity_status: entry.validity_status,
   };
 }
@@ -482,7 +658,7 @@ export interface ActCandidateScore {
 /** Score one act candidate by query tokens and domain hint (no DB write). */
 export async function scoreActCandidate(
   rada_nreg: string,
-  queryTokens: string[],
+  querySignals: string[],
   domainHint?: string
 ): Promise<ActCandidateScore> {
   const snap = await ensureSnapshot();
@@ -491,25 +667,38 @@ export async function scoreActCandidate(
   if (!entry) return { score: 0, reasons: [] };
   let score = 0;
   const reasons: string[] = [];
-  for (const t of queryTokens) {
-    const key = toKey(t);
+  const signals = [...new Set(querySignals.map((signal) => toKey(signal)).filter(Boolean))];
+  for (const key of signals) {
     if (!key) continue;
+    const isPhrase = key.includes(' ');
     for (const e of snap.byAlias.get(key) ?? []) {
       if (e.rada_nreg === entry.rada_nreg) {
-        score += 2;
+        score += isPhrase ? ALIAS_PHRASE_BOOST : 2;
         if (!reasons.includes('alias_match')) reasons.push('alias_match');
       }
     }
     for (const e of snap.byKeyword.get(key) ?? []) {
       if (e.rada_nreg === entry.rada_nreg) {
-        score += KEYWORD_MATCH_BOOST;
+        score += isPhrase ? KEYWORD_PHRASE_BOOST : KEYWORD_MATCH_BOOST;
         if (!reasons.includes('keyword_match')) reasons.push('keyword_match');
       }
     }
     for (const e of snap.byTopic.get(key) ?? []) {
       if (e.rada_nreg === entry.rada_nreg) {
-        score += TOPIC_MATCH_BOOST;
+        score += isPhrase ? TOPIC_PHRASE_BOOST : TOPIC_MATCH_BOOST;
         if (!reasons.includes('topic_match')) reasons.push('topic_match');
+      }
+    }
+    for (const e of snap.byTitle.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += isPhrase ? TITLE_MATCH_BOOST : TITLE_MATCH_BOOST * 0.6;
+        if (!reasons.includes('title_match')) reasons.push('title_match');
+      }
+    }
+    for (const e of snap.bySummary.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += SUMMARY_MATCH_BOOST;
+        if (!reasons.includes('summary_match')) reasons.push('summary_match');
       }
     }
   }
@@ -518,10 +707,10 @@ export async function scoreActCandidate(
     reasons.push('category_hint');
   }
   if (entry.validity_status === 'in_force') {
-    score += 0.1;
+    score += VALIDITY_IN_FORCE_BOOST;
     reasons.push('validity_in_force');
   } else if (entry.validity_status === 'expired' || entry.validity_status === 'not_in_force') {
-    score -= 0.35;
+    score -= VALIDITY_STALE_PENALTY;
     reasons.push('validity_penalty');
   }
   return { score, reasons };
