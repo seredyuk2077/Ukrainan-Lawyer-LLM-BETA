@@ -64,11 +64,14 @@ function testContrastiveLiabilityGoalSplit(): void {
   const subqueries = r.goals.map((g) => g.subquery);
   const administrativeGoal = subqueries.find((subquery) => subquery.includes('адміністративна відповідальність'));
   const criminalGoal = subqueries.find((subquery) => subquery.includes('кримінальна відповідальність'));
-  if (!administrativeGoal || !administrativeGoal.includes('ухилення від мобілізації') || !administrativeGoal.includes('мобілізації')) {
-    throw new Error(`Expected administrative subquery to keep shared subject and semantic focus, got ${JSON.stringify(subqueries)}`);
+  if (!administrativeGoal || !administrativeGoal.includes('мобілізації')) {
+    throw new Error(`Expected administrative subquery to keep mobilization focus, got ${JSON.stringify(subqueries)}`);
   }
-  if (!criminalGoal || !criminalGoal.includes('ухилення від мобілізації') || !criminalGoal.includes('мобілізації')) {
-    throw new Error(`Expected criminal subquery to keep shared subject and semantic focus, got ${JSON.stringify(subqueries)}`);
+  if (!criminalGoal || !criminalGoal.includes('мобілізації')) {
+    throw new Error(`Expected criminal subquery to keep mobilization focus, got ${JSON.stringify(subqueries)}`);
+  }
+  if (administrativeGoal?.includes('ухилення від мобілізації')) {
+    throw new Error(`Expected administrative goal to use compact subject focus instead of duplicating full phrase, got ${JSON.stringify(subqueries)}`);
   }
   console.log('[OK] heuristicGoalSplit(contrastive liability) → shared-subject multi-goal split');
 }

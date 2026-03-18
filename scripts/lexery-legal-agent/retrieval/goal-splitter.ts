@@ -173,11 +173,9 @@ function buildContrastiveLiabilitySubqueries(query: string): string[] | null {
   const aspectQueries = [leftAspect, rightAspect].map((aspect) => {
     const needsLiabilityTail =
       carriesLiabilityTerm && !/відповідаль(?:ність|ності)/i.test(aspect);
-    const focusPrefix =
-      subjectFocus && subjectFocus !== sharedSubject ? `${subjectFocus} ` : '';
-    const sharedSuffix =
-      subjectFocus && subjectFocus !== sharedSubject ? ` ${sharedSubject}` : '';
-    return `${focusPrefix}${aspect}${needsLiabilityTail ? ' відповідальність' : ''}${sharedSuffix}`.trim();
+    const compactSubjectPrefix =
+      subjectFocus && subjectFocus !== sharedSubject ? `${subjectFocus} ` : `${sharedSubject} `;
+    return `${compactSubjectPrefix}${aspect}${needsLiabilityTail ? ' відповідальність' : ''}`.trim();
   });
   const deduped = [...new Set([prefix, ...aspectQueries].map((part) => part.trim()).filter(Boolean))];
   return deduped.length >= 2 ? deduped.slice(0, GOALS_MAX) : null;
