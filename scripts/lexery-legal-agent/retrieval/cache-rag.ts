@@ -491,7 +491,9 @@ async function runOneGoal(
     };
   }
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
-    goal.subquery,
+    goal.must_have_signals?.length
+      ? `${goal.subquery} ${goal.must_have_signals.join(' ')}`
+      : goal.subquery,
     goal.domain_hint,
     taxonomyResult.anchor_tokens
   );

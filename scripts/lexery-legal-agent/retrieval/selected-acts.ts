@@ -732,7 +732,46 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  if (isMultiGoal) {
+    const selectedPrimaryLawCount = selected.filter((s) => {
+      const cand = candidateByNreg.get(s.rada_nreg);
+      return (
+        classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) ===
+        'PRIMARY_LAW'
+      );
+    }).length;
+    if (selectedPrimaryLawCount >= 2) {
+      const multiGoalNoiseToRemove = new Set<string>();
+      for (const s of selected) {
+        const cand = candidateByNreg.get(s.rada_nreg);
+        const kind = classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
+        if (!NOISE_KINDS.includes(kind)) continue;
+        if (!hasStrongNonPrimarySupportEvidence(chunksEvidenceByNreg.get(s.rada_nreg))) {
+          multiGoalNoiseToRemove.add(s.rada_nreg);
+        }
+      }
+      if (multiGoalNoiseToRemove.size > 0) {
+        for (let i = selected.length - 1; i >= 0; i -= 1) {
+          if (multiGoalNoiseToRemove.has(selected[i].rada_nreg)) selected.splice(i, 1);
+        }
+        fromChunksEvidence.splice(
+          0,
+          fromChunksEvidence.length,
+          ...fromChunksEvidence.filter((n) => !multiGoalNoiseToRemove.has(n))
+        );
+        reasonCodes.push('MULTI_GOAL_NOISE_BLOCKED_PRIMARY_PRESENT');
+      }
+    }
+  }
+
   // --- Policy v2: diversity guard (by act_kind) ---
+  const selectedPrimaryLawCountForDiversity = selected.filter((s) => {
+    const cand = candidateByNreg.get(s.rada_nreg);
+    return (
+      classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) ===
+      'PRIMARY_LAW'
+    );
+  }).length;
   const kindsInChunks = new Set<ActKind>();
   for (const e of chunks_evidence_top_acts) {
     if (!hasMaterialChunkEvidence(e)) continue;
@@ -757,6 +796,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (selected.length >= SELECTED_ACTS_MAX_OUT) break;
       const k = classifyActKind(a.title ?? '', a.document_type, a.category);
       if (existingKinds.has(k)) continue;
+      if (isMultiGoal && selectedPrimaryLawCountForDiversity >= 2 && NOISE_KINDS.includes(k)) continue;
       if (!hasMaterialChunkEvidence(chunksEvidenceByNreg.get(a.rada_nreg))) continue;
       const source: string[] = [];
       if (taxonomyNregs.has(a.rada_nreg)) source.push('TAXONOMY');

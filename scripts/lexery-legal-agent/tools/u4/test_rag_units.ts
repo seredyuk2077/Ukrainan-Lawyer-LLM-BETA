@@ -111,6 +111,40 @@ function testGoalSplitCarriesSharedTailAcrossClauses(): void {
   console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
 }
 
+function testGoalSplitCarriesSubjectIntoProceduralQuestion(): void {
+  const q = 'Що таке шахрайство? Хто розслідує цю статтю?';
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected multi-question split for procedural follow-up, got ${r.goals.length}`);
+  }
+  const procedureGoal = r.goals.find((goal) => goal.goal_type === 'procedure');
+  if (!procedureGoal) {
+    throw new Error(`Expected procedural follow-up goal, got ${JSON.stringify(r.goals)}`);
+  }
+  if (!procedureGoal.subquery.toLowerCase().includes('шахрайств')) {
+    throw new Error(`Expected procedural follow-up to carry substantive subject, got ${procedureGoal.subquery}`);
+  }
+  if (!procedureGoal.must_have_signals?.includes('підслідність')) {
+    throw new Error(`Expected procedural follow-up to include must-have procedural signal, got ${JSON.stringify(procedureGoal.must_have_signals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit carries subject into procedural multi-question follow-up');
+}
+
+function testGoalSplitMarksProceduralSingleGoal(): void {
+  const q = 'Який строк оскарження податкового повідомлення-рішення?';
+  const r = heuristicGoalSplit(q, 'tax_customs', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected single goal for procedural single query, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected procedural goal type, got ${r.goals[0]?.goal_type}`);
+  }
+  if ((r.goals[0]?.must_have_signals?.length ?? 0) !== 0) {
+    throw new Error(`Expected no extra must-have signals when query already contains procedural anchors, got ${JSON.stringify(r.goals[0]?.must_have_signals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit marks procedural single-goal query without redundant soft signals');
+}
+
 function testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists(): void {
   const tier = selectActPlannerTier({
     goalsCount: 1,
@@ -405,6 +439,96 @@ function testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder(): void {
     throw new Error(`Expected finite structural score for out-of-order token matches, got ${score}`);
   }
   console.log('[OK] structural score stays finite when matched title tokens appear out of query order');
+}
+
+function testStructuralScoreSoftensZeroOverlapPenaltyForStrongArticleHits(): void {
+  const query = 'Хто розслідує шахрайство?';
+  const articleHit = {
+    r2_key: 'legislation/criminal_procedure/4651-17.json',
+    json_path: '$.content.chunks[512].text',
+    score: 0.52,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '4651-17',
+    article_number: '216',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Підслідність',
+    },
+  };
+  const genericSectionHit = {
+    r2_key: 'legislation/criminal_procedure/4651-17.json',
+    json_path: '$.content.chunks[11].text',
+    score: 0.52,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '4651-17',
+    metadata: {
+      unit_type: 'section',
+      chunk_title: 'Загальні положення',
+    },
+  };
+  const articleScore = computeChunkStructuralScore(articleHit, query);
+  const genericScore = computeChunkStructuralScore(genericSectionHit, query);
+  if (articleScore <= genericScore) {
+    throw new Error(
+      `Expected strong article hit with zero lexical overlap to be penalized less than generic section. article=${articleScore} generic=${genericScore}`
+    );
+  }
+  console.log('[OK] structural score softens zero-overlap penalty for strong article hits');
+}
+
+function testStructuralScorePrefersProceduralAnchorArticleTitle(): void {
+  const query = 'Хто розслідує шахрайство? підслідність орган досудового розслідування';
+  const proceduralHit = {
+    r2_key: 'legislation/criminal_procedure/4651-17.json',
+    json_path: '$.content.chunks[512].text',
+    score: 0.44,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '4651-17',
+    article_number: '216',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Підслідність',
+    },
+  };
+  const genericProcedureHit = {
+    r2_key: 'legislation/criminal_procedure/4651-17.json',
+    json_path: '$.content.chunks[88].text',
+    score: 0.47,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '4651-17',
+    article_number: '55',
+    metadata: {
+      unit_type: 'article',
+      chunk_title: 'Права та обов’язки потерпілого',
+    },
+  };
+  const tokenWeights = buildDiscriminativeQueryTokenWeights([proceduralHit, genericProcedureHit], query);
+  const proceduralScore = computeChunkStructuralScore(proceduralHit, query, tokenWeights);
+  const genericScore = computeChunkStructuralScore(genericProcedureHit, query, tokenWeights);
+  if (proceduralScore <= genericScore) {
+    throw new Error(
+      `Expected procedural anchor article to outrank generic procedural article. procedural=${proceduralScore} generic=${genericScore}`
+    );
+  }
+  console.log('[OK] structural score prefers procedural anchor article title when query carries procedural signal');
+}
+
+function testGoalSplitAddsErdrProceduralSignal(): void {
+  const q =
+    "У який строк слідчий або прокурор зобов'язані внести відомості до ЄРДР після заяви про кримінальне правопорушення?";
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected single goal for ЄРДР procedural query, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected procedure goal for ЄРДР query, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.goals[0]?.must_have_signals?.includes('початок досудового розслідування')) {
+    throw new Error(
+      `Expected ЄРДР query to include procedural concept signal, got ${JSON.stringify(r.goals[0]?.must_have_signals)}`
+    );
+  }
+  console.log('[OK] heuristicGoalSplit adds ЄРДР procedural concept signal');
 }
 
 function testSingleGoalSelectedActsTailTrim(): void {
@@ -781,6 +905,85 @@ function testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts(): void {
   console.log('[OK] selected_acts blocks weak KSU decision even under family-conflict traces');
 }
 
+function testSelectedActsBlocksWeakNoiseKindsWhenMultiGoalPrimaryLawsAlreadyCoverGoals(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.94,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.91,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'v001p710-19',
+        title: 'Рішення Конституційного Суду України у кримінальній справі',
+        score: 0.73,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2341-14', '4651-17', 'v001p710-19']),
+    actsSearchNregs: ['2341-14', '4651-17', 'v001p710-19'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.54,
+        max_score: 0.6,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.5,
+        max_ordering_score: 0.63,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.5,
+        max_score: 0.56,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.9,
+        max_ordering_score: 0.58,
+      },
+      {
+        rada_nreg: 'v001p710-19',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.46,
+        max_score: 0.51,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.16,
+        max_ordering_score: 0.42,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal',
+      family_confidence: 0.62,
+      family_conflict: true,
+      top2: [
+        { family_key: 'criminal', support_score: 0.62 },
+        { family_key: 'criminal_procedure', support_score: 0.57 },
+      ],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v001p710-19')) {
+    throw new Error(
+      `Expected weak KSU decision to be blocked once multi-goal primary laws already cover the query, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  console.log('[OK] selected_acts blocks weak noise kinds when multi-goal primary laws already cover goals');
+}
+
 function testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence(): void {
   const result = buildSelectedActs({
     finalHits: [],
@@ -1004,6 +1207,9 @@ async function main(): Promise<void> {
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
+  testGoalSplitCarriesSubjectIntoProceduralQuestion();
+  testGoalSplitMarksProceduralSingleGoal();
+  testGoalSplitAddsErdrProceduralSignal();
   testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
@@ -1021,6 +1227,8 @@ async function main(): Promise<void> {
   testOrderingScoreBeatsRawVectorScore();
   testDiscriminativeStructuralScorePrefersMobilizationArticle();
   testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
+  testStructuralScoreSoftensZeroOverlapPenaltyForStrongArticleHits();
+  testStructuralScorePrefersProceduralAnchorArticleTitle();
   testSingleGoalSelectedActsTailTrim();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
@@ -1031,6 +1239,7 @@ async function main(): Promise<void> {
   testSelectedActsPreserveStrongEarlyPrimaryLawEvidence();
   testSelectedActsBlocksKsuNoiseUnderPrimaryLawDominance();
   testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts();
+  testSelectedActsBlocksWeakNoiseKindsWhenMultiGoalPrimaryLawsAlreadyCoverGoals();
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();

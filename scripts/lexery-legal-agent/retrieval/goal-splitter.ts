@@ -79,10 +79,85 @@ function getDomainsFromHint(domainHint?: string): { multi: boolean; domains: str
   return { multi: false, domains };
 }
 
-/** Structure-only: direct citation (article/act ref) — avoid splitting. No topic inference for goal_type. */
-function inferGoalType(_subquery: string, isComplianceContext: boolean): EvidenceGoalType {
+const PROCEDURE_GOAL_PATTERNS = [
+  /поряд(?:ок|ку)/iu,
+  /процедур/iu,
+  /строк(?:у|и|ів)?/iu,
+  /термін(?:у|и|ів)?/iu,
+  /оскарж/iu,
+  /апеляц/iu,
+  /касац/iu,
+  /підслід/iu,
+  /підсуд/iu,
+  /розсліду/iu,
+  /розгляд(?:ає|у|ом)?/iu,
+  /пода(?:ти|ння|ється|вати)/iu,
+  /куди/iu,
+  /хто/iu,
+  /коли/iu,
+];
+
+const LIABILITY_GOAL_PATTERNS = [
+  /відповідальн/iu,
+  /покаран/iu,
+  /санкц/iu,
+  /штраф/iu,
+];
+
+function normalizeSubqueryForSemantics(subquery: string): string {
+  return subquery
+    .normalize('NFC')
+    .replace(/\?+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueSignals(signals: string[]): string[] {
+  return [...new Set(signals.map((signal) => signal.trim()).filter(Boolean))];
+}
+
+/** Cheap semantic goal typing from generic legal-question form; no act/domain hardcoding. */
+function inferGoalType(subquery: string, isComplianceContext: boolean): EvidenceGoalType {
   if (isComplianceContext) return 'compliance_check';
+  const normalized = normalizeSubqueryForSemantics(subquery);
+  if (LIABILITY_GOAL_PATTERNS.some((pattern) => pattern.test(normalized))) return 'liability';
+  if (PROCEDURE_GOAL_PATTERNS.some((pattern) => pattern.test(normalized))) return 'procedure';
   return 'definition';
+}
+
+function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType): string[] | undefined {
+  if (goalType !== 'procedure') return undefined;
+  const normalized = normalizeSubqueryForSemantics(subquery);
+  const signals: string[] = [];
+
+  if (/розсліду/iu.test(normalized)) {
+    signals.push('підслідність', 'орган досудового розслідування');
+  }
+  if (/розгляд(?:ає|у|ом)?/iu.test(normalized) || /суд/iu.test(normalized)) {
+    signals.push('підсудність');
+  }
+  if (/оскарж/iu.test(normalized) || /апеляц/iu.test(normalized) || /касац/iu.test(normalized)) {
+    signals.push('оскарження');
+  }
+  if (/строк(?:у|и|ів)?/iu.test(normalized) || /термін(?:у|и|ів)?/iu.test(normalized) || /коли/iu.test(normalized)) {
+    signals.push('строк');
+  }
+  if (
+    /поряд(?:ок|ку)/iu.test(normalized) ||
+    /процедур/iu.test(normalized) ||
+    /(?:^|[\s,])як(?:[\s?]|$)/iu.test(normalized)
+  ) {
+    signals.push('порядок');
+  }
+  if (/пода(?:ти|ння|ється|вати)/iu.test(normalized) || /куди/iu.test(normalized)) {
+    signals.push('подання');
+  }
+  if (/єрдр/iu.test(normalized) || /внести\s+відомост/iu.test(normalized)) {
+    signals.push('початок досудового розслідування');
+  }
+
+  const deduped = uniqueSignals(signals).filter((signal) => !normalized.includes(signal.toLowerCase()));
+  return deduped.length > 0 ? deduped.slice(0, 3) : undefined;
 }
 
 /** Structure-only: query has two segments separated by " і " or " та " (min length each). Used to trigger planner for multi-clause. */
@@ -122,7 +197,7 @@ function splitIntoSubqueries(query: string): string[] {
       if (i < byQuestion.length - 1) sub = sub + '?';
       if (sub.length >= 3) parts.push(sub);
     }
-    if (parts.length > 0) return parts.slice(0, GOALS_MAX);
+    if (parts.length > 0) return injectSharedSubjectIntoQuestionParts(parts).slice(0, GOALS_MAX);
   }
 
   const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
@@ -132,6 +207,37 @@ function splitIntoSubqueries(query: string): string[] {
   }
 
   return [q];
+}
+
+function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
+  if (parts.length < 2) return parts;
+  const sharedSubject = extractSubjectFocus(extractSharedSubject(parts[0] ?? ''));
+  if (!sharedSubject) return parts;
+
+  return parts.map((part, index) => {
+    if (index === 0) return part;
+    let updated = part.trim();
+    const replacements: Array<[RegExp, string]> = [
+      [/цю\s+статтю/iu, sharedSubject],
+      [/цей\s+злочин/iu, sharedSubject],
+      [/це\s+правопорушення/iu, sharedSubject],
+      [/цей\s+договір/iu, sharedSubject],
+      [/це\s+питання/iu, sharedSubject],
+    ];
+    for (const [pattern, replacement] of replacements) {
+      updated = updated.replace(pattern, replacement);
+    }
+
+    const normalizedUpdated = normalizeSubqueryForSemantics(updated).toLowerCase();
+    const normalizedSubject = sharedSubject.toLowerCase();
+    const isGenericProceduralQuestion =
+      /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|в\s+який\s+строк|який\s+строк|який\s+порядок)\b/iu.test(updated);
+    if (isGenericProceduralQuestion && !normalizedUpdated.includes(normalizedSubject)) {
+      updated = `${updated.replace(/\?+$/g, '').trim()} ${sharedSubject}`.trim();
+      if (/\?$/.test(part)) updated = `${updated}?`;
+    }
+    return updated;
+  });
 }
 
 function extractSharedSubject(prefix: string): string {
@@ -152,7 +258,11 @@ function extractSubjectFocus(subject: string): string {
   const tokens = normalized
     .split(/[^\p{L}\p{N}-]+/u)
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3);
+    .filter(
+      (token) =>
+        token.length >= 3 &&
+        !['що', 'таке', 'яка', 'який', 'яке', 'які', 'це', 'ця', 'цей', 'цю'].includes(token.toLowerCase())
+    );
   return tokens.slice(-2).join(' ').trim() || normalized;
 }
 
@@ -220,6 +330,7 @@ export function heuristicGoalSplit(
       goal_type: inputLikeContract ? 'compliance_check' : inferGoalType(query, false),
       subquery: query.slice(0, 4000),
       domain_hint: domainHint,
+      must_have_signals: buildGoalMustHaveSignals(query, inputLikeContract ? 'compliance_check' : inferGoalType(query, false)),
     };
     return { goals: [single], used_heuristic: true, used_llm_planner: false, reason_codes: [] };
   }
@@ -234,6 +345,7 @@ export function heuristicGoalSplit(
       goal_type: goalType,
       subquery: sub,
       domain_hint: domainForGoal,
+      must_have_signals: buildGoalMustHaveSignals(sub, goalType),
     });
   }
 

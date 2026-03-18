@@ -236,5 +236,256 @@
     },
     "expected_selected_acts": ["2597-19"],
     "max_selected_acts": 2
+  },
+  {
+    "id": "fraud_definition_and_jurisdiction",
+    "bucket": "substantive + procedure",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Що таке шахрайство і хто розслідує цю статтю?",
+    "description": "Класичний substantive+procedure кейс: ККУ має дати склад злочину, а КПК — статтю про підслідність без шумного хвоста.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2341-14",
+        "article_numbers": ["190"],
+        "max_rank": 4
+      },
+      {
+        "rada_nreg": "4651-17",
+        "article_numbers": ["216"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["2341-14", "4651-17"],
+    "forbidden_selected_act_kinds": ["CASELAW_OPINION"],
+    "max_selected_acts": 4
+  },
+  {
+    "id": "kpk_erdr_registration_deadline",
+    "bucket": "single-act single-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "У який строк слідчий або прокурор зобов'язані внести відомості до ЄРДР після заяви про кримінальне правопорушення?",
+    "description": "КПК procedural query: art. 214 має бути раннім і selected_acts не повинен тонути в сторонніх кодексах.",
+    "expected_primary": {
+      "rada_nreg": "4651-17",
+      "article_numbers": ["214"],
+      "max_rank": 8
+    },
+    "expected_selected_acts": ["4651-17"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "kpk_search_warrant_dwelling",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Коли потрібна ухвала слідчого судді для обшуку житла і що має бути зазначено в клопотанні про обшук?",
+    "description": "КПК same-act multi-article: retrieval має зібрати обшук житла і процедурні вимоги без переходу в інші акти.",
+    "expected_hits": [
+      {
+        "rada_nreg": "4651-17",
+        "article_numbers": ["234"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "4651-17",
+        "article_numbers": ["235"],
+        "max_rank": 14
+      }
+    ],
+    "expected_selected_acts": ["4651-17"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "cpc_claim_statement_defects",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Що обов'язково має містити позовна заява і що робить суд, якщо її подано з недоліками?",
+    "description": "ЦПК same-act кейс: потрібні і вимоги до позову, і наслідки подання з недоліками.",
+    "expected_hits": [
+      {
+        "rada_nreg": "1618-15",
+        "article_numbers": ["175"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "1618-15",
+        "article_numbers": ["185"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["1618-15"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "cpc_appeal_term_civil",
+    "bucket": "single-act single-article",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Який строк апеляційного оскарження рішення суду у цивільній справі?",
+    "description": "ЦПК procedural baseline: art. 354 має бути раннім hit-ом.",
+    "expected_primary": {
+      "rada_nreg": "1618-15",
+      "article_numbers": ["354"],
+      "max_rank": 8
+    },
+    "expected_selected_acts": ["1618-15"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "ccu_inheritance_acceptance_deadline",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Як приймається спадщина і який строк для її прийняття?",
+    "description": "ЦКУ same-act case: прийняття спадщини і строк мають зібратися в одному акті без стороннього шуму.",
+    "expected_hits": [
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["1268"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["1270"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["435-15"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "ccu_real_estate_sale_form_and_transfer",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "У якій формі укладається договір купівлі-продажу квартири і з якого моменту виникає право власності у покупця?",
+    "description": "ЦКУ same-act mixed conceptual query: форма правочину і момент набуття права власності.",
+    "expected_hits": [
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["657"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["334"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["435-15"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "sku_divorce_and_alimony_filing",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Чи можна одночасно подати позов про розірвання шлюбу та стягнення аліментів на дитину?",
+    "description": "СКУ same-act family case: розірвання шлюбу і аліменти мають покриватися сімейним кодексом.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2947-14",
+        "article_numbers": ["110"],
+        "max_rank": 12
+      },
+      {
+        "rada_nreg": "2947-14",
+        "article_numbers": ["191"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["2947-14"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "kuzpb_opening_and_moratorium",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Які умови відкриття провадження у справі про банкрутство і коли вводиться мораторій на задоволення вимог кредиторів?",
+    "description": "КУзПБ same-act multi-article: відкриття справи і мораторій не повинні розноситися по шумних procedural актах.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2597-19",
+        "article_numbers": ["39"],
+        "max_rank": 8
+      },
+      {
+        "rada_nreg": "2597-19",
+        "article_numbers": ["41"],
+        "max_rank": 10
+      }
+    ],
+    "expected_selected_acts": ["2597-19"],
+    "forbidden_selected_act_kinds": ["CASELAW_OPINION"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "pku_payment_after_tax_notice_and_appeal",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "У який строк треба сплатити суму за податковим повідомленням-рішенням і чи зупиняє подання скарги обов'язок сплати?",
+    "description": "ПКУ multi-article tax case: потрібні норми про оскарження, сплату та саме податкове повідомлення-рішення.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["56"],
+        "max_rank": 8
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["57"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["58"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["2755-17"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "kzpp_absenteeism_and_discipline",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Чи можна звільнити працівника за прогул і якої дисциплінарної процедури має дотриматися роботодавець?",
+    "description": "КЗпП same-act labor case: прогул і дисциплінарне стягнення мають зійтися в одному кодексі.",
+    "expected_hits": [
+      {
+        "rada_nreg": "322-08",
+        "article_numbers": ["40"],
+        "max_rank": 8
+      },
+      {
+        "rada_nreg": "322-08",
+        "article_numbers": ["147"],
+        "max_rank": 12
+      },
+      {
+        "rada_nreg": "322-08",
+        "article_numbers": ["149"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["322-08"],
+    "max_selected_acts": 3
   }
 ]

@@ -172,6 +172,24 @@ export function getChunkUnitType(hit: RawHit): string | null {
   return typeof unitType === 'string' && unitType.trim().length > 0 ? unitType : null;
 }
 
+function getZeroOverlapPenalty(
+  hit: RawHit,
+  unitType: string | null,
+  queryTokens: string[],
+  titleTokens: string[],
+  overlap: number
+): number {
+  if (queryTokens.length === 0 || titleTokens.length === 0 || overlap > 0) return 0;
+  const vectorScore =
+    typeof hit.score === 'number' && Number.isFinite(hit.score) ? Math.max(0, hit.score) : 0;
+  if (unitType === 'article') {
+    if (vectorScore >= 0.5) return -0.08;
+    if (vectorScore >= 0.4) return -0.14;
+    return -0.2;
+  }
+  return -0.35;
+}
+
 export function computeChunkStructuralScore(
   hit: RawHit,
   query: string,
@@ -214,11 +232,16 @@ export function computeChunkStructuralScore(
   const unitType = getChunkUnitType(hit);
   const articleShapeBoost = unitType === 'article' ? 0.05 : unitType === 'point' ? 0.02 : 0;
   const articleNumberBoost = hit.article_number ? 0.03 : 0;
-  const zeroOverlapPenalty = queryTokens.length > 0 && titleTokens.length > 0 && overlap === 0 ? -0.35 : 0;
+  const conciseExactTitleBoost =
+    unitType === 'article' && titleTokens.length > 0 && titleTokens.length <= 2 && overlap === titleTokens.length
+      ? 0.08
+      : 0;
+  const zeroOverlapPenalty = getZeroOverlapPenalty(hit, unitType, queryTokens, titleTokens, overlap);
   return (
     zeroOverlapPenalty +
     articleShapeBoost +
     articleNumberBoost +
+    conciseExactTitleBoost +
     weightedCoverage * 0.28 +
     overlapCoverage * 0.16 +
     compactSpan * 0.2 +

@@ -17,7 +17,7 @@
 | `reference_expansion_cases.json` | verify_retrieval_act_type_audit | Кейси для reference expansion |
 | `special_multiact_cases.json` | verify_retrieval_act_type_audit | Мульти-актові спеціальні кейси |
 | `rag_assessment_cases.json` | verify_rag_assessment | RAG assessment кейси (explicit/implicit/natural) |
-| `rag_golden_cases.json` | verify_rag_golden | Strong legal golden cases з article/rank assertions і selected_acts budgets |
+| `rag_golden_cases.json` | verify_rag_golden | Strong legal golden cases з article/rank assertions, selected_acts budgets, latency/qdrant budgets і bucket-ами (`single-act`, `same-act multi-article`, `substantive+procedure`, `multi-act mixed-source`, `primary law + secondary order`) |
 | `rag_secondary_acts_cases.json` | verify_rag_secondary_acts | Кейси для вторинних актів |
 | `u2_domain_audit_cases.json` | verify_u2_domain_audit | U2 domain audit кейси |
 | `u2_routing_audit_cases.json` | verify_u2_routing_audit | U2 routing audit кейси |
@@ -40,4 +40,13 @@ pnpm brain:dataset:retrieval-real
 
 # Регенерувати act_type_audit_cases.json зі snapshot
 pnpm brain:generate:act-type-audit-cases
+
+# Прогнати article-level legal golden set
+pnpm exec tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts
 ```
+
+## Golden dataset notes
+
+- `rag_golden_cases.json` не має бути smoke-only набором. Це article-level benchmark для українського legal RAG.
+- Для same-act multi-article сценаріїв використовуйте `expected_hits`, а не лише `expected_primary`, якщо важливо перевірити кілька норм одного кодексу.
+- Для substantive+procedure або mixed-source кейсів додавайте `expected_selected_acts` і, коли потрібно, `forbidden_selected_acts` / `forbidden_selected_act_kinds`, щоб verifier ловив не тільки miss релевантної норми, а й writer-noise.
