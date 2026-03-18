@@ -938,6 +938,62 @@ function testSelectedActsAllowSingleActCoverageForDominantMultiGoal(): void {
   console.log('[OK] selected_acts does not force a second act when one dominant code covers multi-goal query');
 }
 
+function testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.92,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.74,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2341-14', '4651-17']),
+    actsSearchNregs: ['2341-14', '4651-17'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.57,
+        max_score: 0.61,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.64,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.53,
+        max_score: 0.56,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.58,
+        max_ordering_score: 0.59,
+      },
+    ],
+  });
+  if (!result.selected_acts.some((act) => act.rada_nreg === '4651-17')) {
+    throw new Error(`Expected early procedural primary law to remain selected, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED when distinct procedural primary law has early evidence, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  console.log('[OK] selected_acts keeps early procedural primary-law evidence in multi-goal retrieval');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -977,6 +1033,7 @@ async function main(): Promise<void> {
   testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts();
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
+  testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
   console.log('\nAll RAG unit tests passed.');
 }
 

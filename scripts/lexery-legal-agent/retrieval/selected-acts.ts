@@ -401,6 +401,27 @@ function shouldAllowSingleActCoverageForMultiGoal(
   }
   const second = strongEvidence[1];
   if (!second) return true;
+  const secondCandidate = candidateByNreg.get(second.rada_nreg);
+  const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
+  const secondFamilyKey = categoryToFamilyKey(secondCandidate?.category);
+  const secondKind = classifyActKind(
+    secondCandidate?.title ?? '',
+    secondCandidate?.document_type,
+    secondCandidate?.category
+  );
+  const secondBestRank = second.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  if (
+    secondKind === 'PRIMARY_LAW' &&
+    topFamilyKey &&
+    secondFamilyKey &&
+    topFamilyKey !== 'unknown' &&
+    secondFamilyKey !== 'unknown' &&
+    topFamilyKey !== secondFamilyKey &&
+    secondBestRank <= 4 &&
+    hasMaterialChunkEvidence(second)
+  ) {
+    return false;
+  }
   const topRankMass = top.rank_mass_top30 ?? 0;
   const secondRankMass = second.rank_mass_top30 ?? 0;
   return (
