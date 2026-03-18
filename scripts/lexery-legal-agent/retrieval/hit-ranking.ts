@@ -18,6 +18,8 @@ const NOISE_PENALTY = 0.15;
 export const NOISE_PENALTY_POLICY_VERSION = 2;
 const DIVERSITY_TOP_N = 25;
 const DIVERSITY_MAX_SAME_ACT = 8;
+const ARTICLE_DIVERSITY_TOP_N = 12;
+const ARTICLE_DIVERSITY_MAX_SAME_ARTICLE = 1;
 
 /** Stable tie-breaker: score desc -> rada_nreg asc -> r2_key asc -> json_path asc. */
 export function compareRawHitByScore(a: RawHit, b: RawHit): number {
@@ -191,13 +193,22 @@ export function applyDiversityCap(hits: RawHit[]): RawHit[] {
   const inTop: RawHit[] = [];
   const afterTop: RawHit[] = [];
   const countByAct = new Map<string, number>();
+  const countByArticle = new Map<string, number>();
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i];
     const nreg = h.rada_nreg ?? '_unknown';
     const count = countByAct.get(nreg) ?? 0;
-    if (inTop.length < DIVERSITY_TOP_N && count < DIVERSITY_MAX_SAME_ACT) {
+    const article = typeof h.article_number === 'string' ? h.article_number.trim() : '';
+    const articleKey = article ? `${nreg}:${article}` : '';
+    const articleCount = articleKey ? countByArticle.get(articleKey) ?? 0 : 0;
+    const articleCapReached =
+      articleKey.length > 0 &&
+      inTop.length < ARTICLE_DIVERSITY_TOP_N &&
+      articleCount >= ARTICLE_DIVERSITY_MAX_SAME_ARTICLE;
+    if (inTop.length < DIVERSITY_TOP_N && count < DIVERSITY_MAX_SAME_ACT && !articleCapReached) {
       inTop.push(h);
       countByAct.set(nreg, count + 1);
+      if (articleKey) countByArticle.set(articleKey, articleCount + 1);
     } else {
       afterTop.push(h);
     }

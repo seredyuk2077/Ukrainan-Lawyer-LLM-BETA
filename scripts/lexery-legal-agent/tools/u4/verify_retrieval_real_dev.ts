@@ -11,6 +11,12 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { splitLabeled } from './retrieval_real_split.js';
 import { RunRepository } from '../../gateway/storage.js';
+import { getRetrievalTraceHitsForForensics } from '../../retrieval/retrieval-trace-r2.js';
+import {
+  findExpectationRank,
+  type GoldenHitExpectation,
+  type RetrievalTraceLike,
+} from './rag_golden_eval.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const runRepo = new RunRepository();
@@ -39,6 +45,9 @@ const RETRIEVAL_ONLY_MODE =
   process.env.RETRIEVAL_REAL_DEV_RETRIEVAL_ONLY === '1' ||
   ONLY_MODE === 'FAST' ||
   ONLY_MODE === 'SMOKE';
+const ARTICLE_RANK_MODE =
+  process.argv.includes('--article-rank') ||
+  process.env.RETRIEVAL_REAL_DEV_ARTICLE_MODE === '1';
 const SKIP_U10_POSTCHECK =
   RETRIEVAL_ONLY_MODE || process.env.RETRIEVAL_REAL_DEV_SKIP_U10_POSTCHECK === '1';
 
@@ -110,8 +119,13 @@ interface LabeledRow {
 
 interface RunResult {
   run_id?: string;
-  retrievalTrace: {
-    hits?: Array<{ title?: string; act_title?: string }>;
+  retrievalTrace: (RetrievalTraceLike & {
+    hits?: Array<{
+      title?: string;
+      act_title?: string;
+      rada_nreg?: string;
+      article_number?: string | null;
+    }>;
     meta?: {
       hits_count?: number;
       low_confidence?: boolean;
@@ -135,9 +149,26 @@ interface RunResult {
       selected_acts_sources_breakdown?: { from_routing_hints?: string[] };
       family_evidence_summary?: { dominant_family_key?: string };
     };
-  } | null;
+  }) | null;
   promptTokens?: number;
   latencyMs: number;
+}
+
+interface ArticleExpectationOverlayRow {
+  fingerprint: string;
+  query?: string;
+  expected_primary?: GoldenHitExpectation;
+  expected_hits?: GoldenHitExpectation[];
+}
+
+type ArticleExpectationOverlayMap = Map<string, ArticleExpectationOverlayRow>;
+
+export interface ArticleExpectationEvaluation {
+  applied: boolean;
+  pass: boolean;
+  reasons: string[];
+  primary_rank?: number;
+  expected_hit_ranks: Record<string, number | null>;
 }
 
 type RunGetPayload = {
@@ -304,6 +335,93 @@ async function fetchRunPayload(baseUrl: string, runId: string): Promise<RunGetPa
   }
 }
 
+function loadArticleExpectationOverlay(): ArticleExpectationOverlayMap {
+  const overlayPath = resolve(__dirname, '../_datasets', 'retrieval_real_article_expectations.json');
+  if (!existsSync(overlayPath)) return new Map();
+  try {
+    const raw = JSON.parse(readFileSync(overlayPath, 'utf8')) as ArticleExpectationOverlayRow[];
+    return new Map(
+      raw
+        .filter((row) => typeof row.fingerprint === 'string' && row.fingerprint.trim().length > 0)
+        .map((row) => [row.fingerprint.trim(), row])
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function hydrateTraceForArticleScoring(
+  runId: string | undefined,
+  fallbackTrace: RunResult['retrievalTrace']
+): Promise<RunResult['retrievalTrace']> {
+  if (!runId) return fallbackTrace;
+  try {
+    const persisted = await runRepo.findByRunId(runId);
+    if (!persisted?.retrieval_trace || typeof persisted.retrieval_trace !== 'object') {
+      return fallbackTrace;
+    }
+    const persistedTrace = persisted.retrieval_trace as RunResult['retrievalTrace'];
+    const { hits } = await getRetrievalTraceHitsForForensics(
+      persisted as { retrieval_trace?: { hits?: unknown[]; meta?: { full_trace_r2_key?: string } } | null }
+    );
+    return {
+      ...persistedTrace,
+      hits: hits as RunResult['retrievalTrace']['hits'],
+    };
+  } catch {
+    return fallbackTrace;
+  }
+}
+
+export function evaluateArticleExpectations(
+  trace: RunResult['retrievalTrace'],
+  expectation: ArticleExpectationOverlayRow | null | undefined
+): ArticleExpectationEvaluation {
+  if (!expectation || (!expectation.expected_primary && !(expectation.expected_hits?.length))) {
+    return {
+      applied: false,
+      pass: true,
+      reasons: [],
+      expected_hit_ranks: {},
+    };
+  }
+  const hits = trace?.hits ?? [];
+  const reasons: string[] = [];
+  const expectedHitRanks: Record<string, number | null> = {};
+  let primaryRank: number | undefined;
+
+  if (expectation.expected_primary) {
+    const rank = findExpectationRank(hits, expectation.expected_primary);
+    primaryRank = rank ?? undefined;
+    if (rank == null) {
+      reasons.push(
+        `article_miss:${expectation.expected_primary.rada_nreg}:${(expectation.expected_primary.article_numbers ?? []).join('|') || '*'}`
+      );
+    } else if (rank > expectation.expected_primary.max_rank) {
+      reasons.push(`rank_miss:primary:${rank}>${expectation.expected_primary.max_rank}`);
+    }
+  }
+
+  for (const hitExpectation of expectation.expected_hits ?? []) {
+    const key = `${hitExpectation.rada_nreg}:${(hitExpectation.article_numbers ?? []).join('|') || '*'}`;
+    const rank = findExpectationRank(hits, hitExpectation);
+    expectedHitRanks[key] = rank;
+    if (rank == null) {
+      reasons.push(`article_miss:${key}`);
+    } else if (rank > hitExpectation.max_rank) {
+      reasons.push(`rank_miss:${key}:${rank}>${hitExpectation.max_rank}`);
+    }
+  }
+
+  return {
+    applied: true,
+    pass: reasons.length === 0,
+    reasons,
+    primary_rank: primaryRank,
+    expected_hit_ranks: expectedHitRanks,
+  };
+}
+
 async function runQuery(
   baseUrl: string,
   query: string,
@@ -463,10 +581,19 @@ async function main(): Promise<void> {
   const onlyIndices = getOnlyIndices(dev.length);
   const caseIndices = onlyIndices === 'all' ? dev.map((_, i) => i) : onlyIndices;
   const devToRun = caseIndices.map((i) => ({ index: i, row: dev[i] }));
+  const articleExpectationOverlay = loadArticleExpectationOverlay();
 
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[verify_retrieval_real_dev] port', port, 'DEV cases', devToRun.length, onlyIndices !== 'all' ? `(--only: ${caseIndices.length} cases)` : '', FLAKY_CHECK_ENABLED ? 'flaky_check=ON' : '');
+  console.log(
+    '[verify_retrieval_real_dev] port',
+    port,
+    'DEV cases',
+    devToRun.length,
+    onlyIndices !== 'all' ? `(--only: ${caseIndices.length} cases)` : '',
+    FLAKY_CHECK_ENABLED ? 'flaky_check=ON' : '',
+    ARTICLE_RANK_MODE ? 'article_rank=ON' : ''
+  );
 
   const serverEnv = {
     ...process.env,
@@ -513,6 +640,11 @@ async function main(): Promise<void> {
     routingHintsCalled?: boolean;
     routingHintsUsed?: boolean;
     retrievalTrace?: RunResult['retrievalTrace'];
+    articleExpectationApplied?: boolean;
+    articleStrictPass?: boolean;
+    articleStrictReasons?: string[];
+    articlePrimaryRank?: number;
+    articleExpectedHitRanks?: Record<string, number | null>;
     /** Set after first pass; when flaky check ON, FAIL cases get re-run and status becomes FAIL_STABLE or FAIL_FLAKY. */
     status?: 'PASS' | 'FAIL_STABLE' | 'FAIL_FLAKY';
   };
@@ -531,12 +663,17 @@ async function main(): Promise<void> {
     const userId = '00000000-0000-0000-0000-000000000002';
     for (const { index: i, row } of devToRun) {
       const run = await runQuery(baseUrl, row.query, tenantId, userId, !RETRIEVAL_ONLY_MODE);
-      const rt = run.retrievalTrace;
+      const articleOverlay = ARTICLE_RANK_MODE ? articleExpectationOverlay.get(row.fingerprint) : undefined;
+      const rt =
+        ARTICLE_RANK_MODE && articleOverlay
+          ? await hydrateTraceForArticleScoring(run.run_id, run.retrievalTrace)
+          : run.retrievalTrace;
       const exp = row.expectations;
       const actFamilyHit = checkActFamilyHit(rt, exp.expected_act_families);
       const multiGoalCorrect = checkMultiGoalCorrect(rt, exp.must_have_multi_goal);
       const multiActCorrect = checkMultiActCorrect(rt, exp.must_have_multi_act);
       const pass = actFamilyHit && multiGoalCorrect && multiActCorrect;
+      const articleEval = evaluateArticleExpectations(rt, articleOverlay);
       const expectedConf = exp.heuristic_confidence ?? 0.5;
       const softFail =
         !pass && !actFamilyHit && (multiGoalCorrect && multiActCorrect) && expectedConf < EXPECTED_CONFIDENCE_HARD_THRESHOLD;
@@ -573,16 +710,33 @@ async function main(): Promise<void> {
         routingHintsUsed:
           (rt?.meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
         retrievalTrace: rt ?? undefined,
+        articleExpectationApplied: articleEval.applied,
+        articleStrictPass: articleEval.applied ? articleEval.pass : undefined,
+        articleStrictReasons: articleEval.applied ? articleEval.reasons : undefined,
+        articlePrimaryRank: articleEval.applied ? articleEval.primary_rank : undefined,
+        articleExpectedHitRanks: articleEval.applied ? articleEval.expected_hit_ranks : undefined,
         status: pass ? 'PASS' : undefined,
       });
       const label = `#${i + 1} "${row.query.slice(0, 50)}..."`;
       if (pass) {
-        console.log('[verify_retrieval_real_dev]', label, 'PASS');
+        if (articleEval.applied && !articleEval.pass) {
+          console.log('[verify_retrieval_real_dev]', label, 'PASS', `ARTICLE_FAIL(${articleEval.reasons.join(', ')})`);
+        } else if (articleEval.applied) {
+          console.log(
+            '[verify_retrieval_real_dev]',
+            label,
+            'PASS',
+            articleEval.primary_rank != null ? `article_primary_rank=${articleEval.primary_rank}` : 'ARTICLE_PASS'
+          );
+        } else {
+          console.log('[verify_retrieval_real_dev]', label, 'PASS');
+        }
       } else {
         const reasons: string[] = [];
         if (!actFamilyHit) reasons.push('act_family_miss');
         if (!multiGoalCorrect) reasons.push('multi_goal_miss');
         if (!multiActCorrect) reasons.push('multi_act_miss');
+        if (articleEval.applied && !articleEval.pass) reasons.push(...articleEval.reasons);
         console.error('[verify_retrieval_real_dev]', label, 'FAIL', reasons.join(', '));
       }
     }
@@ -736,6 +890,20 @@ async function main(): Promise<void> {
   const multiActMissStable = failReasonsStable.filter((x) => x === 'multi_act_miss').length;
   const flakyDenom = failStableCount + failFlakyCount;
   const flakyPct = flakyDenom > 0 ? Math.round((failFlakyCount / flakyDenom) * 100) : 0;
+  const articleApplicable = results.filter((r) => r.articleExpectationApplied).length;
+  const articleStrictPassCount = results.filter((r) => r.articleExpectationApplied && r.articleStrictPass).length;
+  const articleStrictFailCount = results.filter((r) => r.articleExpectationApplied && r.articleStrictPass === false).length;
+  const articleReasonCounts: Record<string, number> = {};
+  for (const result of results) {
+    for (const reason of result.articleStrictReasons ?? []) {
+      const key = reason.startsWith('article_miss:')
+        ? 'article_miss'
+        : reason.startsWith('rank_miss:')
+          ? 'rank_miss'
+          : reason;
+      articleReasonCounts[key] = (articleReasonCounts[key] ?? 0) + 1;
+    }
+  }
 
   console.log('\n--- DEV Summary ---');
   console.log('Health:', healthOk ? 'PASS' : 'FAIL');
@@ -814,6 +982,21 @@ async function main(): Promise<void> {
   console.log('act_family_miss:', actFamilyMissStable);
   console.log('multi_goal_miss:', multiGoalMissStable);
   console.log('multi_act_miss:', multiActMissStable);
+  if (ARTICLE_RANK_MODE) {
+    console.log('--- Article strict overlay ---');
+    console.log('cases_with_article_expectations:', articleApplicable);
+    console.log('article_strict_pass:', articleStrictPassCount);
+    console.log('article_strict_fail:', articleStrictFailCount);
+    if (Object.keys(articleReasonCounts).length > 0) {
+      console.log(
+        'article_failure_reasons:',
+        Object.entries(articleReasonCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([reason, count]) => `${reason}=${count}`)
+          .join(', ')
+      );
+    }
+  }
 
   const isLimitedRun = Array.isArray(onlyIndices) && onlyIndices.length > 0;
   const isSmokeRun = process.argv.some((a) => a.startsWith('--only=SMOKE'));
@@ -853,6 +1036,11 @@ async function main(): Promise<void> {
             routing_called: meta?.routing_hints?.called,
             routing_used: (meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
             dominant_family_key: meta?.family_evidence_summary?.dominant_family_key,
+            article_expectation_applied: r?.articleExpectationApplied ?? false,
+            article_strict_pass: r?.articleStrictPass,
+            article_primary_rank: r?.articlePrimaryRank,
+            article_expected_hit_ranks: r?.articleExpectedHitRanks ?? {},
+            article_fail_reasons: r?.articleStrictReasons ?? [],
           };
         }),
       };

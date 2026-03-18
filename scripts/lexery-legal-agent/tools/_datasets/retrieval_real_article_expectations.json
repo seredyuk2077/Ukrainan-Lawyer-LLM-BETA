@@ -1,0 +1,54 @@
+[
+  {
+    "fingerprint": "41028632d3ec2885",
+    "query": "Що таке умисне вбивство і яке покарання?",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 2
+    }
+  },
+  {
+    "fingerprint": "c4111604c68a11da",
+    "query": "ККУ ст. 115 умисне вбивство",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 2
+    }
+  },
+  {
+    "fingerprint": "9d5321aa082a88f6",
+    "query": "умисне вбивство",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 3
+    }
+  },
+  {
+    "fingerprint": "8cfc3e4f45827ae8",
+    "query": "оскарження податкової",
+    "expected_primary": {
+      "rada_nreg": "2755-17",
+      "article_numbers": ["56"],
+      "max_rank": 6
+    }
+  },
+  {
+    "fingerprint": "23acdacb3779c29b",
+    "query": "захист прав споживача",
+    "expected_primary": {
+      "rada_nreg": "1023-12",
+      "max_rank": 5
+    }
+  },
+  {
+    "fingerprint": "db87f08e9a0ac923",
+    "query": "банкрутство підприємства",
+    "expected_primary": {
+      "rada_nreg": "2597-19",
+      "max_rank": 5
+    }
+  }
+]

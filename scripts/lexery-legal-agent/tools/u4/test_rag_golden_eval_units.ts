@@ -115,12 +115,43 @@ function testEvaluateGoldenCaseFailsOnForbiddenSelectedActNoise(): void {
   console.log('[OK] golden eval enforces forbidden selected_act noise and size budget');
 }
 
+function testEvaluateGoldenCaseFailsOnLatencyBudgetBreach(): void {
+  const goldenCase: GoldenCase = {
+    id: 'latency',
+    query: '...',
+    description: '...',
+    latency_budget_class: 'fast',
+    max_qdrant_calls: 12,
+    expected_primary: {
+      rada_nreg: '2341-14',
+      article_numbers: ['115'],
+      max_rank: 2,
+    },
+  };
+  const trace: RetrievalTraceLike = {
+    hits: [{ rada_nreg: '2341-14', article_number: '115' }],
+    meta: {
+      hits_count: 1,
+      qdrant_calls_count_total: 15,
+    },
+  };
+  const result = evaluateGoldenCase(goldenCase, trace, {
+    latency_ms: 13_500,
+    qdrant_calls_count_total: 15,
+  });
+  assert(result.pass === false, 'latency/qdrant budget breach must fail');
+  assert(result.failure_codes.includes('latency_breach'), 'must tag latency breach');
+  assert(result.failure_codes.includes('qdrant_budget_breach'), 'must tag qdrant budget breach');
+  console.log('[OK] golden eval enforces latency and qdrant budgets');
+}
+
 function main(): void {
   console.log('rag_golden_eval unit tests\n');
   testFindExpectationRankNormalizesHyphenatedArticles();
   testEvaluateGoldenCaseFailsOnLatePrimaryHit();
   testEvaluateGoldenCaseRequiresSelectedActsCoverage();
   testEvaluateGoldenCaseFailsOnForbiddenSelectedActNoise();
+  testEvaluateGoldenCaseFailsOnLatencyBudgetBreach();
   console.log('\nAll rag_golden_eval unit tests passed.');
 }
 

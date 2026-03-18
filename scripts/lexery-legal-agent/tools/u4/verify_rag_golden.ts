@@ -11,7 +11,11 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { config as loadEnv } from 'dotenv';
-import { evaluateGoldenCase, type GoldenCase, type RetrievalTraceLike } from './rag_golden_eval.js';
+import {
+  evaluateGoldenCase,
+  type GoldenCase,
+  type RetrievalTraceLike,
+} from './rag_golden_eval.js';
 import { RunRepository } from '../../gateway/storage.js';
 import { getRetrievalTraceHitsForForensics } from '../../retrieval/retrieval-trace-r2.js';
 
@@ -135,7 +139,7 @@ async function main(): Promise<void> {
   const onlyValue = onlyArg?.slice('--only='.length)?.toLowerCase();
   const cases =
     onlyValue === 'smoke'
-      ? allCases.slice(0, 3)
+      ? allCases.filter((c) => c.smoke === true)
       : onlyValue
         ? allCases.filter((c) => c.id === onlyValue)
         : allCases;
@@ -166,10 +170,17 @@ async function main(): Promise<void> {
 
   type ResultRow = {
     id: string;
+    bucket?: string;
+    priority?: 'high' | 'normal';
     runId?: string;
     pass: boolean;
     reasons: string[];
+    failureCodes: string[];
     latencyMs: number;
+    latencyBudgetMs?: number;
+    qdrantCalls?: number;
+    maxQdrantCalls?: number;
+    lowConfidence: boolean;
     primaryRank?: number;
     selectedActsPresent: string[];
     expectedHitRanks: Record<string, number | null>;
@@ -190,13 +201,23 @@ async function main(): Promise<void> {
     for (const c of cases) {
       const { run, runId, latencyMs } = await runQuery(baseUrl, c.query, tenantId, userId);
       const evaluationTrace = await loadTraceForEvaluation(runId, run?.retrieval_trace);
-      const evaluated = evaluateGoldenCase(c, evaluationTrace);
+      const evaluated = evaluateGoldenCase(c, evaluationTrace, {
+        latency_ms: latencyMs,
+        qdrant_calls_count_total: evaluationTrace?.meta?.qdrant_calls_count_total,
+      });
       results.push({
         id: c.id,
+        bucket: c.bucket,
+        priority: c.priority,
         runId,
         pass: evaluated.pass,
         reasons: evaluated.reasons,
+        failureCodes: evaluated.failure_codes,
         latencyMs,
+        latencyBudgetMs: evaluated.metrics.latency_budget_ms,
+        qdrantCalls: evaluated.metrics.qdrant_calls_count_total,
+        maxQdrantCalls: evaluated.metrics.max_qdrant_calls,
+        lowConfidence: evaluated.metrics.low_confidence,
         primaryRank: evaluated.metrics.primary_rank,
         selectedActsPresent: evaluated.metrics.selected_acts_present,
         expectedHitRanks: evaluated.metrics.expected_hit_ranks,
@@ -220,15 +241,61 @@ async function main(): Promise<void> {
 
   const passCount = results.filter((row) => row.pass).length;
   const failCount = results.length - passCount;
+  const sortedLatencies = [...results.map((row) => row.latencyMs)].sort((a, b) => a - b);
   const p50Latency =
-    results.length > 0
-      ? [...results.map((row) => row.latencyMs)].sort((a, b) => a - b)[Math.floor(results.length / 2)]
+    sortedLatencies.length > 0 ? sortedLatencies[Math.floor(sortedLatencies.length / 2)] ?? 0 : 0;
+  const p95Latency =
+    sortedLatencies.length > 0
+      ? sortedLatencies[Math.min(Math.ceil(sortedLatencies.length * 0.95) - 1, sortedLatencies.length - 1)] ?? 0
       : 0;
+  const sortedQdrant = results
+    .map((row) => row.qdrantCalls ?? 0)
+    .filter((count) => count > 0)
+    .sort((a, b) => a - b);
+  const qdrantMedian =
+    sortedQdrant.length > 0 ? sortedQdrant[Math.floor(sortedQdrant.length / 2)] ?? 0 : 0;
+  const qdrantP95 =
+    sortedQdrant.length > 0
+      ? sortedQdrant[Math.min(Math.ceil(sortedQdrant.length * 0.95) - 1, sortedQdrant.length - 1)] ?? 0
+      : 0;
+  const failureCodeCounts: Record<string, number> = {};
+  for (const row of results) {
+    for (const code of row.failureCodes) {
+      failureCodeCounts[code] = (failureCodeCounts[code] ?? 0) + 1;
+    }
+  }
+  const bucketSummary = Object.entries(
+    results.reduce<Record<string, { total: number; pass: number }>>((acc, row) => {
+      const bucket = row.bucket ?? 'uncategorized';
+      const current = acc[bucket] ?? { total: 0, pass: 0 };
+      current.total += 1;
+      if (row.pass) current.pass += 1;
+      acc[bucket] = current;
+      return acc;
+    }, {})
+  ).map(([bucket, summary]) => ({
+    bucket,
+    total: summary.total,
+    pass: summary.pass,
+    fail: summary.total - summary.pass,
+  }));
 
   console.log('\n--- Golden Summary ---');
   console.log('pass:', passCount, '/', results.length);
   console.log('fail:', failCount);
   console.log('latency p50 ms:', p50Latency);
+  console.log('latency p95 ms:', p95Latency);
+  console.log('qdrant_calls median:', qdrantMedian);
+  console.log('qdrant_calls p95:', qdrantP95);
+  if (Object.keys(failureCodeCounts).length > 0) {
+    console.log(
+      'failure codes:',
+      Object.entries(failureCodeCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([code, count]) => `${code}=${count}`)
+        .join(', ')
+    );
+  }
 
   const outDir = resolve(process.cwd(), 'scripts/lexery-legal-agent/tools/_reports');
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
@@ -241,6 +308,12 @@ async function main(): Promise<void> {
         total: results.length,
         pass: passCount,
         fail: failCount,
+        latency_p50_ms: p50Latency,
+        latency_p95_ms: p95Latency,
+        qdrant_calls_median: qdrantMedian,
+        qdrant_calls_p95: qdrantP95,
+        failure_code_counts: failureCodeCounts,
+        bucket_summary: bucketSummary,
         results,
       },
       null,

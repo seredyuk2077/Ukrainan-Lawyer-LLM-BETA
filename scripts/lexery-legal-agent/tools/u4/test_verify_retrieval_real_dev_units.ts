@@ -5,6 +5,7 @@
 import { getRetrievalGateThresholds } from './verify_retrieval_real_dev.js';
 import { checkActFamilyHit } from './verify_retrieval_real_dev.js';
 import { isRetrievalTraceReadyForScoring } from './verify_retrieval_real_dev.js';
+import { evaluateArticleExpectations } from './verify_retrieval_real_dev.js';
 
 function assert(condition: boolean, msg: string): void {
   if (!condition) throw new Error(`ASSERT FAIL: ${msg}`);
@@ -95,6 +96,38 @@ function testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode(): void {
   console.log('[OK] retrieval-only scoring can start before terminal status');
 }
 
+function testArticleExpectationOverlayReportsRankMiss(): void {
+  const trace = {
+    hits: [
+      { rada_nreg: '2341-14', article_number: '185' },
+      { rada_nreg: '2341-14', article_number: '186' },
+      { rada_nreg: '2341-14', article_number: '115' },
+    ],
+  };
+  const result = evaluateArticleExpectations(trace as never, {
+    fingerprint: 'abc',
+    expected_primary: {
+      rada_nreg: '2341-14',
+      article_numbers: ['115'],
+      max_rank: 2,
+    },
+  });
+  assert(result.applied === true, 'article overlay should be applied');
+  assert(result.pass === false, 'late article rank must fail strict overlay');
+  assert(
+    result.reasons.some((reason) => reason.startsWith('rank_miss:primary')),
+    'must report rank_miss for strict article overlay'
+  );
+  console.log('[OK] article strict overlay reports rank miss');
+}
+
+function testArticleExpectationOverlayNoopWithoutExpectation(): void {
+  const result = evaluateArticleExpectations({ hits: [] } as never, null);
+  assert(result.applied === false, 'missing overlay should not apply');
+  assert(result.pass === true, 'missing overlay should not fail');
+  console.log('[OK] article strict overlay stays noop when expectation is absent');
+}
+
 function main(): void {
   console.log('verify_retrieval_real_dev gate unit tests\n');
   testSmokeRunRequiresZeroStableFails();
@@ -104,6 +137,8 @@ function main(): void {
   testActFamilyHitStillFallsBackToTitleSignals();
   testRetrievalTraceReadyOnlyWhenTerminal();
   testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode();
+  testArticleExpectationOverlayReportsRankMiss();
+  testArticleExpectationOverlayNoopWithoutExpectation();
   console.log('\nAll verify_retrieval_real_dev gate unit tests passed.');
 }
 

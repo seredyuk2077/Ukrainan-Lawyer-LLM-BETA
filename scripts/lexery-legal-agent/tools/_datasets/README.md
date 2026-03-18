@@ -8,6 +8,7 @@
 |------|-------------------|------|
 | `verify_packs.json` | verify_retrieval_real_dev, verify_retrieval_quality, verify_retrieval_multigoal, verify_u2_domain_audit, verify_u2_routing_audit | Конфігурація smoke/fast verify-паків |
 | `retrieval_real_labeled.json` | verify_retrieval_real_dev, report_retrieval_real_failures | Мічений датасет реальних запитів (DEV split) |
+| `retrieval_real_article_expectations.json` | verify_retrieval_real_dev (`--article-rank`) | Overlay для strict article/rank assertions поверх weak-labeled real-dev датасету |
 | `retrieval_real_queries.jsonl` | dataset_retrieval_real, label_retrieval_expectations | Сирі запити для розмітки |
 | `act_type_audit_cases.json` | verify_retrieval_act_type_audit | Кейси для аудиту типів актів |
 | `act_type_audit_snapshot.json` | generate_act_type_audit_cases | Snapshot типів актів з LLDBI (auto-generated, потрібен для regeneration) |

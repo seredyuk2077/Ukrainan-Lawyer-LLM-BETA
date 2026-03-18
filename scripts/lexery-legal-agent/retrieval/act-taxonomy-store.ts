@@ -519,7 +519,7 @@ export async function getTaxonomyCandidates(
     if (hintsBudget <= 0) break;
     const key = toKey(hint);
     if (!key) continue;
-    const entries = snap.byDocumentType.get(key) ?? [];
+    const entries = snap.byDocumentType.get(key) ?? snap.byDocumentTypeSlug.get(key) ?? [];
     if (entries.length > 0) documentTypesUsed.push(hint);
     let added = 0;
     for (const entry of entries) {

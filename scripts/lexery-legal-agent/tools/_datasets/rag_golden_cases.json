@@ -1,6 +1,11 @@
 [
   {
     "id": "dui_first_offense",
+    "bucket": "single-act single-article",
+    "priority": "high",
+    "smoke": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Яка відповідальність за керування авто в стані алкогольного сп'яніння вперше?",
     "description": "Базовий адміністративний кейс: очікуємо ст. 130 КУпАП високо в ранжуванні.",
     "expected_primary": {
@@ -12,6 +17,11 @@
   },
   {
     "id": "premeditated_murder",
+    "bucket": "single-act single-article",
+    "priority": "high",
+    "smoke": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Що таке умисне вбивство і яке покарання?",
     "description": "Кримінальне право: ст. 115 ККУ має бути на самому верху.",
     "expected_primary": {
@@ -23,6 +33,11 @@
   },
   {
     "id": "dismissal_during_sick_leave",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "smoke": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Чи можна звільнити працівника під час лікарняного за ініціативою роботодавця?",
     "description": "Трудове право: КЗпП повинен домінувати у видачі.",
     "expected_primary": {
@@ -34,6 +49,10 @@
   },
   {
     "id": "tax_notice_appeal",
+    "bucket": "substantive + procedure",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
     "query": "Який строк оскарження податкового повідомлення-рішення та чи можна одразу йти до суду?",
     "description": "Податковий + адміністративний процес: ПКУ і КАСУ обидва потрібні.",
     "expected_primary": {
@@ -45,6 +64,10 @@
   },
   {
     "id": "spousal_consent_apartment_sale",
+    "bucket": "multi-act mixed-source",
+    "priority": "high",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Чи потрібна згода другого з подружжя на продаж квартири, купленої у шлюбі?",
     "description": "Сімейне право: норми СКУ мають бути попереду, ЦКУ як supporting act.",
     "expected_primary": {
@@ -56,6 +79,10 @@
   },
   {
     "id": "mobilization_evasion_split",
+    "bucket": "contrastive admin/criminal",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
     "query": "Яка відповідальність за ухилення від мобілізації та коли це адміністративна, а коли кримінальна?",
     "description": "Багатоактний кейс: має покривати і ККУ, і КУпАП, без випадкових другорядних актів у фокусі.",
     "expected_hits": [
@@ -74,6 +101,10 @@
   },
   {
     "id": "avg_salary_dismissal",
+    "bucket": "primary law + secondary order",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Як правильно обчислити середню заробітну плату при звільненні з роботи для розрахунку відпускних?",
     "description": "Трудовий multi-act кейс: порядок КМУ має бути попереду, а КЗпП залишатися у selected_acts як supporting law.",
     "expected_primary": {
@@ -85,6 +116,10 @@
   },
   {
     "id": "border_crossing_martial_law",
+    "bucket": "primary law + secondary order",
+    "priority": "high",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
     "query": "Чи може в умовах воєнного стану перетнути кордон чоловік 45 років, який є військовослужбовцем?",
     "description": "Прикордонний secondary-act кейс: Правила перетинання кордону мають бути основним актом у видачі.",
     "expected_primary": {
@@ -96,6 +131,10 @@
   },
   {
     "id": "return_goods_14_days",
+    "bucket": "multi-act mixed-source",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
     "query": "Чи можу я повернути непродовольчий товар протягом 14 днів без пояснення причин, якщо він не підійшов?",
     "description": "Consumer multi-source кейс: базовий закон і ЦКУ мають бути попереду, а правила роздрібної торгівлі непродовольчими товарами мають залишатися у selected_acts як supporting order.",
     "expected_primary": {
@@ -107,6 +146,10 @@
   },
   {
     "id": "bankruptcy_opening_claims",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
     "query": "Який порядок відкриття провадження у справі про банкрутство та строк подання вимог кредиторів?",
     "description": "Multi-clause same-act кейс: КУзПБ має самостійно покривати обидві частини запиту без стороннього процедурного шуму в selected_acts.",
     "expected_primary": {
@@ -115,6 +158,83 @@
     },
     "expected_selected_acts": ["2597-19"],
     "forbidden_selected_acts": ["z0841-01", "4651-17"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "murder_explicit_citation",
+    "bucket": "single-act single-article",
+    "priority": "normal",
+    "latency_budget_class": "fast",
+    "max_qdrant_calls": 12,
+    "query": "ККУ ст. 115 умисне вбивство",
+    "description": "Явна citation-query: ККУ ст. 115 має бути на верху без шуму від інших складів злочину.",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 1
+    },
+    "expected_selected_acts": ["2341-14"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "murder_short_query",
+    "bucket": "single-act single-article",
+    "priority": "normal",
+    "latency_budget_class": "fast",
+    "max_qdrant_calls": 12,
+    "query": "умисне вбивство",
+    "description": "Короткий high-signal кримінальний запит: стаття 115 ККУ має лишатися на першій сторінці retrieval.",
+    "expected_primary": {
+      "rada_nreg": "2341-14",
+      "article_numbers": ["115"],
+      "max_rank": 3
+    },
+    "expected_selected_acts": ["2341-14"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "tax_appeal_short_query",
+    "bucket": "single-act single-article",
+    "priority": "normal",
+    "latency_budget_class": "fast",
+    "max_qdrant_calls": 12,
+    "query": "оскарження податкової",
+    "description": "Короткий податковий запит: ПКУ має домінувати, а процедура оскарження не повинна тонути в загальних кодексах.",
+    "expected_primary": {
+      "rada_nreg": "2755-17",
+      "article_numbers": ["56"],
+      "max_rank": 6
+    },
+    "expected_selected_acts": ["2755-17"]
+  },
+  {
+    "id": "consumer_protection_basic",
+    "bucket": "large-code competition",
+    "priority": "normal",
+    "latency_budget_class": "fast",
+    "max_qdrant_calls": 12,
+    "query": "захист прав споживача",
+    "description": "Базовий consumer query: профільний закон має бути в selected_acts і серед ранніх hits.",
+    "expected_primary": {
+      "rada_nreg": "1023-12",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1023-12"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "bankruptcy_basic",
+    "bucket": "single-act single-article",
+    "priority": "normal",
+    "latency_budget_class": "fast",
+    "max_qdrant_calls": 12,
+    "query": "банкрутство підприємства",
+    "description": "Короткий корпоративний кейс: КУзПБ має бути першим актом без стороннього procedural noise.",
+    "expected_primary": {
+      "rada_nreg": "2597-19",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["2597-19"],
     "max_selected_acts": 2
   }
 ]
