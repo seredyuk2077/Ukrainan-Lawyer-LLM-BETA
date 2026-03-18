@@ -61,6 +61,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 
 - `cache-rag.ts` лишається orchestration layer, а не місцем для всіх scoring/policy деталей.
 - Ranking/pipeline post-processing виноситься в окремі retrieval-модулі, щоб безпечніше тюнити quality/latency без ризику змішати orchestration, data access і ranking policy в одному файлі.
+- Within-act act-pool assembly винесений в окремий retrieval-модуль, щоб single-goal і multi-goal paths збирали один і той самий ranked pool актів без дублювання `lldbi_acts` search у середині `cache-rag.ts`.
 - Act ranking тепер окремо поєднує LLDBI metadata signals і retrieval evidence з фінальних hits: сильні ранні article hits можуть підняти правильний акт навіть коли U2 domain hint помиляється.
 - Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
 - Для простих двоклаузних legal queries (`X та Y`) U4 тепер покладається на дешевий structural multi-goal split із shared-tail carry-over, а не на обов'язковий LLM planner override; це зменшує latency/cost і прибирає planner-induced шум у procedural queries.

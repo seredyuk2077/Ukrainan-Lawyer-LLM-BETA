@@ -74,6 +74,7 @@ import {
   dedupeHits,
   NOISE_PENALTY_POLICY_VERSION,
 } from './hit-ranking.js';
+import { buildWithinActPool, extractActSearchNregsFromHits } from './within-act-pool.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -599,18 +600,15 @@ async function runOneGoal(
   let usedFilteredChunks = false;
   const actNregsForSummary: string[] = [];
 
-  const actNregsFromStep = rawPerStep
-    .filter((h) => h.rada_nreg)
-    .map((h) => (h.rada_nreg as string).trim())
-    .filter(Boolean);
-  // LLDBI soft prior: when category hints are present, prefer taxonomy (category-aligned) acts
-  // for within-act retrieval so that hint-aligned acts get higher chunk evidence priority.
-  // Without hints, keep original order (bootstrap first, then vector search, then taxonomy).
   const taxonomyCandidatesNregs = taxonomyResult.rada_nreg_candidates ?? [];
-  const allActNregs = lldbiHints && lldbiHints.categoryHints.length > 0
-    ? [...new Set([...taxonomyCandidatesNregs, ...bootstrapActNregs, ...actNregsFromStep])]
-    : [...new Set([...bootstrapActNregs, ...actNregsFromStep, ...taxonomyCandidatesNregs])];
-  const topNregs = allActNregs.slice(0, TWO_STAGE_ACTS_TOP);
+  const actNregsFromStep = extractActSearchNregsFromHits(rawPerStep);
+  const topNregs = buildWithinActPool({
+    taxonomyNregs: taxonomyCandidatesNregs,
+    actSearchNregs: actNregsFromStep,
+    bootstrapActNregs,
+    categoryHintCount: lldbiHints?.categoryHints.length ?? 0,
+    limit: TWO_STAGE_ACTS_TOP,
+  });
 
   if (hasActCandidates && topNregs.length > 0) {
     try {
@@ -1345,12 +1343,15 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   let actPlannerOutput: ActPlannerOutput | null = null;
   let actPlannerCalledThisRun = false;
-  const actPlannerTier = selectActPlannerTier(
-    goalSplit.goals?.length ?? 1,
-    taxonomyResult.rada_nreg_candidates?.length ?? 0,
-    query.length,
-    !!routing_flags?.input_looks_like_contract
-  );
+  const actPlannerTier = selectActPlannerTier({
+    goalsCount: goalSplit.goals?.length ?? 1,
+    taxonomyActCount: taxonomyResult.rada_nreg_candidates?.length ?? 0,
+    aliasHitCount: taxonomyResult.alias_hits?.length ?? 0,
+    categoryHintCount: taxonomyResult.category_hints?.length ?? 0,
+    documentTypeHintCount: documentTypeHints.length,
+    queryLength: query.length,
+    hasContractLikeFlag: !!routing_flags?.input_looks_like_contract,
+  });
   if (
     actPlannerTier >= 1 &&
     run_id &&
@@ -1563,60 +1564,37 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   // Always run within-act retrieval when we have act candidates (taxonomy or acts search).
   // This surfaces articles (e.g. ст.130) that rank lower globally but are relevant within the right act.
-  if (hasActCandidates && !degraded.lldbi && stepsToRun.some((s) => s.kind === 'lldbi_acts')) {
-    const actsStep = stepsToRun.find((s) => s.kind === 'lldbi_acts');
-    if (actsStep) {
-      const actLimit = searchPlan.thresholds?.top_k_acts ?? 10;
+  if (hasActCandidates && !degraded.lldbi) {
+    const topNregs = buildWithinActPool({
+      taxonomyNregs: taxonomyResult.rada_nreg_candidates ?? [],
+      actSearchNregs: extractActSearchNregsFromHits(rawPerStep),
+      plannerPreferredNregs:
+        actPlannerOutput?.goals?.[0]?.act_candidates
+          ?.filter((candidate) => candidate.rada_nreg)
+          .map((candidate) => candidate.rada_nreg as string) ?? [],
+      categoryHintCount: categoryHints.length,
+      limit: TWO_STAGE_ACTS_TOP,
+    });
+    if (topNregs.length > 0) {
       try {
-        const actStart = Date.now();
-        const actHits = await qdrantSearch({
-          collection: actsStep.collection,
+        const chunkStart = Date.now();
+        // Per-act retrieval: top N chunks per act so relevant article (e.g. ст.130) can appear within act.
+        const filteredChunkHits = await fetchFilteredChunkHitsByActs({
+          radaNregs: topNregs,
           vector,
-          limit: actLimit,
+          collection: collections.chunks,
+          limit: TWO_STAGE_CHUNKS_PER_ACT,
           timeoutMs: config.qdrantTimeoutSec * 1000,
           callCounter: qdrantCallCounter,
         });
-        stepsLatencyMs.push(Date.now() - actStart);
-        const actNregs = actHits
-          .map((h) => (h.payload?.rada_nreg as string)?.trim())
-          .filter((n): n is string => !!n);
-        const taxonomyNregs = taxonomyResult.rada_nreg_candidates ?? [];
-        // LLDBI soft prior: when category hints present, prefer taxonomy (category-aligned) acts for
-        // within-act retrieval so hint-aligned acts get higher chunk evidence priority.
-        let mergedNregs = (categoryHints.length > 0)
-          ? [...new Set([...taxonomyNregs, ...actNregs])].slice(0, TWO_STAGE_ACTS_TOP)
-          : [...new Set([...actNregs, ...taxonomyNregs])].slice(0, TWO_STAGE_ACTS_TOP);
-        if (actPlannerOutput?.goals?.[0]?.act_candidates?.length) {
-          const preferred = actPlannerOutput.goals[0].act_candidates
-            .filter((c) => c.rada_nreg)
-            .map((c) => c.rada_nreg as string);
-          const validPreferred = preferred.filter((n) => mergedNregs.includes(n));
-          mergedNregs = [...validPreferred, ...mergedNregs.filter((n) => !validPreferred.includes(n))].slice(
-            0,
-            TWO_STAGE_ACTS_TOP
-          );
-        }
-        const topNregs = mergedNregs.length > 0 ? mergedNregs : actNregs.slice(0, TWO_STAGE_ACTS_TOP);
-        if (topNregs.length > 0) {
-          const chunkStart = Date.now();
-          // Per-act retrieval: top N chunks per act so relevant article (e.g. ст.130) can appear within act.
-          const filteredChunkHits = await fetchFilteredChunkHitsByActs({
-            radaNregs: topNregs,
-            vector,
-            collection: collections.chunks,
-            limit: TWO_STAGE_CHUNKS_PER_ACT,
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
-          });
-          stepsLatencyMs.push(Date.now() - chunkStart);
-          collectionsUsed.push(`${collections.chunks}(filtered)`);
-          usedFilteredChunksSearch = true;
-          allHits.push(...filteredChunkHits);
-          const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
-          allHits.length = 0;
-          allHits.push(...deduped);
-          topScore = allHits.length > 0 ? Math.max(...allHits.map((h) => h.score)) : null;
-        }
+        stepsLatencyMs.push(Date.now() - chunkStart);
+        collectionsUsed.push(`${collections.chunks}(filtered)`);
+        usedFilteredChunksSearch = true;
+        allHits.push(...filteredChunkHits);
+        const deduped = dedupeHits(allHits).sort(compareRawHitByScore);
+        allHits.length = 0;
+        allHits.push(...deduped);
+        topScore = allHits.length > 0 ? Math.max(...allHits.map((h) => h.score)) : null;
       } catch {
         // two-stage best-effort; keep first-pass hits
       }
@@ -1811,14 +1789,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     finalHits.length > 0 ? finalHits.reduce((s, h) => s + h.score, 0) / finalHits.length : undefined;
 
   // Act candidates (ACTS-1 pool + score + diversity): taxonomy + act search, then policy cap (Act selection 3.1)
-  const actNregsFromSearch = [
-    ...new Set(
-      rawPerStep
-        .filter((h) => h.source === 'lldbi_acts')
-        .map((h) => h.rada_nreg)
-        .filter((n): n is string => !!n)
-    ),
-  ];
+  const actNregsFromSearch = extractActSearchNregsFromHits(rawPerStep);
   const plannerFamilyHints =
     actPlannerOutput?.goals?.[0]?.act_families?.map((family) => ({
       family: family.family.trim().toLowerCase(),

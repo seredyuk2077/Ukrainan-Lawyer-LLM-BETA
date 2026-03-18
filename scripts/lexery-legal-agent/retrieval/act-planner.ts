@@ -105,21 +105,46 @@ ${JSON.stringify(goalsJson, null, 2)}
 
 export type ActPlannerTier = 0 | 1 | 2;
 
+export interface ActPlannerTierInput {
+  goalsCount: number;
+  taxonomyActCount: number;
+  aliasHitCount: number;
+  categoryHintCount: number;
+  documentTypeHintCount: number;
+  queryLength: number;
+  hasContractLikeFlag: boolean;
+}
+
 /**
  * Decide act planner tier from goal split and cheap signals (no LLM).
- * tier 0: no call; tier 1: single goal + low confidence/short/contract; tier 2: multi-goal or ambiguity.
+ * tier 0: no call; tier 1: single-goal only when taxonomy/hints are genuinely weak; tier 2: multi-goal.
  */
-export function selectActPlannerTier(
-  goalsCount: number,
-  taxonomyActCount: number,
-  queryLength: number,
-  hasContractLikeFlag: boolean
-): ActPlannerTier {
+export function selectActPlannerTier(input: ActPlannerTierInput): ActPlannerTier {
+  const {
+    goalsCount,
+    taxonomyActCount,
+    aliasHitCount,
+    categoryHintCount,
+    documentTypeHintCount,
+    queryLength,
+    hasContractLikeFlag,
+  } = input;
   if (!config.u4ActPlannerEnabled) return 0;
   if (goalsCount > 1) return 2;
-  const lowActConfidence = taxonomyActCount === 0;
-  const shortOrConversational = queryLength < 100;
-  if (lowActConfidence || shortOrConversational || hasContractLikeFlag) return 1;
+  if (hasContractLikeFlag) return 1;
+  const hasTaxonomySignal =
+    taxonomyActCount > 0 ||
+    aliasHitCount > 0 ||
+    categoryHintCount > 0 ||
+    documentTypeHintCount > 0;
+  if (!hasTaxonomySignal) return 1;
+  const isUltraShort = queryLength < 12;
+  const weakSingleSignal =
+    taxonomyActCount <= 1 &&
+    aliasHitCount === 0 &&
+    categoryHintCount === 0 &&
+    documentTypeHintCount === 0;
+  if (isUltraShort && weakSingleSignal) return 1;
   return 0;
 }
 

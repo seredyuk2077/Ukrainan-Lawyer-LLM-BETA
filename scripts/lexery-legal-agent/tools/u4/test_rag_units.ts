@@ -15,6 +15,8 @@ import {
   findActByTitleFragment,
 } from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
+import { selectActPlannerTier } from '../../retrieval/act-planner.js';
+import { buildWithinActPool, extractActSearchNregsFromHits } from '../../retrieval/within-act-pool.js';
 import {
   buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
@@ -107,6 +109,90 @@ function testGoalSplitCarriesSharedTailAcrossClauses(): void {
     throw new Error(`Expected first clause to inherit shared tail, got ${JSON.stringify(subqueries)}`);
   }
   console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
+}
+
+function testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists(): void {
+  const tier = selectActPlannerTier({
+    goalsCount: 1,
+    taxonomyActCount: 4,
+    aliasHitCount: 2,
+    categoryHintCount: 2,
+    documentTypeHintCount: 1,
+    queryLength: 24,
+    hasContractLikeFlag: false,
+  });
+  if (tier !== 0) throw new Error(`Expected tier 0 when single-goal taxonomy signal is already strong, got ${tier}`);
+  console.log('[OK] act planner tier stays off for single-goal query with strong taxonomy signal');
+}
+
+function testActPlannerTierUsesTierOneWhenSignalsAreMissing(): void {
+  const tier = selectActPlannerTier({
+    goalsCount: 1,
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    categoryHintCount: 0,
+    documentTypeHintCount: 0,
+    queryLength: 18,
+    hasContractLikeFlag: false,
+  });
+  if (tier !== 1) throw new Error(`Expected tier 1 when single-goal taxonomy signal is missing, got ${tier}`);
+  console.log('[OK] act planner tier uses cheap planner only when single-goal taxonomy signal is missing');
+}
+
+function testActPlannerTierKeepsTierTwoForMultiGoal(): void {
+  const tier = selectActPlannerTier({
+    goalsCount: 2,
+    taxonomyActCount: 5,
+    aliasHitCount: 3,
+    categoryHintCount: 2,
+    documentTypeHintCount: 1,
+    queryLength: 70,
+    hasContractLikeFlag: false,
+  });
+  if (tier !== 2) throw new Error(`Expected tier 2 for multi-goal query, got ${tier}`);
+  console.log('[OK] act planner tier keeps tier 2 for multi-goal queries');
+}
+
+function testExtractActSearchNregsFromHitsUsesOnlyActSearchHits(): void {
+  const nregs = extractActSearchNregsFromHits([
+    { source: 'lldbi_chunks', rada_nreg: '111-11' } as const,
+    { source: 'lldbi_acts', rada_nreg: '322-08' } as const,
+    { source: 'lldbi_acts', rada_nreg: '322-08' } as const,
+    { source: 'REFERENCE_EXPANSION', rada_nreg: '999-99' } as const,
+    { source: 'lldbi_acts', rada_nreg: '2341-14' } as const,
+  ]);
+  if (JSON.stringify(nregs) !== JSON.stringify(['322-08', '2341-14'])) {
+    throw new Error(`Expected only deduped lldbi_acts nregs, got ${JSON.stringify(nregs)}`);
+  }
+  console.log('[OK] within-act pool extracts deduped act-search nregs only from lldbi_acts hits');
+}
+
+function testBuildWithinActPoolPrefersTaxonomyWhenHintsExist(): void {
+  const pool = buildWithinActPool({
+    taxonomyNregs: ['80731-10', '2341-14'],
+    actSearchNregs: ['2341-14', '111-11'],
+    bootstrapActNregs: ['999-99'],
+    categoryHintCount: 2,
+    limit: 4,
+  });
+  if (JSON.stringify(pool) !== JSON.stringify(['80731-10', '2341-14', '999-99', '111-11'])) {
+    throw new Error(`Expected taxonomy-led ordering under category hints, got ${JSON.stringify(pool)}`);
+  }
+  console.log('[OK] within-act pool prefers taxonomy-aligned acts when category hints exist');
+}
+
+function testBuildWithinActPoolPromotesPlannerPreferredActs(): void {
+  const pool = buildWithinActPool({
+    taxonomyNregs: ['2755-17', '2747-15', '2341-14'],
+    actSearchNregs: ['2747-15', '2341-14'],
+    plannerPreferredNregs: ['2341-14'],
+    categoryHintCount: 1,
+    limit: 3,
+  });
+  if (JSON.stringify(pool) !== JSON.stringify(['2341-14', '2755-17', '2747-15'])) {
+    throw new Error(`Expected planner-preferred act to move to the front, got ${JSON.stringify(pool)}`);
+  }
+  console.log('[OK] within-act pool promotes planner-preferred acts without extra Qdrant search');
 }
 
 function testClassifyActKindPrimaryLaw(): void {
@@ -862,6 +948,12 @@ async function main(): Promise<void> {
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
+  testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
+  testActPlannerTierUsesTierOneWhenSignalsAreMissing();
+  testActPlannerTierKeepsTierTwoForMultiGoal();
+  testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
+  testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
+  testBuildWithinActPoolPromotesPlannerPreferredActs();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
   testClassifyActKindUnknown();
