@@ -93,5 +93,28 @@
     },
     "expected_selected_acts": ["57-95-п"],
     "max_selected_acts": 3
+  },
+  {
+    "id": "return_goods_14_days",
+    "query": "Чи можу я повернути непродовольчий товар протягом 14 днів без пояснення причин, якщо він не підійшов?",
+    "description": "Consumer multi-source кейс: базовий закон і ЦКУ мають бути попереду, а правила роздрібної торгівлі непродовольчими товарами мають залишатися у selected_acts як supporting order.",
+    "expected_primary": {
+      "rada_nreg": "1023-12",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1023-12", "435-15", "z1257-07"],
+    "max_selected_acts": 4
+  },
+  {
+    "id": "bankruptcy_opening_claims",
+    "query": "Який порядок відкриття провадження у справі про банкрутство та строк подання вимог кредиторів?",
+    "description": "Multi-clause same-act кейс: КУзПБ має самостійно покривати обидві частини запиту без стороннього процедурного шуму в selected_acts.",
+    "expected_primary": {
+      "rada_nreg": "2597-19",
+      "max_rank": 3
+    },
+    "expected_selected_acts": ["2597-19"],
+    "forbidden_selected_acts": ["z0841-01", "4651-17"],
+    "max_selected_acts": 2
   }
 ]

@@ -67,6 +67,8 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `ActTaxonomyStore` тепер використовує не лише alias/token matching, а й phrase-level LLDBI metadata (`title`, `summary`, `keywords`, `topics`, `aliases`, `validity_status`) для дешевшого й точнішого act candidate generation без hardcoded act lists.
 - `selected_acts` тепер жорсткіше відсікає weak cross-family acts: окремо для support candidates і для chunks-evidence tail, щоб multi-act retrieval не засмічував writer випадковими актами лише через vector overlap.
 - `selected_acts` оцінює не лише `count_in_top30`, а й ранню силу evidence (`best_rank_in_top30`, `rank_mass_top30`, `max_ordering_score`), тому сильна релевантна норма з невеликою кількістю hits не губиться за шумним хвостом.
+- У single-goal режимі `selected_acts` тепер може зберегти один сильний secondary supporting act, якщо він має повторний chunk-evidence у top-30; це прибирає false negative для practical-order cases на кшталт повернення товару.
+- У multi-clause запитах, де один кодекс явно покриває обидві частини питання, `selected_acts` більше не зобов'язаний добирати другий акт лише через `goals_count >= 2`; це прибирає procedural noise у same-act cases на кшталт банкрутства.
 - Corpus hygiene теж є частиною retrieval quality: якщо в LLDBI/Qdrant payload відсутні `chunk_title`, `unit_type`, `article_number` або висять старі `content_hash` версії, structural rerank у U4 втрачає точність навіть коли правильний акт уже є в корпусі.
 - Для масового cheap-repair такого drift використовується `refresh-qdrant-payload-batch` у LLDBI admin CLI; full `update --force` потрібен лише коли current-hash points реально відсутні або неповні.
 - Для контрольованого full reindex усього корпуса використовується `reload-corpus-batch`; він працює батчами, має resumable report і підходить для parser/payload/embedding кампаній на тисячах актів. Для повторного прогону transient fail-ів у тому самому report додається `--retry-failed`.
@@ -113,6 +115,6 @@ pnpm brain:verify:retrieval-real-dev:fast --flaky-check
 pnpm brain:verify:act-type-audit:fast
 ```
 
-`verify_rag_golden`, `verify:retrieval-real-dev:fast/smoke`, `verify_rag_secondary_acts`, and `verify_rag_assessment` now run in a retrieval-focused harness:
+`verify_rag_golden`, `verify:retrieval-real-dev:fast/smoke`, `verify_rag_secondary_acts`, `verify_rag_assessment`, and `verify:act-type-audit` now run in a retrieval-focused harness:
 `U10` is dry-run, `U9` meta-triage is disabled, memory fetch is disabled, verifier runs stop after `U5`, and each verifier gets its own Redis queue namespace.
 This keeps RAG iteration fast, cheaper, and isolated from unrelated queued runs while leaving production runtime behavior unchanged.

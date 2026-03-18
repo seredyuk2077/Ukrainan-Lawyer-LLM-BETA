@@ -9,6 +9,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config as loadEnv } from 'dotenv';
+import { randomUUID } from 'crypto';
 import { classifyActKind, type ActKind } from '../../retrieval/selected-acts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -286,7 +287,16 @@ async function run(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log('[verify_act_type_audit] port', port, 'cases', toRun.length, onlyIndices === 'all' ? '(full)' : `(--only: ${indices.length})`);
 
-  const serverEnv = { ...process.env, BRAIN_PORT: String(port), DEV_API_KEY: DEV_KEY };
+  const serverEnv = {
+    ...process.env,
+    BRAIN_PORT: String(port),
+    DEV_API_KEY: DEV_KEY,
+    LEGAL_AGENT_DISABLE_LLM: 'true',
+    U9_META_TRIAGE_ENABLED: 'false',
+    MEMORY_RECENT_ENABLED: 'false',
+    U5_STOP_AFTER_GATE: 'true',
+    REDIS_QUEUE_NAMESPACE: `lexery:verify:act-type-audit:${randomUUID()}`,
+  };
   const child = spawn(
     process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
     ['exec', 'tsx', resolve(process.cwd(), 'scripts/lexery-legal-agent/server.ts')],

@@ -301,7 +301,10 @@ const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
 const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
 const CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE = 5;
 const CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE = 0.68;
-const NON_PRIMARY_REPEAT_EVIDENCE_OVERRIDE = 10;
+const NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN = 5;
+const NON_PRIMARY_STRONG_SUPPORT_BEST_RANK_MAX = 8;
+const MULTI_GOAL_SINGLE_ACT_COUNT_RATIO = 3;
+const MULTI_GOAL_SINGLE_ACT_RANK_MASS_RATIO = 2.5;
 
 function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
@@ -322,6 +325,24 @@ function hasStrongTopRankEvidence(item: ChunksEvidenceItem | undefined): boolean
 function isStrongChunksEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
   return item.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD || hasStrongTopRankEvidence(item);
+}
+
+function hasStrongNonPrimarySupportEvidence(item: ChunksEvidenceItem | undefined): boolean {
+  if (!item) return false;
+  const bestRank = item.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  return (
+    item.count_in_top30 >= NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN ||
+    (bestRank <= NON_PRIMARY_STRONG_SUPPORT_BEST_RANK_MAX &&
+      (item.max_ordering_score ?? item.max_score) >= CHUNKS_EVIDENCE_SCORE_THRESHOLD)
+  );
+}
+
+function canOverrideNonPrimaryPrimaryLawBlock(
+  kind: ActKind,
+  evidence: ChunksEvidenceItem | undefined
+): boolean {
+  if (kind !== 'SECONDARY_ORDER' && kind !== 'UNKNOWN') return false;
+  return hasStrongNonPrimarySupportEvidence(evidence);
 }
 
 function isFamilyAlignedSupportAct(
@@ -349,6 +370,37 @@ function isFamilyAlignedSupportAct(
   return true;
 }
 
+function shouldAllowSingleActCoverageForMultiGoal(
+  isMultiGoal: boolean,
+  chunksEvidenceTopActs: ChunksEvidenceItem[],
+  candidateByNreg: Map<string, ActCandidateInput>,
+  familyEvidence: FamilyEvidenceSummaryInput | undefined
+): boolean {
+  if (!isMultiGoal) return false;
+  if (familyEvidence?.family_conflict) return false;
+  const strongEvidence = chunksEvidenceTopActs.filter((item) => isStrongChunksEvidence(item));
+  const top = strongEvidence[0];
+  if (!top) return false;
+  const topCandidate = candidateByNreg.get(top.rada_nreg);
+  if (
+    classifyActKind(
+      topCandidate?.title ?? '',
+      topCandidate?.document_type,
+      topCandidate?.category
+    ) !== 'PRIMARY_LAW'
+  ) {
+    return false;
+  }
+  const second = strongEvidence[1];
+  if (!second) return true;
+  const topRankMass = top.rank_mass_top30 ?? 0;
+  const secondRankMass = second.rank_mass_top30 ?? 0;
+  return (
+    top.count_in_top30 >= Math.max(6, second.count_in_top30 * MULTI_GOAL_SINGLE_ACT_COUNT_RATIO) &&
+    topRankMass >= secondRankMass * MULTI_GOAL_SINGLE_ACT_RANK_MASS_RATIO
+  );
+}
+
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
   const {
     finalHits,
@@ -372,10 +424,20 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
   );
   const isMultiGoal = (input.goals_summary?.length ?? 0) >= 2;
-  const selectedActsMin = isMultiGoal ? Math.max(SELECTED_ACTS_MIN_MULTI, input.goals_summary.length) : SELECTED_ACTS_MIN_SINGLE;
-  const topCandidateScore = Math.max(...actCandidatesTop.map((candidate) => candidate.score ?? 0), 0);
-
   const candidateByNreg = new Map(actCandidatesTop.map((a) => [a.rada_nreg, a]));
+  const allowSingleActCoverageForMultiGoal = shouldAllowSingleActCoverageForMultiGoal(
+    isMultiGoal,
+    chunks_evidence_top_acts,
+    candidateByNreg,
+    familyEvidence
+  );
+  const selectedActsMin =
+    allowSingleActCoverageForMultiGoal
+      ? SELECTED_ACTS_MIN_SINGLE
+      : isMultiGoal
+        ? Math.max(SELECTED_ACTS_MIN_MULTI, input.goals_summary.length)
+        : SELECTED_ACTS_MIN_SINGLE;
+  const topCandidateScore = Math.max(...actCandidatesTop.map((candidate) => candidate.score ?? 0), 0);
   const reasonCodes: string[] = [];
   const selected: SelectedActOutput[] = [];
   const fromTaxonomy: string[] = [];
@@ -401,7 +463,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       kind !== 'PRIMARY_LAW' &&
       hasStrongPrimaryLawEvidence &&
       !hasStrongTopRankEvidence(e) &&
-      e.count_in_top30 < NON_PRIMARY_REPEAT_EVIDENCE_OVERRIDE
+      !canOverrideNonPrimaryPrimaryLawBlock(kind, e)
     ) {
       pushReasonCode(reasonCodes, 'NON_PRIMARY_EVIDENCE_BLOCKED_PRIMARY_PRESENT');
       continue;
@@ -434,7 +496,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   // B) Add 1–2 from taxonomy/acts_search not yet covered by chunks (support). Noise control: BILL_DRAFT/CASELAW_OPINION/UNKNOWN only with evidence or doc_type hint.
   const cap = actSelectionLowConfidence ? Math.min(7, SELECTED_ACTS_MAX_OUT) : Math.min(5, SELECTED_ACTS_MAX_OUT);
-  let wantMore = Math.max(selectedActsMin, Math.min(cap, selected.length + (isMultiGoal ? 2 : 1))) - selected.length;
+  let wantMore = allowSingleActCoverageForMultiGoal
+    ? 0
+    : Math.max(selectedActsMin, Math.min(cap, selected.length + (isMultiGoal ? 2 : 1))) -
+      selected.length;
   let docTypeHintAllowedUsed = false;
   if (wantMore > 0) {
     for (const a of actCandidatesTop) {
@@ -484,7 +549,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         !isMultiGoal &&
         kind !== 'PRIMARY_LAW' &&
         hasStrongPrimaryLawEvidence &&
-        !strongTopRankEvidence
+        !strongTopRankEvidence &&
+        !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence)
       ) {
         pushReasonCode(reasonCodes, 'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT');
         continue;
@@ -583,7 +649,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   } else if (ordersInSelected.length === 1 && chunksEvidenceNregs.has(ordersInSelected[0].rada_nreg)) {
     const orderEvidence = chunksEvidenceByNreg.get(ordersInSelected[0].rada_nreg);
-    if (!primaryLawDominates || hasStrongTopRankEvidence(orderEvidence)) {
+    if (
+      !primaryLawDominates ||
+      hasStrongTopRankEvidence(orderEvidence) ||
+      hasStrongNonPrimarySupportEvidence(orderEvidence)
+    ) {
       reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
     } else {
       toRemoveOrders.add(ordersInSelected[0].rada_nreg);
@@ -612,7 +682,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   if (
     kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN &&
     kindsInSelected.size < 2 &&
-    !(!isMultiGoal && hasStrongPrimaryLawEvidence)
+    !(!isMultiGoal && hasStrongPrimaryLawEvidence) &&
+    !allowSingleActCoverageForMultiGoal
   ) {
     // Add one act from candidates with a different kind if possible
     const existingKinds = new Set(kindsInSelected);
@@ -891,6 +962,23 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
 
+  if (allowSingleActCoverageForMultiGoal && selected.length > 1) {
+    const rankedByEvidence = [...selected].sort((left, right) => {
+      const leftEvidence = chunksEvidenceByNreg.get(left.rada_nreg);
+      const rightEvidence = chunksEvidenceByNreg.get(right.rada_nreg);
+      if (leftEvidence && rightEvidence) {
+        const diff = compareChunksEvidenceStrength(leftEvidence, rightEvidence);
+        if (diff !== 0) return diff;
+      }
+      return (right.score ?? 0) - (left.score ?? 0);
+    });
+    const keep = new Set(rankedByEvidence.slice(0, 1).map((act) => act.rada_nreg));
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      if (!keep.has(selected[index].rada_nreg)) selected.splice(index, 1);
+    }
+    reasonCodes.push('MULTI_GOAL_SINGLE_ACT_TAIL_TRIMMED');
+  }
+
   // Enrich selected items for Writer: document_type, category, act_kind, flags (E.2)
   for (const s of selected) {
     const cand = candidateByNreg.get(s.rada_nreg);
@@ -914,6 +1002,9 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   if (diversityGuardAdded) {
     reasonCodes.push('SELECTED_ACTS_DIVERSITY_ENFORCED');
   }
+  if (allowSingleActCoverageForMultiGoal) {
+    reasonCodes.push('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED');
+  }
 
   // Confidence: do NOT lower only because we trimmed orders. Use evidence strength.
   let selected_acts_confidence = 0.5;
@@ -935,7 +1026,12 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   }
 
   const selectedNregs = new Set(selectedCapped.map((s) => s.rada_nreg));
-  const minDistinctForMultiGoal = input.goals_summary?.length >= 2 ? input.goals_summary.length : 0;
+  const minDistinctForMultiGoal =
+    input.goals_summary?.length >= 2
+      ? allowSingleActCoverageForMultiGoal
+        ? 1
+        : input.goals_summary.length
+      : 0;
   if (minDistinctForMultiGoal > 0 && selectedCapped.length > 0) {
     const distinctCount = selectedNregs.size;
     if (distinctCount < minDistinctForMultiGoal) {

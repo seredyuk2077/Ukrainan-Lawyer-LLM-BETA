@@ -563,6 +563,163 @@ function testSelectedActsPreserveStrongEarlyPrimaryLawEvidence(): void {
   console.log('[OK] selected_acts preserves strong early primary-law evidence over noisy opinion/order tail');
 }
 
+function testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 0.84,
+        category: 'civil',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '1023-12',
+        title: 'Про захист прав споживачів',
+        score: 0.79,
+        category: 'civil',
+        document_type: 'Закон',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'z1257-07',
+        title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+        score: 0.52,
+        category: 'business_corporate',
+        document_type: 'Наказ',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['435-15', '1023-12', 'z1257-07']),
+    actsSearchNregs: ['435-15', '1023-12', 'z1257-07'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.53,
+        max_score: 0.61,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.3,
+        max_ordering_score: 0.61,
+      },
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.51,
+        max_score: 0.59,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.54,
+        max_ordering_score: 0.59,
+      },
+      {
+        rada_nreg: 'z1257-07',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.42,
+        max_score: 0.46,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.42,
+        max_ordering_score: 0.47,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'civil',
+      family_confidence: 0.88,
+      family_conflict: false,
+      top2: [{ family_key: 'civil', support_score: 0.88 }],
+    },
+  });
+  if (!result.selected_acts.some((act) => act.rada_nreg === 'z1257-07')) {
+    throw new Error(
+      `Expected repeated supporting-order evidence to preserve z1257-07, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  console.log('[OK] selected_acts keeps strong supporting secondary act when repeated evidence is present');
+}
+
+function testSelectedActsAllowSingleActCoverageForDominantMultiGoal(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2597-19',
+        title: 'Кодекс України з процедур банкрутства',
+        score: 0.94,
+        category: 'business_corporate',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'z0841-01',
+        title: 'Про затвердження Інструкції про порядок регулювання діяльності банків в Україні',
+        score: 0.63,
+        category: 'business_corporate',
+        document_type: 'Наказ',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.51,
+        category: 'administrative',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2597-19', 'z0841-01', '2747-15']),
+    actsSearchNregs: ['2597-19', 'z0841-01', '2747-15'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2597-19',
+        count_in_top30: 24,
+        avg_score_in_top30: 0.63,
+        max_score: 0.68,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 3.05,
+        max_ordering_score: 0.73,
+      },
+      {
+        rada_nreg: 'z0841-01',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.45,
+        max_score: 0.47,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.22,
+        max_ordering_score: 0.41,
+      },
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.4,
+        max_score: 0.4,
+        best_rank_in_top30: 11,
+        rank_mass_top30: 0.09,
+        max_ordering_score: 0.34,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'business_corporate',
+      family_confidence: 0.91,
+      family_conflict: false,
+      top2: [{ family_key: 'business_corporate', support_score: 0.91 }],
+    },
+  });
+  if (result.selected_acts.length !== 1 || result.selected_acts[0]?.rada_nreg !== '2597-19') {
+    throw new Error(
+      `Expected dominant multi-goal coverage to stay on one act, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Expected MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  console.log('[OK] selected_acts does not force a second act when one dominant code covers multi-goal query');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -592,6 +749,8 @@ async function main(): Promise<void> {
   testSelectedActsBlockCrossFamilySupportWithoutEvidence();
   testSelectedActsDemoteCrossFamilyChunkEvidence();
   testSelectedActsPreserveStrongEarlyPrimaryLawEvidence();
+  testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
+  testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   console.log('\nAll RAG unit tests passed.');
 }
 
