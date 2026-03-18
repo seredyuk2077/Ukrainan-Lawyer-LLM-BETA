@@ -66,6 +66,31 @@ function testActFamilyHitStillFallsBackToTitleSignals(): void {
   console.log('[OK] act family hit still falls back to title signals');
 }
 
+function testActFamilyHitUsesStructuredSelectedActCategory(): void {
+  const retrievalTrace = {
+    hits: [],
+    meta: {
+      selected_acts: [{ rada_nreg: '2597-19', act_title: 'Кодекс України з процедур банкрутства', category: 'corporate' }],
+    },
+  };
+  const hit = checkActFamilyHit(retrievalTrace as never, [{ family_id: 'corporate' }]);
+  assert(hit === true, 'selected_acts category should satisfy family match for verifier');
+  console.log('[OK] act family hit uses structured selected_acts category');
+}
+
+function testActFamilyHitNormalizesBusinessCorporateAlias(): void {
+  const retrievalTrace = {
+    hits: [],
+    meta: {
+      family_evidence_summary: { dominant_family_key: 'business_corporate' },
+      selected_acts: [{ rada_nreg: '2597-19', act_title: 'Кодекс України з процедур банкрутства' }],
+    },
+  };
+  const hit = checkActFamilyHit(retrievalTrace as never, [{ family_id: 'corporate' }]);
+  assert(hit === true, 'business_corporate dominant family should satisfy corporate expectation');
+  console.log('[OK] act family hit normalizes business_corporate alias');
+}
+
 function testRetrievalTraceReadyOnlyWhenTerminal(): void {
   const retrievalTrace = {
     meta: {
@@ -135,6 +160,8 @@ function main(): void {
   testLimitedRunNonSmokeProportional();
   testActFamilyHitUsesDominantFamilySummary();
   testActFamilyHitStillFallsBackToTitleSignals();
+  testActFamilyHitUsesStructuredSelectedActCategory();
+  testActFamilyHitNormalizesBusinessCorporateAlias();
   testRetrievalTraceReadyOnlyWhenTerminal();
   testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode();
   testArticleExpectationOverlayReportsRankMiss();

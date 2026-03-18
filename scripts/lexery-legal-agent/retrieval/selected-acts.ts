@@ -295,7 +295,7 @@ const FAMILY_CONFLICT_TOP2_MIN = 0.45;
  * BILL_DRAFT and CASELAW_OPINION are still controlled because they are structurally distinct
  * content types that require explicit evidence to be included.
  */
-const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION'];
+const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION', 'KSU_DECISION'];
 
 const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
 const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
@@ -343,6 +343,14 @@ function canOverrideNonPrimaryPrimaryLawBlock(
 ): boolean {
   if (kind !== 'SECONDARY_ORDER' && kind !== 'UNKNOWN') return false;
   return hasStrongNonPrimarySupportEvidence(evidence);
+}
+
+function shouldBlockKsuUnderPrimaryLawDominance(
+  isMultiGoal: boolean,
+  hasStrongPrimaryLawEvidence: boolean,
+  evidence: ChunksEvidenceItem | undefined
+): boolean {
+  return !isMultiGoal && hasStrongPrimaryLawEvidence && !hasStrongNonPrimarySupportEvidence(evidence);
 }
 
 function isFamilyAlignedSupportAct(
@@ -471,6 +479,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     if (NOISE_KINDS.includes(kind) && hasStrongPrimaryLawEvidence && !hasStrongTopRankEvidence(e)) {
       if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_PRIMARY_PRESENT');
       if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_PRIMARY_PRESENT');
+      if (kind === 'KSU_DECISION') pushReasonCode(reasonCodes, 'KSU_BLOCKED_PRIMARY_PRESENT');
+      continue;
+    }
+    if (kind === 'KSU_DECISION' && shouldBlockKsuUnderPrimaryLawDominance(isMultiGoal, hasStrongPrimaryLawEvidence, e)) {
+      pushReasonCode(reasonCodes, 'KSU_BLOCKED_PRIMARY_PRESENT');
       continue;
     }
     const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
@@ -526,6 +539,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
         if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_NO_EVIDENCE');
         else if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
+        else if (kind === 'KSU_DECISION') pushReasonCode(reasonCodes, 'KSU_BLOCKED_NO_EVIDENCE');
         continue;
       }
       // BILL_DRAFT: allow only when query/hints are project-related (or has evidence).
@@ -542,6 +556,16 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         );
         if (!strongEvidence && hasPrimaryInCandidates) {
           pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
+          continue;
+        }
+      }
+      if (kind === 'KSU_DECISION') {
+        const ev = chunks_evidence_top_acts.find((e) => e.rada_nreg === a.rada_nreg);
+        const hasPrimaryInCandidates = actCandidatesTop.some(
+          (x) => classifyActKind(x.title ?? '', x.document_type, x.category) === 'PRIMARY_LAW'
+        );
+        if ((hasPrimaryInCandidates && !hasStrongNonPrimarySupportEvidence(ev)) || shouldBlockKsuUnderPrimaryLawDominance(isMultiGoal, hasStrongPrimaryLawEvidence, ev)) {
+          pushReasonCode(reasonCodes, 'KSU_BLOCKED_NO_EVIDENCE');
           continue;
         }
       }
@@ -665,6 +689,26 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (toRemoveOrders.has(selected[i].rada_nreg)) selected.splice(i, 1);
     }
     fromChunksEvidence.splice(0, fromChunksEvidence.length, ...fromChunksEvidence.filter((n) => !toRemoveOrders.has(n)));
+  }
+
+  // --- Policy v2: KSU decisions need repeated evidence when primary law already dominates ---
+  if (!isMultiGoal && hasStrongPrimaryLawEvidence) {
+    const ksuToRemove = new Set<string>();
+    for (const s of selected) {
+      const cand = candidateByNreg.get(s.rada_nreg);
+      const kind = classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
+      if (kind !== 'KSU_DECISION') continue;
+      if (!hasStrongNonPrimarySupportEvidence(chunksEvidenceByNreg.get(s.rada_nreg))) {
+        ksuToRemove.add(s.rada_nreg);
+      }
+    }
+    if (ksuToRemove.size > 0) {
+      for (let i = selected.length - 1; i >= 0; i -= 1) {
+        if (ksuToRemove.has(selected[i].rada_nreg)) selected.splice(i, 1);
+      }
+      fromChunksEvidence.splice(0, fromChunksEvidence.length, ...fromChunksEvidence.filter((n) => !ksuToRemove.has(n)));
+      reasonCodes.push('KSU_BLOCKED_PRIMARY_PRESENT');
+    }
   }
 
   // --- Policy v2: diversity guard (by act_kind) ---

@@ -185,6 +185,62 @@ async function hydrateSelectedActsMeta(
   return out;
 }
 
+type CandidateMetaHydratable = {
+  rada_nreg: string;
+  title?: string;
+  category?: string;
+  document_type?: string;
+};
+
+async function hydrateActCandidatesMeta<T extends CandidateMetaHydratable>(candidates: T[]): Promise<T[]> {
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      if (candidate.title && candidate.category && candidate.document_type) return candidate;
+      const meta = await getActMeta(candidate.rada_nreg);
+      if (!meta) return candidate;
+      return {
+        ...candidate,
+        title: candidate.title ?? meta.title ?? undefined,
+        category: candidate.category ?? meta.category ?? undefined,
+        document_type: candidate.document_type ?? meta.document_type ?? undefined,
+      } satisfies T;
+    })
+  );
+}
+
+type EvidenceActLike = { rada_nreg: string };
+
+async function backfillChunkEvidenceCandidates<
+  T extends CandidateMetaHydratable & {
+    score?: number;
+    reasons?: string[];
+    why_tag?: string;
+    source_tier?: 'ACTS_1' | 'ACTS_2';
+  },
+>(candidates: T[], evidenceActs: EvidenceActLike[]): Promise<T[]> {
+  const existing = new Set(candidates.map((candidate) => candidate.rada_nreg));
+  const missingNregs = [...new Set(evidenceActs.map((act) => act.rada_nreg).filter((nreg) => !existing.has(nreg)))];
+  if (missingNregs.length === 0) return hydrateActCandidatesMeta(candidates);
+
+  const additions = await Promise.all(
+    missingNregs.map(async (rada_nreg) => {
+      const meta = await getActMeta(rada_nreg);
+      return {
+        rada_nreg,
+        title: meta?.title ?? undefined,
+        category: meta?.category ?? undefined,
+        document_type: meta?.document_type ?? undefined,
+        score: 0,
+        reasons: ['chunks_evidence_meta'],
+        why_tag: 'CHUNKS_EVIDENCE_META',
+        source_tier: 'ACTS_1' as const,
+      } satisfies T;
+    })
+  );
+
+  return hydrateActCandidatesMeta([...candidates, ...additions]);
+}
+
 /** Domain hint is weak when absent or generic/unknown (no strong signal for category injection). */
 function isDomainWeak(domainHint: string | undefined): boolean {
   if (!domainHint || !domainHint.trim()) return true;
@@ -1094,13 +1150,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       })
     );
     multiActCandidatesTop.sort((a, b) => b.score - a.score);
+    const multiActCandidatesTopHydrated = await backfillChunkEvidenceCandidates(
+      multiActCandidatesTop,
+      chunksEvidenceMulti
+    );
     const familyEvidenceMulti = await computeFamilyEvidence({
       chunks_evidence_top_acts: chunksEvidenceMulti,
       getActMeta,
     });
     const selectedActsMulti = buildSelectedActs({
       finalHits: finalMulti,
-      actCandidatesTop: multiActCandidatesTop,
+      actCandidatesTop: multiActCandidatesTopHydrated,
       goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
@@ -1170,7 +1230,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           : undefined,
         goals_summary: goalsSummary,
         selected_acts: selected_acts_multi,
-        act_candidates_top: multiActCandidatesTop.map((a) => ({
+        act_candidates_top: multiActCandidatesTopHydrated.map((a) => ({
           rada_nreg: a.rada_nreg,
           title: a.title,
           score: a.score,
@@ -1824,8 +1884,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     }
   }
   const taxonomyNregSet = new Set(taxonomyResult.rada_nreg_candidates ?? []);
-
   const chunks_evidence_top_acts_pre = computeChunksEvidenceTopActs(finalHits);
+  const actCandidatesTopHydrated = await backfillChunkEvidenceCandidates(
+    actCandidatesTop,
+    chunks_evidence_top_acts_pre
+  );
   const familyEvidence = await computeFamilyEvidence({
     chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
     getActMeta,
@@ -1838,7 +1901,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   // Phase 2: evidence-driven selected_acts (buildSelectedActs 2.0 + v3 family guard)
   const selectedActsResult = buildSelectedActs({
     finalHits,
-    actCandidatesTop,
+    actCandidatesTop: actCandidatesTopHydrated,
     goals_summary: [{ goal_id: goalSplit.goals[0].id }],
     hits_by_act_top3: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
     avg_score_by_act_top3: Object.keys(avgScoreByActTop3).length > 0 ? avgScoreByActTop3 : undefined,
@@ -1985,7 +2048,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   const allowedFamilyKeysSet = new Set<string>(['unknown']);
   for (const f of familyEvidence.debug.top_families) allowedFamilyKeysSet.add(f.family_key);
-  for (const a of actCandidatesTop) {
+  for (const a of actCandidatesTopHydrated) {
     const meta = await getActMeta(a.rada_nreg);
     if (meta?.category) {
       const key = (meta.category ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
@@ -2045,7 +2108,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
     // Pass document_type so classifyActKind uses structural metadata, not title fallback
     const hasTaxonomyPrimaryForEvidence = [...evidenceFamilyKeys].some((fam) =>
-      actCandidatesTop.some(
+      actCandidatesTopHydrated.some(
         (c) => toFamilyKeyPrecheck(c.category) === fam && classifyActKind(c.title ?? '', c.document_type) === 'PRIMARY_LAW'
       )
     );
@@ -2149,7 +2212,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       };
       const hasPrimaryFromFamilyFor = async (fam: string): Promise<boolean> => {
         for (const s of selected_acts_final) {
-          const cand = actCandidatesTop.find((a) => a.rada_nreg === s.rada_nreg);
+          const cand = actCandidatesTopHydrated.find((a) => a.rada_nreg === s.rada_nreg);
           if (!cand) continue;
           const meta = await getActMeta(s.rada_nreg);
           if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) return true;
@@ -2157,7 +2220,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         return false;
       };
       const hasTaxonomyPrimaryForFamily = (fam: string): boolean =>
-        actCandidatesTop.some(
+        actCandidatesTopHydrated.some(
           (c) =>
             toFamilyKey(c.category) === fam &&
             classifyActKind(c.title ?? '', c.document_type, c.category) === 'PRIMARY_LAW' &&
@@ -2207,14 +2270,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           capBlockedPushed = true;
         } else {
           // 4.1 USEFULNESS v3: taxonomy-first — PRIMARY_LAW from actCandidatesTop by category, no Qdrant
-          const taxonomyCandidates = actCandidatesTop.filter((cand) => {
+          const taxonomyCandidates = actCandidatesTopHydrated.filter((cand) => {
             if (existingNregs.has(cand.rada_nreg)) return false;
             const famKey = toFamilyKey(cand.category);
             if (famKey !== family_key_target) return false;
             if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) !== 'PRIMARY_LAW') return false;
             return true;
           });
-          const hadCandidatesForFamily = actCandidatesTop.some((cand) => {
+          const hadCandidatesForFamily = actCandidatesTopHydrated.some((cand) => {
             const famKey = toFamilyKey(cand.category);
             return famKey === family_key_target;
           });
@@ -2417,7 +2480,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       taxonomy_hints_used: taxonomyResult.taxonomy_hints_used,
       hybrid_rescore_used: taxonomyResult.debug.source === 'supabase' ? true : undefined,
       thesaurus_version: 1,
-      act_candidates_top: actCandidatesTop,
+      act_candidates_top: actCandidatesTopHydrated,
       query_rewrite: queryRewriteMeta,
       stage_decisions: {
         used_taxonomy: taxonomyResult.debug.source === 'supabase',
@@ -2438,7 +2501,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           goal_type: goalSplit.goals[0].goal_type,
           subquery_preview: goalSplit.goals[0].subquery.slice(0, 200),
           used_llm_planner: goalSplit.used_llm_planner,
-          act_candidates_top3: actCandidatesTop.slice(0, 3).map((a) => a.rada_nreg),
+          act_candidates_top3: actCandidatesTopHydrated.slice(0, 3).map((a) => a.rada_nreg),
           hits_count: finalHits.length,
           top_score: topScore,
         },
@@ -2494,7 +2557,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       },
       memory: mem.memoryMeta,
       retrieval_debug_bundle: {
-        per_goal_act_candidates_top: actCandidatesTop.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
+        per_goal_act_candidates_top: actCandidatesTopHydrated.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
         stages: (collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
           stage: String(stage),
           qdrant_calls_count: 1,

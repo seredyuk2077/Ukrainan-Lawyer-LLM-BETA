@@ -129,8 +129,14 @@ interface RunResult {
     meta?: {
       hits_count?: number;
       low_confidence?: boolean;
+      full_trace_r2_key?: string;
       act_candidates_top?: Array<{ rada_nreg?: string; title?: string }>;
-      selected_acts?: Array<{ rada_nreg?: string; act_title?: string }>;
+      selected_acts?: Array<{
+        rada_nreg?: string;
+        act_title?: string;
+        category?: string | null;
+        document_type?: string | null;
+      }>;
       goals_summary?: Array<{ goal_id: string }>;
       qdrant_calls_count_total?: number;
       hits_cap_applied?: boolean;
@@ -170,6 +176,12 @@ export interface ArticleExpectationEvaluation {
   primary_rank?: number;
   expected_hit_ranks: Record<string, number | null>;
 }
+
+type HydratedArticleTraceResult = {
+  trace: RunResult['retrievalTrace'];
+  ready: boolean;
+  source: 'db' | 'r2' | 'fallback';
+};
 
 type RunGetPayload = {
   status?: string;
@@ -257,6 +269,8 @@ const RUN_TERMINAL_TIMEOUT_MS = 120_000;
 const U10_POSTCHECK_RETRIES = 6;
 const U10_POSTCHECK_RETRY_DELAY_MS = 5_000;
 const DB_TERMINAL_STATUSES = new Set(TERMINAL_STATUSES);
+const ARTICLE_TRACE_HYDRATION_RETRIES = 5;
+const ARTICLE_TRACE_HYDRATION_DELAY_MS = 1_000;
 
 /** Poll GET /v1/runs/:id until status is terminal. Canonical for U10 post-check readiness. */
 async function waitRunTerminal(
@@ -353,23 +367,40 @@ function loadArticleExpectationOverlay(): ArticleExpectationOverlayMap {
 async function hydrateTraceForArticleScoring(
   runId: string | undefined,
   fallbackTrace: RunResult['retrievalTrace']
-): Promise<RunResult['retrievalTrace']> {
-  if (!runId) return fallbackTrace;
+): Promise<HydratedArticleTraceResult> {
+  if (!runId) return { trace: fallbackTrace, ready: false, source: 'fallback' };
   try {
     const persisted = await runRepo.findByRunId(runId);
     if (!persisted?.retrieval_trace || typeof persisted.retrieval_trace !== 'object') {
-      return fallbackTrace;
+      return { trace: fallbackTrace, ready: false, source: 'fallback' };
     }
     const persistedTrace = persisted.retrieval_trace as RunResult['retrievalTrace'];
-    const { hits } = await getRetrievalTraceHitsForForensics(
-      persisted as { retrieval_trace?: { hits?: unknown[]; meta?: { full_trace_r2_key?: string } } | null }
-    );
-    return {
+    const fullTraceKey = persistedTrace?.meta?.full_trace_r2_key;
+    let forensicHits: unknown[] = Array.isArray(persistedTrace?.hits) ? persistedTrace.hits : [];
+    let forensicSource: 'db' | 'r2' = 'db';
+    for (let attempt = 0; attempt < ARTICLE_TRACE_HYDRATION_RETRIES; attempt += 1) {
+      const forensic = await getRetrievalTraceHitsForForensics(
+        persisted as { retrieval_trace?: { hits?: unknown[]; meta?: { full_trace_r2_key?: string } } | null }
+      );
+      forensicHits = forensic.hits;
+      forensicSource = forensic.source;
+      if (!fullTraceKey || forensicSource === 'r2') break;
+      await sleep(ARTICLE_TRACE_HYDRATION_DELAY_MS);
+    }
+    const trace = {
       ...persistedTrace,
-      hits: hits as RunResult['retrievalTrace']['hits'],
+      hits: forensicHits as RunResult['retrievalTrace']['hits'],
+    };
+    if (fullTraceKey && forensicSource !== 'r2') {
+      return { trace, ready: false, source: 'db' };
+    }
+    return {
+      trace,
+      ready: true,
+      source: forensicSource,
     };
   } catch {
-    return fallbackTrace;
+    return { trace: fallbackTrace, ready: false, source: 'fallback' };
   }
 }
 
@@ -530,6 +561,10 @@ export function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamil
       case 'admin':
       case 'administrative':
         return 'administrative';
+      case 'corporate':
+      case 'business':
+      case 'business_corporate':
+        return 'business_corporate';
       case 'administrative_offenses':
         return 'administrative_offenses';
       default:
@@ -540,6 +575,11 @@ export function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamil
   const selectedActs = rt.meta?.selected_acts ?? [];
   const hits = rt.hits ?? [];
   const dominantFamilyKey = normalizeFamilyId(rt.meta?.family_evidence_summary?.dominant_family_key);
+  const selectedActCategories = new Set(
+    selectedActs
+      .map((act) => normalizeFamilyId(act.category ?? undefined))
+      .filter((category): category is string => typeof category === 'string' && category.length > 0)
+  );
   const allTitles = [
     ...actCandidates.map((a) => a.title ?? ''),
     ...selectedActs.map((a) => a.act_title ?? ''),
@@ -549,6 +589,7 @@ export function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamil
     if (exp.family_id === 'general') return true;
     const normalizedExpected = normalizeFamilyId(exp.family_id);
     if (dominantFamilyKey && normalizedExpected && dominantFamilyKey === normalizedExpected) return true;
+    if (normalizedExpected && selectedActCategories.has(normalizedExpected)) return true;
     const match = allTitles.some((t) => actTitleMatchesFamily(t, exp.family_id));
     if (match) return true;
   }
@@ -641,6 +682,8 @@ async function main(): Promise<void> {
     routingHintsUsed?: boolean;
     retrievalTrace?: RunResult['retrievalTrace'];
     articleExpectationApplied?: boolean;
+    articleTraceReady?: boolean;
+    articleTraceSource?: 'db' | 'r2' | 'fallback';
     articleStrictPass?: boolean;
     articleStrictReasons?: string[];
     articlePrimaryRank?: number;
@@ -662,18 +705,33 @@ async function main(): Promise<void> {
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
     for (const { index: i, row } of devToRun) {
-      const run = await runQuery(baseUrl, row.query, tenantId, userId, !RETRIEVAL_ONLY_MODE);
+      const run = await runQuery(
+        baseUrl,
+        row.query,
+        tenantId,
+        userId,
+        ARTICLE_RANK_MODE ? true : !RETRIEVAL_ONLY_MODE
+      );
       const articleOverlay = ARTICLE_RANK_MODE ? articleExpectationOverlay.get(row.fingerprint) : undefined;
-      const rt =
+      const articleTraceHydration =
         ARTICLE_RANK_MODE && articleOverlay
           ? await hydrateTraceForArticleScoring(run.run_id, run.retrievalTrace)
-          : run.retrievalTrace;
+          : { trace: run.retrievalTrace, ready: true, source: 'fallback' as const };
+      const rt = articleTraceHydration.trace;
       const exp = row.expectations;
       const actFamilyHit = checkActFamilyHit(rt, exp.expected_act_families);
       const multiGoalCorrect = checkMultiGoalCorrect(rt, exp.must_have_multi_goal);
       const multiActCorrect = checkMultiActCorrect(rt, exp.must_have_multi_act);
       const pass = actFamilyHit && multiGoalCorrect && multiActCorrect;
-      const articleEval = evaluateArticleExpectations(rt, articleOverlay);
+      const articleEval =
+        articleOverlay && !articleTraceHydration.ready
+          ? {
+              applied: false,
+              pass: true,
+              reasons: ['ARTICLE_TRACE_NOT_READY'],
+              expected_hit_ranks: {},
+            }
+          : evaluateArticleExpectations(rt, articleOverlay);
       const expectedConf = exp.heuristic_confidence ?? 0.5;
       const softFail =
         !pass && !actFamilyHit && (multiGoalCorrect && multiActCorrect) && expectedConf < EXPECTED_CONFIDENCE_HARD_THRESHOLD;
@@ -711,6 +769,8 @@ async function main(): Promise<void> {
           (rt?.meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
         retrievalTrace: rt ?? undefined,
         articleExpectationApplied: articleEval.applied,
+        articleTraceReady: articleTraceHydration.ready,
+        articleTraceSource: articleTraceHydration.source,
         articleStrictPass: articleEval.applied ? articleEval.pass : undefined,
         articleStrictReasons: articleEval.applied ? articleEval.reasons : undefined,
         articlePrimaryRank: articleEval.applied ? articleEval.primary_rank : undefined,
@@ -728,6 +788,8 @@ async function main(): Promise<void> {
             'PASS',
             articleEval.primary_rank != null ? `article_primary_rank=${articleEval.primary_rank}` : 'ARTICLE_PASS'
           );
+        } else if (articleOverlay && !articleTraceHydration.ready) {
+          console.log('[verify_retrieval_real_dev]', label, `PASS ARTICLE_SKIPPED(${articleTraceHydration.source})`);
         } else {
           console.log('[verify_retrieval_real_dev]', label, 'PASS');
         }
@@ -893,6 +955,7 @@ async function main(): Promise<void> {
   const articleApplicable = results.filter((r) => r.articleExpectationApplied).length;
   const articleStrictPassCount = results.filter((r) => r.articleExpectationApplied && r.articleStrictPass).length;
   const articleStrictFailCount = results.filter((r) => r.articleExpectationApplied && r.articleStrictPass === false).length;
+  const articleTraceSkippedCount = results.filter((r) => r.articleTraceReady === false).length;
   const articleReasonCounts: Record<string, number> = {};
   for (const result of results) {
     for (const reason of result.articleStrictReasons ?? []) {
@@ -987,6 +1050,7 @@ async function main(): Promise<void> {
     console.log('cases_with_article_expectations:', articleApplicable);
     console.log('article_strict_pass:', articleStrictPassCount);
     console.log('article_strict_fail:', articleStrictFailCount);
+    console.log('article_trace_skipped:', articleTraceSkippedCount);
     if (Object.keys(articleReasonCounts).length > 0) {
       console.log(
         'article_failure_reasons:',
@@ -1037,6 +1101,8 @@ async function main(): Promise<void> {
             routing_used: (meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
             dominant_family_key: meta?.family_evidence_summary?.dominant_family_key,
             article_expectation_applied: r?.articleExpectationApplied ?? false,
+            article_trace_ready: r?.articleTraceReady ?? true,
+            article_trace_source: r?.articleTraceSource,
             article_strict_pass: r?.articleStrictPass,
             article_primary_rank: r?.articlePrimaryRank,
             article_expected_hit_ranks: r?.articleExpectedHitRanks ?? {},

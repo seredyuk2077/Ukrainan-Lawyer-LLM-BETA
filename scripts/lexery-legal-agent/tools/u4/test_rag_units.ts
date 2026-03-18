@@ -566,6 +566,135 @@ function testSelectedActsPreserveStrongEarlyPrimaryLawEvidence(): void {
   console.log('[OK] selected_acts preserves strong early primary-law evidence over noisy opinion/order tail');
 }
 
+function testSelectedActsBlocksKsuNoiseUnderPrimaryLawDominance(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2755-17',
+        title: 'Податковий кодекс України',
+        score: 0.92,
+        category: 'tax_customs',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.71,
+        category: 'judiciary_justice',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'v001p710-18',
+        title: 'Рішення Конституційного Суду України у справі про оподаткування пенсій',
+        score: 0.69,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['2755-17', '2747-15', 'v001p710-18']),
+    actsSearchNregs: ['2755-17', '2747-15', 'v001p710-18'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '2755-17', count_in_top30: 10, avg_score_in_top30: 0.56, max_score: 0.59, best_rank_in_top30: 1, rank_mass_top30: 2.0, max_ordering_score: 0.62 },
+      { rada_nreg: '2747-15', count_in_top30: 3, avg_score_in_top30: 0.44, max_score: 0.47, best_rank_in_top30: 11, rank_mass_top30: 0.24, max_ordering_score: 0.38 },
+      { rada_nreg: 'v001p710-18', count_in_top30: 3, avg_score_in_top30: 0.46, max_score: 0.5, best_rank_in_top30: 9, rank_mass_top30: 0.2, max_ordering_score: 0.46 },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'tax_customs',
+      family_confidence: 0.9,
+      family_conflict: false,
+      top2: [{ family_key: 'tax_customs', support_score: 0.9 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v001p710-18')) {
+    throw new Error(`Expected KSU decision noise to be blocked under primary-law dominance, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] selected_acts blocks weak KSU decision noise under primary-law dominance');
+}
+
+function testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2755-17',
+        title: 'Податковий кодекс України',
+        score: 0.93,
+        category: 'tax_customs',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'v001p710-18',
+        title: 'Рішення Конституційного Суду України у справі про оподаткування пенсій',
+        score: 0.7,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.69,
+        category: 'judiciary_justice',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['2755-17', 'v001p710-18', '2747-15']),
+    actsSearchNregs: ['2755-17', 'v001p710-18', '2747-15'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2755-17',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.55,
+        max_score: 0.61,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.62,
+      },
+      {
+        rada_nreg: 'v001p710-18',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.46,
+        max_score: 0.5,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.13,
+        max_ordering_score: 0.46,
+      },
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.39,
+        max_score: 0.43,
+        best_rank_in_top30: 12,
+        rank_mass_top30: 0.1,
+        max_ordering_score: 0.36,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'tax_customs',
+      family_confidence: 0.61,
+      family_conflict: true,
+      top2: [
+        { family_key: 'tax_customs', support_score: 0.61 },
+        { family_key: 'constitutional', support_score: 0.48 },
+      ],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v001p710-18')) {
+    throw new Error(
+      `Expected weak KSU decision to stay blocked even when family evidence conflicts, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  console.log('[OK] selected_acts blocks weak KSU decision even under family-conflict traces');
+}
+
 function testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence(): void {
   const result = buildSelectedActs({
     finalHits: [],
@@ -752,6 +881,8 @@ async function main(): Promise<void> {
   testSelectedActsBlockCrossFamilySupportWithoutEvidence();
   testSelectedActsDemoteCrossFamilyChunkEvidence();
   testSelectedActsPreserveStrongEarlyPrimaryLawEvidence();
+  testSelectedActsBlocksKsuNoiseUnderPrimaryLawDominance();
+  testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts();
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   console.log('\nAll RAG unit tests passed.');
