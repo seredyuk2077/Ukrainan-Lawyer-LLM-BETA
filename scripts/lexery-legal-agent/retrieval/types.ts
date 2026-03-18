@@ -199,6 +199,9 @@ export const RetrievalTraceSchema = z.object({
             count_in_top30: z.number(),
             avg_score_in_top30: z.number(),
             max_score: z.number(),
+            best_rank_in_top30: z.number().optional(),
+            rank_mass_top30: z.number().optional(),
+            max_ordering_score: z.number().optional(),
           })
         )
         .optional(),

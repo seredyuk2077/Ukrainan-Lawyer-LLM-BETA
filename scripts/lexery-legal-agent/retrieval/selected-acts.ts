@@ -5,6 +5,7 @@
  * No keyword heuristics; data-driven from final hits and act candidates.
  */
 import type { RawHit } from './types.js';
+import { getHitOrderingScore } from './chunk-rerank.js';
 
 export const CHUNKS_EVIDENCE_COUNT_THRESHOLD = 3;
 export const CHUNKS_EVIDENCE_SCORE_THRESHOLD = 0.55;
@@ -100,6 +101,9 @@ export type ChunksEvidenceItem = {
   count_in_top30: number;
   avg_score_in_top30: number;
   max_score: number;
+  best_rank_in_top30?: number;
+  rank_mass_top30?: number;
+  max_ordering_score?: number;
 };
 
 /** Flags for Writer (recovered/keep-one/draft/opinion). */
@@ -180,14 +184,36 @@ export type BuildSelectedActsOutput = {
 
 export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenceItem[] {
   const top30 = finalHits.slice(0, 30);
-  const stats = new Map<string, { count: number; sumScore: number; maxScore: number }>();
-  for (const h of top30) {
+  const stats = new Map<
+    string,
+    {
+      count: number;
+      sumScore: number;
+      maxScore: number;
+      bestRank: number;
+      rankMass: number;
+      maxOrderingScore: number;
+    }
+  >();
+  for (let index = 0; index < top30.length; index += 1) {
+    const h = top30[index];
     const nreg = h.rada_nreg ?? '_unknown';
     if (nreg === '_unknown') continue;
-    const cur = stats.get(nreg) ?? { count: 0, sumScore: 0, maxScore: 0 };
+    const rank = index + 1;
+    const cur = stats.get(nreg) ?? {
+      count: 0,
+      sumScore: 0,
+      maxScore: 0,
+      bestRank: rank,
+      rankMass: 0,
+      maxOrderingScore: 0,
+    };
     cur.count += 1;
     cur.sumScore += h.score;
     cur.maxScore = Math.max(cur.maxScore, h.score);
+    cur.bestRank = Math.min(cur.bestRank, rank);
+    cur.rankMass += 1 / rank;
+    cur.maxOrderingScore = Math.max(cur.maxOrderingScore, getHitOrderingScore(h));
     stats.set(nreg, cur);
   }
   return [...stats.entries()]
@@ -196,13 +222,26 @@ export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenc
       count_in_top30: v.count,
       avg_score_in_top30: v.sumScore / v.count,
       max_score: v.maxScore,
+      best_rank_in_top30: v.bestRank,
+      rank_mass_top30: v.rankMass,
+      max_ordering_score: v.maxOrderingScore,
     }))
-    .sort((a, b) => {
-      if (b.count_in_top30 !== a.count_in_top30) return b.count_in_top30 - a.count_in_top30;
-      if (b.max_score !== a.max_score) return b.max_score - a.max_score;
-      return (a.rada_nreg ?? '').localeCompare(b.rada_nreg ?? '');
-    })
+    .sort(compareChunksEvidenceStrength)
     .slice(0, 10);
+}
+
+function compareChunksEvidenceStrength(a: ChunksEvidenceItem, b: ChunksEvidenceItem): number {
+  const rankMassDiff = (b.rank_mass_top30 ?? 0) - (a.rank_mass_top30 ?? 0);
+  if (rankMassDiff !== 0) return rankMassDiff;
+  const aBestRank = a.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const bBestRank = b.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const bestRankDiff = aBestRank === bBestRank ? 0 : aBestRank - bBestRank;
+  if (bestRankDiff !== 0) return bestRankDiff;
+  if (b.count_in_top30 !== a.count_in_top30) return b.count_in_top30 - a.count_in_top30;
+  const orderingDiff = (b.max_ordering_score ?? 0) - (a.max_ordering_score ?? 0);
+  if (orderingDiff !== 0) return orderingDiff;
+  if (b.max_score !== a.max_score) return b.max_score - a.max_score;
+  return (a.rada_nreg ?? '').localeCompare(b.rada_nreg ?? '');
 }
 
 function categoryToFamilyKey(category: string | undefined | null): string {
@@ -262,13 +301,27 @@ const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
 const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
 const CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE = 5;
 const CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE = 0.68;
+const NON_PRIMARY_REPEAT_EVIDENCE_OVERRIDE = 10;
 
 function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
   return (
     item.count_in_top30 >= DIVERSITY_EVIDENCE_COUNT_MIN ||
+    hasStrongTopRankEvidence(item) ||
     item.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
   );
+}
+
+function hasStrongTopRankEvidence(item: ChunksEvidenceItem | undefined): boolean {
+  if (!item) return false;
+  const bestRank = item.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const orderingScore = item.max_ordering_score ?? item.max_score;
+  return bestRank <= 5 && orderingScore >= CHUNKS_EVIDENCE_SCORE_THRESHOLD;
+}
+
+function isStrongChunksEvidence(item: ChunksEvidenceItem | undefined): boolean {
+  if (!item) return false;
+  return item.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD || hasStrongTopRankEvidence(item);
 }
 
 function isFamilyAlignedSupportAct(
@@ -309,10 +362,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   } = input;
 
   const chunks_evidence_top_acts = inputChunksEvidence ?? computeChunksEvidenceTopActs(finalHits);
-  // Hysteresis: only "strong" (count >= 3) are must-include; avoids flakiness when score/count wobble near threshold
+  // Hysteresis: only strong repeated evidence or strong early-ranked evidence are must-include.
   const chunksEvidenceNregs = new Set(
     chunks_evidence_top_acts
-      .filter((a) => a.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD)
+      .filter((a) => isStrongChunksEvidence(a))
       .map((a) => a.rada_nreg)
   );
   const chunksEvidenceByNreg = new Map(
@@ -328,6 +381,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   const fromTaxonomy: string[] = [];
   const fromActsSearch: string[] = [];
   const fromChunksEvidence: string[] = [];
+  const hasStrongPrimaryLawEvidence = chunks_evidence_top_acts.some((item) => {
+    const candidate = candidateByNreg.get(item.rada_nreg);
+    return (
+      classifyActKind(candidate?.title ?? '', candidate?.document_type, candidate?.category) ===
+        'PRIMARY_LAW' && isStrongChunksEvidence(item)
+    );
+  });
 
   // A) Chunks evidence MUST be included first (reason CHUNKS_EVIDENCE), up to cap
   for (const e of chunks_evidence_top_acts) {
@@ -336,6 +396,21 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     if (selected.some((s) => s.rada_nreg === e.rada_nreg)) continue;
     const cand = candidateByNreg.get(e.rada_nreg);
     const kind = classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category);
+    if (
+      !isMultiGoal &&
+      kind !== 'PRIMARY_LAW' &&
+      hasStrongPrimaryLawEvidence &&
+      !hasStrongTopRankEvidence(e) &&
+      e.count_in_top30 < NON_PRIMARY_REPEAT_EVIDENCE_OVERRIDE
+    ) {
+      pushReasonCode(reasonCodes, 'NON_PRIMARY_EVIDENCE_BLOCKED_PRIMARY_PRESENT');
+      continue;
+    }
+    if (NOISE_KINDS.includes(kind) && hasStrongPrimaryLawEvidence && !hasStrongTopRankEvidence(e)) {
+      if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_PRIMARY_PRESENT');
+      if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_PRIMARY_PRESENT');
+      continue;
+    }
     const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
     const allowCrossFamilyEvidence =
       familyAligned ||
@@ -346,15 +421,15 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       pushReasonCode(reasonCodes, 'CHUNKS_FAMILY_MISMATCH_DEMOTED');
       continue;
     }
-    selected.push({
-      rada_nreg: e.rada_nreg,
-      act_title: cand?.title,
-      score: e.max_score,
-      why_selected: `count_in_top30=${e.count_in_top30} max_score=${e.max_score.toFixed(2)}`,
-      reason_tag: 'CHUNKS_EVIDENCE',
-      source_tags: ['CHUNKS_EVIDENCE'],
-    });
-    fromChunksEvidence.push(e.rada_nreg);
+      selected.push({
+        rada_nreg: e.rada_nreg,
+        act_title: cand?.title,
+        score: e.max_ordering_score ?? e.max_score,
+        why_selected: `count_in_top30=${e.count_in_top30} best_rank=${e.best_rank_in_top30 ?? '-'} max_score=${e.max_score.toFixed(2)}`,
+        reason_tag: 'CHUNKS_EVIDENCE',
+        source_tags: ['CHUNKS_EVIDENCE'],
+      });
+      fromChunksEvidence.push(e.rada_nreg);
   }
 
   // B) Add 1–2 from taxonomy/acts_search not yet covered by chunks (support). Noise control: BILL_DRAFT/CASELAW_OPINION/UNKNOWN only with evidence or doc_type hint.
@@ -373,6 +448,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       const hasEvidence = chunksEvidenceNregs.has(a.rada_nreg);
       const evidence = chunksEvidenceByNreg.get(a.rada_nreg);
       const hasMaterialEvidence = hasMaterialChunkEvidence(evidence);
+      const strongTopRankEvidence = hasStrongTopRankEvidence(evidence);
       const allowedByHint = documentTypeHintMatches(a.document_type, documentTypeHints ?? []);
       const familyAligned = isFamilyAlignedSupportAct(a.category, familyEvidence);
       const crossFamilyEvidenceOverride =
@@ -404,7 +480,16 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           continue;
         }
       }
-      if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride) {
+      if (
+        !isMultiGoal &&
+        kind !== 'PRIMARY_LAW' &&
+        hasStrongPrimaryLawEvidence &&
+        !strongTopRankEvidence
+      ) {
+        pushReasonCode(reasonCodes, 'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT');
+        continue;
+      }
+      if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride && !strongTopRankEvidence) {
         pushReasonCode(reasonCodes, 'SUPPORT_FAMILY_MISMATCH_BLOCKED');
         continue;
       }
@@ -479,7 +564,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       let keptCount = 0;
       for (const o of ordersInSelected) {
         const ev = chunks_evidence_top_acts.find((e) => e.rada_nreg === o.rada_nreg);
-        const strongEvidence = ev && ev.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD;
+        const strongEvidence = ev && isStrongChunksEvidence(ev);
         if (chunksEvidenceNregs.has(o.rada_nreg) && strongEvidence) {
           // Strong evidence: keep regardless of how many orders
           if (keptCount === 0) reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
@@ -497,7 +582,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (ordersInSelected.length > 0) reasonCodes.push('ORDER_DOMINANCE_BLOCKED');
     }
   } else if (ordersInSelected.length === 1 && chunksEvidenceNregs.has(ordersInSelected[0].rada_nreg)) {
-    reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
+    const orderEvidence = chunksEvidenceByNreg.get(ordersInSelected[0].rada_nreg);
+    if (!primaryLawDominates || hasStrongTopRankEvidence(orderEvidence)) {
+      reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
+    } else {
+      toRemoveOrders.add(ordersInSelected[0].rada_nreg);
+      reasonCodes.push('ORDER_DOMINANCE_BLOCKED');
+    }
   }
   if (toRemoveOrders.size > 0) {
     for (let i = selected.length - 1; i >= 0; i--) {
@@ -509,7 +600,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   // --- Policy v2: diversity guard (by act_kind) ---
   const kindsInChunks = new Set<ActKind>();
   for (const e of chunks_evidence_top_acts) {
-    if (e.count_in_top30 < DIVERSITY_EVIDENCE_COUNT_MIN) continue;
+    if (!hasMaterialChunkEvidence(e)) continue;
     const cand = candidateByNreg.get(e.rada_nreg);
     kindsInChunks.add(classifyActKind(cand?.title ?? '', cand?.document_type, cand?.category));
   }
@@ -518,7 +609,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     return classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category);
   }));
   let diversityGuardAdded = false;
-  if (kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN && kindsInSelected.size < 2) {
+  if (
+    kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN &&
+    kindsInSelected.size < 2 &&
+    !(!isMultiGoal && hasStrongPrimaryLawEvidence)
+  ) {
     // Add one act from candidates with a different kind if possible
     const existingKinds = new Set(kindsInSelected);
     for (const a of actCandidatesTop) {
@@ -738,18 +833,16 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   const isSingleGoal = (input.goals_summary?.length ?? 0) <= 1;
   if (isSingleGoal && selected.length > 3) {
-    const evidenceByNreg = new Map(
+      const evidenceByNreg = new Map(
       chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
     );
     const rankedByEvidence = [...selected].sort((left, right) => {
       const leftEvidence = evidenceByNreg.get(left.rada_nreg);
       const rightEvidence = evidenceByNreg.get(right.rada_nreg);
-      const countDiff =
-        (rightEvidence?.count_in_top30 ?? 0) - (leftEvidence?.count_in_top30 ?? 0);
-      if (countDiff !== 0) return countDiff;
-      const maxScoreDiff =
-        (rightEvidence?.max_score ?? 0) - (leftEvidence?.max_score ?? 0);
-      if (maxScoreDiff !== 0) return maxScoreDiff;
+      if (leftEvidence && rightEvidence) {
+        const diff = compareChunksEvidenceStrength(leftEvidence, rightEvidence);
+        if (diff !== 0) return diff;
+      }
       return (right.score ?? 0) - (left.score ?? 0);
     });
     const evidenceAll = rankedByEvidence.reduce(
@@ -763,7 +856,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     );
     const trailingWeak = rankedByEvidence
       .slice(3)
-      .every((act) => (evidenceByNreg.get(act.rada_nreg)?.count_in_top30 ?? 0) <= CHUNKS_EVIDENCE_COUNT_THRESHOLD);
+      .every((act) => !isStrongChunksEvidence(evidenceByNreg.get(act.rada_nreg)));
     if (top3.length === 3 && (trailingWeak || (evidenceAll > 0 && evidenceTop3 / evidenceAll >= 0.8))) {
       const keep = new Set(top3.map((act) => act.rada_nreg));
       for (let i = selected.length - 1; i >= 0; i -= 1) {
@@ -777,19 +870,17 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     const rankedByEvidence = [...selected].sort((left, right) => {
       const leftEvidence = chunksEvidenceByNreg.get(left.rada_nreg);
       const rightEvidence = chunksEvidenceByNreg.get(right.rada_nreg);
-      const countDiff =
-        (rightEvidence?.count_in_top30 ?? 0) - (leftEvidence?.count_in_top30 ?? 0);
-      if (countDiff !== 0) return countDiff;
-      const maxScoreDiff =
-        (rightEvidence?.max_score ?? 0) - (leftEvidence?.max_score ?? 0);
-      if (maxScoreDiff !== 0) return maxScoreDiff;
+      if (leftEvidence && rightEvidence) {
+        const diff = compareChunksEvidenceStrength(leftEvidence, rightEvidence);
+        if (diff !== 0) return diff;
+      }
       return (right.score ?? 0) - (left.score ?? 0);
     });
     const targetCount = selectedActsMin;
     const trailingActs = rankedByEvidence.slice(targetCount);
     const trailingWeak = trailingActs.every((act) => {
       const evidence = chunksEvidenceByNreg.get(act.rada_nreg);
-      return !hasMaterialChunkEvidence(evidence) || (evidence?.count_in_top30 ?? 0) <= CHUNKS_EVIDENCE_COUNT_THRESHOLD;
+      return !isStrongChunksEvidence(evidence);
     });
     if (trailingActs.length > 0 && trailingWeak) {
       const keep = new Set(rankedByEvidence.slice(0, targetCount).map((act) => act.rada_nreg));
@@ -834,9 +925,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     selected_acts_confidence = 0.5;
   } else if (fromChunksEvidence.length > 0) {
     const strong = chunks_evidence_top_acts.filter(
-      (e) =>
-        e.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD ||
-        e.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
+      (e) => isStrongChunksEvidence(e) || e.max_score >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
     ).length;
     selected_acts_confidence = strong >= 2 ? 0.9 : strong >= 1 ? 0.75 : 0.6;
   } else if (selectedCapped.length >= 2) {

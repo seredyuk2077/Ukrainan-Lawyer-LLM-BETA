@@ -30,13 +30,12 @@ import { isCircuitOpen, recordLlmFailure } from '../classify/circuit-breaker.js'
 import {
   getTaxonomyCandidates,
   getActMeta,
-  scoreActCandidate,
   findActByTitleFragment,
   findActByAlias,
-  buildTaxonomyQuerySignals,
   type TaxonomyCandidatesResult,
   type TaxonomyHintsUsed,
 } from './act-taxonomy-store.js';
+import { rankActCandidates } from './act-candidate-ranking.js';
 import { getFragmentFromR2 } from './r2-fragment.js';
 import { expandReferences, type ReferenceExpansionMeta } from './reference-expander.js';
 import {
@@ -258,14 +257,6 @@ const W_STRUCTURAL = 0.3;
 const MIN_HITS_FOR_TWO_STAGE = 3;
 const GOOD_SCORE_THRESHOLD = 0.4;
 const TWO_STAGE_ACTS_TOP = 5;
-/** ACTS-1 pool size: broader candidate set before diversity + policy cap (Act selection 3.1). */
-const ACTS_1_POOL_SIZE = 12;
-/** ACTS-2 refinement (Phase 2): second-pass act retrieval when trigger fires. */
-const ACTS_2_POOL_SIZE = 8;
-const ACTS_2_SCORE_THRESHOLD = 0.55;
-const ACTS_2_TOP_N_CHECK = 6;
-/** Max qdrant calls before skipping ACTS-2 (budget guard). */
-const MAX_QDRANT_CALLS_BEFORE_ACTS2 = 18;
 /** selected_acts cap: single-goal high confidence. */
 const SELECTED_ACTS_CAP_HIGH = 3;
 /** selected_acts cap: single-goal low confidence (wider to reduce miss). */
@@ -276,64 +267,6 @@ const SELECTED_ACTS_MAX = 9;
 const TWO_STAGE_CHUNKS_PER_ACT = 35;
 /** Multi-goal retrieval gets a slightly wider per-act chunk budget because each goal is narrower. */
 const TWO_STAGE_CHUNKS_PER_ACT_MULTI_GOAL = 50;
-
-/** Stable sort for act candidates / ScoredActItem: score desc → rada_nreg asc → title asc. */
-function compareScoredActByScore(
-  a: { score: number; rada_nreg: string; title?: string },
-  b: { score: number; rada_nreg: string; title?: string }
-): number {
-  if (b.score !== a.score) return b.score - a.score;
-  const nc = (a.rada_nreg ?? '').localeCompare(b.rada_nreg ?? '');
-  if (nc !== 0) return nc;
-  return (a.title ?? '').localeCompare(b.title ?? '');
-}
-
-/** Family prior (Phase 1): soft boost when candidate family matches planner/query hints. */
-const FAMILY_PRIOR_BOOST = 0.15;
-const FAMILY_PRIOR_BOOST_WEAK = 0.05;
-const ANTI_FAMILY_PENALTY = 0.05;
-
-/**
- * LLDBI soft prior policy version (bump when constants change).
- * Boosts act candidates whose category/doc_type matches U2 LLDBI hints.
- * Data-driven: no hardcoded category names; works via vocabulary values from Supabase.
- */
-const LLDBI_SOFT_PRIOR_POLICY_VERSION = 1;
-
-/**
- * Normalize DB category string to a family key comparable to planner family hints.
- * Data-driven: uses stored act metadata category, no hardcoded title regexes.
- */
-function normalizedCategoryKey(category: string | null | undefined): string | null {
-  if (!category) return null;
-  return category.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim() || null;
-}
-
-/**
- * Match stored act DB category against a planner family_key without title-word regexes.
- * Checks normalized equality or containment in either direction.
- */
-function actCategoryMatchesFamily(category: string | null | undefined, familyId: string): boolean {
-  if (!category) return false;
-  if (familyId === 'general') return true;
-  const normCat = normalizedCategoryKey(category);
-  if (!normCat) return false;
-  const normFam = familyId.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim();
-  return normCat === normFam || normCat.includes(normFam) || normFam.includes(normCat);
-}
-
-/**
- * Build ACTS-2 search query: planner query_variants[0] or generic fallback. No query-word lexical anchors.
- */
-function buildActs2Query(
-  _familyHints: Array<{ family: string; confidence: number }>,
-  _query: string,
-  actPlannerOutput: { goals?: Array<{ query_variants?: string[] }> } | null
-): string {
-  const variant = actPlannerOutput?.goals?.[0]?.query_variants?.[0]?.trim();
-  if (variant && variant.length > 0) return variant.slice(0, 300);
-  return 'кодекс закон Україна';
-}
 
 function effectiveQuery(query: string): string {
   const t = query.trim();
@@ -1826,228 +1759,35 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         .filter((n): n is string => !!n)
     ),
   ];
-  const basePool = [...new Set([...taxonomyResult.rada_nreg_candidates, ...actNregsFromSearch])].slice(
-    0,
-    ACTS_1_POOL_SIZE
-  );
-  const querySignals = buildTaxonomyQuerySignals(query);
-  const actScoringSignals = [...new Set([...querySignals.tokens, ...querySignals.phrases])];
-  const plannerPreferredNregs = new Set(
-    (actPlannerOutput?.goals?.[0]?.act_candidates ?? [])
-      .filter((c) => c.rada_nreg)
-      .map((c) => c.rada_nreg as string)
-  );
-
-  // Family hints: from planner act_families only. No query-word fallback.
-  type FamilyHint = { family: string; confidence: number };
-  const familyHints: FamilyHint[] =
-    actPlannerOutput?.goals?.[0]?.act_families?.map((f) => ({ family: f.family.trim().toLowerCase(), confidence: f.confidence })) ?? [];
-  const maxHintConfidence = familyHints.length ? Math.max(...familyHints.map((h) => h.confidence)) : 0;
-  const ambiguousGuard = familyHints.length > 2 || maxHintConfidence < 0.6;
-  const familyPriorBoostMagnitude = ambiguousGuard ? FAMILY_PRIOR_BOOST_WEAK : FAMILY_PRIOR_BOOST;
-
-  const actSelectionLowConfidence =
-    (actPlannerOutput?.global?.overall_confidence != null && actPlannerOutput.global.overall_confidence < 0.5) ||
-    (actPlannerOutput?.global?.missing_info_flags?.length ?? 0) > 0;
-
-  type ScoredActItem = {
-    rada_nreg: string;
-    title: string | undefined;
-    category: string | null;
-    document_type: string | null;
-    score: number;
-    reasons: string[];
-    priorApplied: boolean;
-    priorBoost: number;
-    antiPenalty: number;
-    whyTag: string;
-    source_tier: 'ACTS_1' | 'ACTS_2';
-  };
-
-  const scoreOneCandidate = async (nreg: string, tier: 'ACTS_1' | 'ACTS_2'): Promise<ScoredActItem> => {
-    const meta = await getActMeta(nreg);
-    const { score, reasons } = await scoreActCandidate(nreg, actScoringSignals, domainHint);
-    const plannerBoost = plannerPreferredNregs.has(nreg) ? 0.05 : 0;
-    const actCategory = meta?.category ?? null;
-    let familyPriorBoost = 0;
-    let priorApplied = false;
-    for (const h of familyHints) {
-      if (actCategoryMatchesFamily(actCategory, h.family)) {
-        familyPriorBoost = Math.min(familyPriorBoostMagnitude, h.confidence * 0.3);
-        priorApplied = true;
-        break;
-      }
-    }
-    const antiPenalty = 0;
-
-    // LLDBI soft prior: data-driven boost for category/doc_type alignment with U2 hints.
-    // Vocabulary values from Supabase; never hardcoded category names in code.
-    let lldbiCategoryBoost = 0;
-    let lldbiDocTypeBoost = 0;
-    if (config.u4LldbiSoftPriorEnabled) {
-      if (meta?.category && categoryHints.length > 0) {
-        const catKey = (meta.category).normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
-        for (let i = 0; i < Math.min(categoryHints.length, 3); i++) {
-          const hintKey = categoryHints[i].normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim();
-          if (catKey && hintKey && (catKey === hintKey || catKey.startsWith(hintKey) || hintKey.startsWith(catKey))) {
-            lldbiCategoryBoost = i === 0 ? config.u4LldbiSoftPriorCategoryBoost : config.u4LldbiSoftPriorCategoryBoost * 0.5;
-            break;
-          }
-        }
-      }
-      if (meta?.document_type && documentTypeHints.length > 0) {
-        const dtKey = (meta.document_type).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
-        for (const hint of documentTypeHints) {
-          const hintKey = hint.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
-          if (dtKey && hintKey && (dtKey === hintKey || dtKey.includes(hintKey) || hintKey.includes(dtKey))) {
-            lldbiDocTypeBoost = config.u4LldbiSoftPriorDocTypeBoost;
-            break;
-          }
-        }
-      }
-    }
-
-    const totalScore = score + plannerBoost + familyPriorBoost - antiPenalty + lldbiCategoryBoost + lldbiDocTypeBoost;
-    const lldbiPriorApplied = lldbiCategoryBoost > 0 || lldbiDocTypeBoost > 0;
-    const whyTag = lldbiPriorApplied ? 'LLDBI_SOFT_PRIOR' : priorApplied ? 'FAMILY_PRIOR' : reasons?.includes('alias_match') ? 'ALIAS_MATCH' : 'TAXONOMY_TOP';
-    return {
-      rada_nreg: nreg,
-      title: meta?.title ?? undefined,
-      category: meta?.category ?? null,
-      document_type: meta?.document_type ?? null,
-      score: totalScore,
-      reasons,
-      priorApplied: priorApplied || lldbiPriorApplied,
-      priorBoost: familyPriorBoost + lldbiCategoryBoost + lldbiDocTypeBoost,
-      antiPenalty,
-      whyTag,
-      source_tier: tier,
-    };
-  };
-
-  let scoredPool: ScoredActItem[] = await Promise.all(
-    basePool.map((nreg) => scoreOneCandidate(nreg, 'ACTS_1'))
-  );
-  scoredPool.sort(compareScoredActByScore);
-
-  // ACTS-2 trigger: low_confidence, or top-1 score low, or hinted family missing from top N
-  const acts2Triggers: string[] = [];
-  if (actSelectionLowConfidence) acts2Triggers.push('LOW_CONFIDENCE');
-  const top1Score = scoredPool[0]?.score ?? 0;
-  if (top1Score < ACTS_2_SCORE_THRESHOLD) acts2Triggers.push('TOP1_LOW_SCORE');
-  const familiesInTopN = new Set(
-    scoredPool
-      .slice(0, ACTS_2_TOP_N_CHECK)
-      .map((a) => normalizedCategoryKey(a.category))
-      .filter((f): f is string => !!f)
-  );
-  const hintedFamilyMissing = familyHints.some((h) => {
-    if (!h.family) return false;
-    const normFam = h.family.normalize('NFC').toLowerCase().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '').trim();
-    return !normFam || ![...familiesInTopN].some((cat) => cat === normFam || cat.includes(normFam) || normFam.includes(cat));
+  const plannerFamilyHints =
+    actPlannerOutput?.goals?.[0]?.act_families?.map((family) => ({
+      family: family.family.trim().toLowerCase(),
+      confidence: family.confidence,
+    })) ?? [];
+  const {
+    actCandidatesTop,
+    actSelectionLowConfidence,
+    priorAppliedAny,
+    priorBoostUsed,
+    lldbiSoftPriorMeta,
+    acts2Used,
+    acts2Trigger,
+    acts2Queries,
+    acts2QdrantCalls,
+    acts2DebugTopTitles,
+  } = await rankActCandidates({
+    query,
+    domainHint,
+    categoryHints,
+    documentTypeHints,
+    lldbiHintsPresent,
+    actPlannerOutput,
+    taxonomyResult,
+    actNregsFromSearch,
+    finalHits,
+    qdrantCallCounter,
+    stepsLatencyMs,
   });
-  if (hintedFamilyMissing) acts2Triggers.push('FAMILY_MISSING_IN_TOP');
-
-  let acts2Used = false;
-  let acts2Trigger: string[] = [];
-  let acts2Queries: string[] = [];
-  let acts2QdrantCalls = 0;
-  let acts2DebugTopTitles: { title: string; rada_nreg: string; id: string; score: number }[] = [];
-  const qdrantCountBeforeACTS2 = qdrantCallCounter.count;
-
-  if (acts2Triggers.length > 0 && qdrantCallCounter.count < MAX_QDRANT_CALLS_BEFORE_ACTS2) {
-    const acts2Query = buildActs2Query(familyHints, query, actPlannerOutput);
-    acts2Queries.push(acts2Query.slice(0, 150));
-    try {
-      const acts2EmbedStart = Date.now();
-      const acts2Emb = await embedQuery(acts2Query);
-      stepsLatencyMs.push(Date.now() - acts2EmbedStart);
-      const collections = getQdrantCollections();
-      const acts2Hits = await qdrantSearch({
-        collection: collections.acts,
-        vector: acts2Emb.embedding,
-        limit: ACTS_2_POOL_SIZE,
-        timeoutMs: config.qdrantTimeoutSec * 1000,
-        callCounter: qdrantCallCounter,
-      });
-      acts2QdrantCalls = qdrantCallCounter.count - qdrantCountBeforeACTS2;
-      acts2Used = true;
-      acts2Trigger = [...acts2Triggers];
-      acts2DebugTopTitles = acts2Hits.slice(0, 3).map((h) => ({
-        title: typeof h.payload?.title === 'string' ? h.payload.title : '',
-        rada_nreg: typeof h.payload?.rada_nreg === 'string' ? h.payload.rada_nreg : '',
-        id: String(h.id ?? ''),
-        score: h.score ?? 0,
-      }));
-      const acts2Nregs = [
-        ...new Set(
-          acts2Hits
-            .map((h) => (h.payload?.rada_nreg as string)?.trim())
-            .filter((n): n is string => !!n)
-        ),
-      ];
-      const existingNregs = new Set(scoredPool.map((a) => a.rada_nreg));
-      const newNregs = acts2Nregs.filter((n) => !existingNregs.has(n));
-      if (newNregs.length > 0) {
-        const scoredNew = await Promise.all(newNregs.map((nreg) => scoreOneCandidate(nreg, 'ACTS_2')));
-        const byNreg = new Map(scoredPool.map((a) => [a.rada_nreg, a]));
-        for (const a of scoredNew) byNreg.set(a.rada_nreg, a);
-        scoredPool = Array.from(byNreg.values());
-        scoredPool.sort(compareScoredActByScore);
-      }
-    } catch {
-      acts2Used = false;
-      acts2Trigger = [];
-      acts2Queries = [];
-      acts2QdrantCalls = 0;
-    }
-  }
-
-  // Diversity: up to 2 per category so we don't drop the right family (class A)
-  const byCategory = new Map<string, ScoredActItem[]>();
-  for (const a of scoredPool) {
-    const cat = a.category ?? '_';
-    if (!byCategory.has(cat)) byCategory.set(cat, []);
-    const arr = byCategory.get(cat)!;
-    if (arr.length < 2) arr.push(a);
-  }
-  const diversityOrdered: ScoredActItem[] = [];
-  for (const arr of byCategory.values()) {
-    diversityOrdered.push(...arr);
-  }
-  diversityOrdered.sort(compareScoredActByScore);
-  const priorAppliedAny = scoredPool.some((a) => a.priorApplied);
-  const priorBoostUsed = priorAppliedAny
-    ? Math.max(...scoredPool.filter((a) => a.priorApplied).map((a) => a.priorBoost), 0)
-    : 0;
-
-  // LLDBI soft prior trace: count acts that received a boost from U2 LLDBI hints
-  const lldbiSoftPriorAppliedActs = config.u4LldbiSoftPriorEnabled
-    ? scoredPool.filter((a) => a.whyTag === 'LLDBI_SOFT_PRIOR').length
-    : 0;
-  const lldbiSoftPriorMeta = config.u4LldbiSoftPriorEnabled && lldbiHintsPresent
-    ? {
-        enabled: true,
-        categories_top3: categoryHints.slice(0, 3),
-        doc_types_top3: documentTypeHints.slice(0, 3),
-        applied_acts_count: lldbiSoftPriorAppliedActs,
-        max_category_boost: config.u4LldbiSoftPriorCategoryBoost,
-        max_doc_type_boost: config.u4LldbiSoftPriorDocTypeBoost,
-        taxonomy_first_reorder: categoryHints.length > 0,
-        policy_version: LLDBI_SOFT_PRIOR_POLICY_VERSION,
-      }
-    : { enabled: config.u4LldbiSoftPriorEnabled, applied_acts_count: 0 };
-
-  const actCandidatesTop = diversityOrdered.slice(0, SELECTED_ACTS_MAX).map((a) => ({
-    rada_nreg: a.rada_nreg,
-    title: a.title,
-    score: a.score,
-    reasons: a.reasons,
-    why_tag: a.whyTag,
-    source_tier: a.source_tier,
-    category: a.category ?? undefined,
-    document_type: a.document_type ?? undefined,
-  }));
 
   // Distribution: hits by act in top 3 acts (by hit count in top 30 of returned list)
   const top30 = finalHits.slice(0, 30);
@@ -2650,9 +2390,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                 ? 'ACT_SELECTION_LOW_CONFIDENCE'
                 : undefined,
       selected_acts: selected_acts_final,
-      family_hints: familyHints.length ? familyHints.slice(0, 5).map((h) => h.family) : undefined,
+      family_hints: plannerFamilyHints.length
+        ? plannerFamilyHints.slice(0, 5).map((h) => h.family)
+        : undefined,
       prior_applied:
-        familyHints.length > 0
+        plannerFamilyHints.length > 0
           ? { applied: priorAppliedAny, boost_used: priorBoostUsed }
           : undefined,
       lldbi_soft_prior: lldbiSoftPriorMeta,

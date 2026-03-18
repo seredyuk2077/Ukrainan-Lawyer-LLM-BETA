@@ -35,6 +35,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 **Runtime (src):**
 - `scripts/lexery-legal-agent/retrieval/types.ts` — TypeScript типи + Zod схеми (RawHit, RetrievalTrace, MemoryRef)
 - `scripts/lexery-legal-agent/retrieval/cache-rag.ts` — runCacheRag: головний pipeline (embed → search → score → select → memory)
+- `scripts/lexery-legal-agent/retrieval/act-candidate-ranking.ts` — act candidate scoring/ranking (metadata + hits evidence + ACTS-2 fallback)
 - `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap
 - `scripts/lexery-legal-agent/retrieval/chunk-rerank.ts` — structural chunk scoring (`ordering_score`, title/article relevance)
 - `scripts/lexery-legal-agent/retrieval/consumer.ts` — handleU4Event: load run, runCacheRag, persist trace, emit metrics, enqueue U5
@@ -60,10 +61,12 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 
 - `cache-rag.ts` лишається orchestration layer, а не місцем для всіх scoring/policy деталей.
 - Ranking/pipeline post-processing виноситься в окремі retrieval-модулі, щоб безпечніше тюнити quality/latency без ризику змішати orchestration, data access і ranking policy в одному файлі.
+- Act ranking тепер окремо поєднує LLDBI metadata signals і retrieval evidence з фінальних hits: сильні ранні article hits можуть підняти правильний акт навіть коли U2 domain hint помиляється.
 - Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
 - Для простих двоклаузних legal queries (`X та Y`) U4 тепер покладається на дешевий structural multi-goal split із shared-tail carry-over, а не на обов'язковий LLM planner override; це зменшує latency/cost і прибирає planner-induced шум у procedural queries.
 - `ActTaxonomyStore` тепер використовує не лише alias/token matching, а й phrase-level LLDBI metadata (`title`, `summary`, `keywords`, `topics`, `aliases`, `validity_status`) для дешевшого й точнішого act candidate generation без hardcoded act lists.
 - `selected_acts` тепер жорсткіше відсікає weak cross-family acts: окремо для support candidates і для chunks-evidence tail, щоб multi-act retrieval не засмічував writer випадковими актами лише через vector overlap.
+- `selected_acts` оцінює не лише `count_in_top30`, а й ранню силу evidence (`best_rank_in_top30`, `rank_mass_top30`, `max_ordering_score`), тому сильна релевантна норма з невеликою кількістю hits не губиться за шумним хвостом.
 - Corpus hygiene теж є частиною retrieval quality: якщо в LLDBI/Qdrant payload відсутні `chunk_title`, `unit_type`, `article_number` або висять старі `content_hash` версії, structural rerank у U4 втрачає точність навіть коли правильний акт уже є в корпусі.
 - Для масового cheap-repair такого drift використовується `refresh-qdrant-payload-batch` у LLDBI admin CLI; full `update --force` потрібен лише коли current-hash points реально відсутні або неповні.
 - Для контрольованого full reindex усього корпуса використовується `reload-corpus-batch`; він працює батчами, має resumable report і підходить для parser/payload/embedding кампаній на тисячах актів. Для повторного прогону transient fail-ів у тому самому report додається `--retry-failed`.

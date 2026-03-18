@@ -27,6 +27,7 @@ const TOPIC_PHRASE_BOOST = 1.3;
 const ALIAS_PHRASE_BOOST = 3;
 const VALIDITY_IN_FORCE_BOOST = 0.1;
 const VALIDITY_STALE_PENALTY = 0.35;
+const CATEGORY_HINT_SCORE_BOOST = 0.25;
 
 const QUERY_STOPWORDS = new Set([
   'а',
@@ -135,7 +136,10 @@ function buildPhraseSignals(tokens: string[], maxWords: number): string[] {
   return [...out];
 }
 
-function metadataSignals(value: unknown, options?: { includePhrases?: boolean; maxWords?: number }): string[] {
+function metadataSignals(
+  value: unknown,
+  options?: { includePhrases?: boolean; maxWords?: number; includeTokenParts?: boolean }
+): string[] {
   const values = tolerantNormalizeToStrings(value);
   const out = new Set<string>();
   for (const item of values) {
@@ -143,7 +147,9 @@ function metadataSignals(value: unknown, options?: { includePhrases?: boolean; m
     if (!normalized) continue;
     out.add(normalized);
     const parts = tokenizeWords(normalized).filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
-    for (const part of parts) out.add(part);
+    if (options?.includeTokenParts !== false) {
+      for (const part of parts) out.add(part);
+    }
     if (options?.includePhrases) {
       for (const phrase of buildPhraseSignals(parts, options.maxWords ?? MAX_QUERY_PHRASE_WORDS)) {
         out.add(phrase);
@@ -151,6 +157,10 @@ function metadataSignals(value: unknown, options?: { includePhrases?: boolean; m
     }
   }
   return [...out];
+}
+
+function aliasSignals(value: unknown): string[] {
+  return metadataSignals(value, { includePhrases: true, includeTokenParts: false });
 }
 
 export function buildTaxonomyQuerySignals(query: string): { tokens: string[]; phrases: string[] } {
@@ -237,7 +247,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     };
     acts.set(rada_nreg, entry);
 
-    for (const a of metadataSignals(row?.aliases, { includePhrases: true })) addToMap(byAlias, a, entry);
+    for (const a of aliasSignals(row?.aliases)) addToMap(byAlias, a, entry);
     for (const keyword of metadataSignals(row?.keywords, { includePhrases: true })) {
       addToMap(byKeyword, keyword, entry);
     }
@@ -703,7 +713,7 @@ export async function scoreActCandidate(
     }
   }
   if (domainHint && entry.category && toKey(entry.category) === toKey(domainHint)) {
-    score += 1;
+    score += CATEGORY_HINT_SCORE_BOOST;
     reasons.push('category_hint');
   }
   if (entry.validity_status === 'in_force') {

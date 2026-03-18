@@ -343,10 +343,13 @@ function testSingleGoalSelectedActsTailTrim(): void {
   if (result.selected_acts.some((act) => act.rada_nreg === '995_153')) {
     throw new Error(`Expected weakest tail act to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
   }
-  if (!result.selected_acts_reason_codes.includes('SINGLE_GOAL_TAIL_TRIMMED')) {
-    throw new Error(`Expected SINGLE_GOAL_TAIL_TRIMMED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  if (
+    !result.selected_acts_reason_codes.includes('SINGLE_GOAL_TAIL_TRIMMED') &&
+    !result.selected_acts_reason_codes.includes('NON_PRIMARY_EVIDENCE_BLOCKED_PRIMARY_PRESENT')
+  ) {
+    throw new Error(`Expected single-goal tail cleanup reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
   }
-  console.log('[OK] selected_acts trims weak single-goal tail acts when top-3 evidence dominates');
+  console.log('[OK] selected_acts cleans weak single-goal tail acts when primary evidence dominates');
 }
 
 function testProcedureCategoryEnvelopeFallsBackToProcedureFamilies(): void {
@@ -523,6 +526,43 @@ function testSelectedActsDemoteCrossFamilyChunkEvidence(): void {
   console.log('[OK] selected_acts demotes weak cross-family chunk evidence under dominant family evidence');
 }
 
+function testSelectedActsPreserveStrongEarlyPrimaryLawEvidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      { rada_nreg: '2341-14', title: 'Кримінальний кодекс України', score: 3.4, category: 'criminal', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: '80731-10', title: 'Кодекс України про адміністративні правопорушення', score: 3.17, category: 'administrative_offenses', document_type: 'Кодекс', source_tier: 'ACTS_1' },
+      { rada_nreg: 'nb07d710-25', title: 'Окрема думка судді КСУ', score: 2.9, category: 'administrative_offenses', document_type: 'Рішення КСУ', source_tier: 'ACTS_1' },
+      { rada_nreg: 'v0007700-81', title: 'Постанова пленуму', score: 2.7, category: 'criminal', document_type: 'Постанова Пленуму Верховного Суду', source_tier: 'ACTS_1' },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['2341-14', '80731-10', 'nb07d710-25', 'v0007700-81']),
+    actsSearchNregs: ['2341-14', '80731-10', 'nb07d710-25', 'v0007700-81'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '2341-14', count_in_top30: 13, avg_score_in_top30: 0.51, max_score: 0.565, best_rank_in_top30: 1, rank_mass_top30: 2.4, max_ordering_score: 0.613 },
+      { rada_nreg: '80731-10', count_in_top30: 2, avg_score_in_top30: 0.559, max_score: 0.564, best_rank_in_top30: 3, rank_mass_top30: 0.58, max_ordering_score: 0.576 },
+      { rada_nreg: 'nb07d710-25', count_in_top30: 8, avg_score_in_top30: 0.47, max_score: 0.475, best_rank_in_top30: 8, rank_mass_top30: 0.22, max_ordering_score: 0.31 },
+      { rada_nreg: 'v0007700-81', count_in_top30: 4, avg_score_in_top30: 0.31, max_score: 0.312, best_rank_in_top30: 15, rank_mass_top30: 0.12, max_ordering_score: 0.24 },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal',
+      family_confidence: 0.9,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal', support_score: 0.9 }],
+    },
+  });
+  if (!result.selected_acts.some((act) => act.rada_nreg === '80731-10')) {
+    throw new Error(`Expected strong early primary-law evidence to preserve 80731-10, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (result.selected_acts.some((act) => act.rada_nreg === 'nb07d710-25')) {
+    throw new Error(`Expected opinion noise to be blocked when primary law evidence exists, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v0007700-81')) {
+    throw new Error(`Expected weak order evidence to be trimmed under primary-law dominance, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] selected_acts preserves strong early primary-law evidence over noisy opinion/order tail');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -551,6 +591,7 @@ async function main(): Promise<void> {
   testSelectedActsTrimWeakMultiGoalTail();
   testSelectedActsBlockCrossFamilySupportWithoutEvidence();
   testSelectedActsDemoteCrossFamilyChunkEvidence();
+  testSelectedActsPreserveStrongEarlyPrimaryLawEvidence();
   console.log('\nAll RAG unit tests passed.');
 }
 
