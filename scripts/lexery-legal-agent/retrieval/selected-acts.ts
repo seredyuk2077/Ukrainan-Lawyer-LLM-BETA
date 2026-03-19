@@ -336,6 +336,11 @@ function hasStrongNonPrimarySupportEvidence(item: ChunksEvidenceItem | undefined
   );
 }
 
+function hasRepeatedSecondaryOrderSupport(item: ChunksEvidenceItem | undefined): boolean {
+  if (!item) return false;
+  return item.count_in_top30 >= NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN;
+}
+
 function candidateHasFamilyGuardEvidenceSupport(
   radaNreg: string,
   chunksEvidenceByNreg: Map<string, ChunksEvidenceItem>
@@ -345,9 +350,14 @@ function candidateHasFamilyGuardEvidenceSupport(
 
 function canOverrideNonPrimaryPrimaryLawBlock(
   kind: ActKind,
-  evidence: ChunksEvidenceItem | undefined
+  evidence: ChunksEvidenceItem | undefined,
+  familyAligned: boolean,
+  allowedByHint: boolean
 ): boolean {
   if (kind !== 'SECONDARY_ORDER' && kind !== 'UNKNOWN') return false;
+  if (kind === 'SECONDARY_ORDER' && !familyAligned && !allowedByHint && !hasRepeatedSecondaryOrderSupport(evidence)) {
+    return false;
+  }
   return hasStrongNonPrimarySupportEvidence(evidence);
 }
 
@@ -382,6 +392,11 @@ function isFamilyAlignedSupportAct(
     return familyEvidence.top2.some((item) => item.family_key === familyKey);
   }
   return true;
+}
+
+function dominantFamilyLooksProcedural(familyEvidence: FamilyEvidenceSummaryInput | undefined): boolean {
+  const dominant = familyEvidence?.dominant_family_key?.normalize('NFC').toLowerCase().trim();
+  return Boolean(dominant && dominant.includes('procedure'));
 }
 
 function canFallbackSelectAct(input: {
@@ -432,7 +447,16 @@ function canFallbackSelectAct(input: {
     kind !== 'PRIMARY_LAW' &&
     input.hasStrongPrimaryLawEvidence &&
     !strongTopRankEvidence &&
-    !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence)
+    !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence, familyAligned, allowedByHint)
+  ) {
+    return false;
+  }
+  const dominantFamilyProcedural = dominantFamilyLooksProcedural(input.familyEvidence);
+  if (
+    kind === 'SECONDARY_ORDER' &&
+    !familyAligned &&
+    !allowedByHint &&
+    (!hasRepeatedSecondaryOrderSupport(evidence) || dominantFamilyProcedural)
   ) {
     return false;
   }
@@ -577,11 +601,14 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       continue;
     }
     const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
+    const orderRepeatedSupport = hasRepeatedSecondaryOrderSupport(e);
+    const dominantFamilyProcedural = dominantFamilyLooksProcedural(familyEvidence);
+    const orderAllowedByHint = documentTypeHintMatches(cand?.document_type, documentTypeHints ?? []);
     const allowCrossFamilyEvidence =
       familyAligned ||
-      kind !== 'PRIMARY_LAW' ||
-      e.count_in_top30 >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
-      e.max_score >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
+      (kind === 'SECONDARY_ORDER'
+        ? orderAllowedByHint || (orderRepeatedSupport && !dominantFamilyProcedural)
+        : e.count_in_top30 >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE || e.max_score >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE);
     if (!allowCrossFamilyEvidence) {
       pushReasonCode(reasonCodes, 'CHUNKS_FAMILY_MISMATCH_DEMOTED');
       continue;
@@ -619,6 +646,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       const strongTopRankEvidence = hasStrongTopRankEvidence(evidence);
       const allowedByHint = documentTypeHintMatches(a.document_type, documentTypeHints ?? []);
       const familyAligned = isFamilyAlignedSupportAct(a.category, familyEvidence);
+      const dominantFamilyProcedural = dominantFamilyLooksProcedural(familyEvidence);
       const crossFamilyEvidenceOverride =
         (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
         (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
@@ -663,6 +691,15 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence)
       ) {
         pushReasonCode(reasonCodes, 'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT');
+        continue;
+      }
+      if (
+        kind === 'SECONDARY_ORDER' &&
+        !familyAligned &&
+        !allowedByHint &&
+        (!hasRepeatedSecondaryOrderSupport(evidence) || dominantFamilyProcedural)
+      ) {
+        pushReasonCode(reasonCodes, 'ORDER_UNRELATED_BLOCKED');
         continue;
       }
       if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride && !strongTopRankEvidence) {
@@ -749,16 +786,25 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       for (const o of ordersInSelected) {
         const ev = chunks_evidence_top_acts.find((e) => e.rada_nreg === o.rada_nreg);
         const strongEvidence = ev && isStrongChunksEvidence(ev);
-        if (chunksEvidenceNregs.has(o.rada_nreg) && strongEvidence) {
+        const cand = candidateByNreg.get(o.rada_nreg);
+        const orderFamilyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
+        const orderAllowedByHint = documentTypeHintMatches(cand?.document_type, documentTypeHints ?? []);
+        const orderRepeatedSupport = hasRepeatedSecondaryOrderSupport(ev);
+        if (chunksEvidenceNregs.has(o.rada_nreg) && strongEvidence && (orderFamilyAligned || orderAllowedByHint || orderRepeatedSupport)) {
           // Strong evidence: keep regardless of how many orders
           if (keptCount === 0) reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
           keptCount += 1;
-        } else if (chunksEvidenceNregs.has(o.rada_nreg) && keptCount === 0) {
-          // Weak evidence (not in chunksEvidenceNregs by threshold) but only one with any evidence: keep first
+        } else if (
+          chunksEvidenceNregs.has(o.rada_nreg) &&
+          keptCount === 0 &&
+          (orderFamilyAligned || orderAllowedByHint || orderRepeatedSupport)
+        ) {
+          // Only keep the first order when it is still structurally supported.
           reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
           keptCount += 1;
         } else {
           toRemoveOrders.add(o.rada_nreg);
+          if (orderFamilyAligned === false) reasonCodes.push('ORDER_UNRELATED_BLOCKED');
         }
       }
     } else {
@@ -767,14 +813,22 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   } else if (ordersInSelected.length === 1 && chunksEvidenceNregs.has(ordersInSelected[0].rada_nreg)) {
     const orderEvidence = chunksEvidenceByNreg.get(ordersInSelected[0].rada_nreg);
+    const orderCandidate = candidateByNreg.get(ordersInSelected[0].rada_nreg);
+    const orderFamilyAligned = isFamilyAlignedSupportAct(orderCandidate?.category, familyEvidence);
+    const orderAllowedByHint = documentTypeHintMatches(orderCandidate?.document_type, documentTypeHints ?? []);
+    const orderRepeatedSupport = hasRepeatedSecondaryOrderSupport(orderEvidence);
+    const dominantFamilyProcedural = dominantFamilyLooksProcedural(familyEvidence);
     if (
       !primaryLawDominates ||
-      hasStrongTopRankEvidence(orderEvidence) ||
-      hasStrongNonPrimarySupportEvidence(orderEvidence)
+      (
+        hasStrongNonPrimarySupportEvidence(orderEvidence) &&
+        (orderFamilyAligned || orderAllowedByHint || (orderRepeatedSupport && !dominantFamilyProcedural))
+      )
     ) {
       reasonCodes.push('ORDER_INCLUDED_BY_EVIDENCE');
     } else {
       toRemoveOrders.add(ordersInSelected[0].rada_nreg);
+      if (!orderFamilyAligned) reasonCodes.push('ORDER_UNRELATED_BLOCKED');
       reasonCodes.push('ORDER_DOMINANCE_BLOCKED');
     }
   }
@@ -859,6 +913,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   if (
     kindsInChunks.size >= DIVERSITY_EVIDENCE_KINDS_MIN &&
     kindsInSelected.size < 2 &&
+    selectedPrimaryLawCountForDiversity === 0 &&
     !(!isMultiGoal && hasStrongPrimaryLawEvidence) &&
     !allowSingleActCoverageForMultiGoal
   ) {

@@ -469,6 +469,24 @@ function testStructuralCitationSelectorsCaptureNoteAndSubpoint(): void {
   console.log('[OK] structural citation selectors capture note + article/part/point/subpoint');
 }
 
+function testStructuralCitationSelectorsCaptureDottedSubpoint(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачає п.п. 6 п. 5 ч. 1 ст. 45 ККУ?');
+  if (selectors.article !== '45') throw new Error(`Expected article 45, got ${selectors.article}`);
+  if (selectors.articlePart !== '1') throw new Error(`Expected part 1, got ${selectors.articlePart}`);
+  if (selectors.point !== '5') throw new Error(`Expected point 5, got ${selectors.point}`);
+  if (selectors.subpoint !== '6') throw new Error(`Expected dotted subpoint 6, got ${selectors.subpoint}`);
+  console.log('[OK] structural citation selectors capture dotted subpoint notation');
+}
+
+function testStructuralCitationSelectorsCapturePluralPartSyntax(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачають ч.ч. 1, 2 ст. 45 ККУ?');
+  if (selectors.article !== '45') throw new Error(`Expected article 45, got ${selectors.article}`);
+  if (selectors.articlePart !== '1') {
+    throw new Error(`Expected first part 1 from plural part syntax, got ${selectors.articlePart}`);
+  }
+  console.log('[OK] structural citation selectors capture plural part syntax');
+}
+
 function testStructuralCitationMatchCountsNoteSelectors(): void {
   const querySelectors = extractQueryCitationSelectors('Що передбачає примітка 2 до ст. 45?');
   const hitSelectors = getHitCitationSelectors({
@@ -501,6 +519,27 @@ function testStructuralCitationMatchCountsMentionedNoteWithoutExplicitNumber(): 
     throw new Error(`Expected article + note-mentioned match, got ${matches}`);
   }
   console.log('[OK] structural citation matching counts note mention without explicit number');
+}
+
+function testStructuralCitationBareNoteMentionDoesNotOvermatch(): void {
+  const querySelectors = extractQueryCitationSelectors('Що таке примітка у цій нормі?');
+  if (querySelectors.explicitSelectorCount !== 0) {
+    throw new Error(
+      `Expected bare note mention to stay non-explicit, got ${querySelectors.explicitSelectorCount}`
+    );
+  }
+  const hitSelectors = getHitCitationSelectors({
+    article_number: '185',
+    unit_type: 'paragraph',
+    note_number: '1',
+    citation_path: 'ст. 185 примітка 1',
+    metadata: {},
+  });
+  const matches = countCitationMatches(querySelectors, hitSelectors);
+  if (matches !== 0) {
+    throw new Error(`Expected bare note mention not to overmatch note-bearing hit, got ${matches}`);
+  }
+  console.log('[OK] bare note mention does not overmatch unrelated note-bearing hit');
 }
 
 function testHitCitationKeyPreservesNestedFallbackSelectors(): void {
@@ -805,6 +844,223 @@ function testSelectedActsFinalizerRemovesUnsupportedRoutingHintActs(): void {
     throw new Error(`Expected removal reason code, got ${JSON.stringify(result.selected_acts_decision_final.reason_codes)}`);
   }
   console.log('[OK] selected acts finalizer removes unsupported routing-hint additions');
+}
+
+function testSelectedActsBlocksUnrelatedSecondaryOrderUnderPrimaryLawDominance(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'r2://kpk-214',
+        json_path: '$.content.chunks[0].text',
+        score: 0.63,
+        ordering_score: 0.63,
+        source: 'lldbi_chunks',
+        article_number: '214',
+      } as never,
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'r2://kpk-303',
+        json_path: '$.content.chunks[1].text',
+        score: 0.61,
+        ordering_score: 0.61,
+        source: 'lldbi_chunks',
+        article_number: '303',
+      } as never,
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'r2://kpk-305',
+        json_path: '$.content.chunks[2].text',
+        score: 0.6,
+        ordering_score: 0.6,
+        source: 'lldbi_chunks',
+        article_number: '305',
+      } as never,
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'r2://kpk-306',
+        json_path: '$.content.chunks[3].text',
+        score: 0.59,
+        ordering_score: 0.59,
+        source: 'lldbi_chunks',
+        article_number: '306',
+      } as never,
+      {
+        rada_nreg: 'v0015700-98',
+        r2_key: 'r2://plenum-13',
+        json_path: '$.content.chunks[4].text',
+        score: 0.58,
+        ordering_score: 0.58,
+        source: 'lldbi_chunks',
+        unit_type: 'point',
+        point_number: '13',
+      } as never,
+      {
+        rada_nreg: 'v0015700-98',
+        r2_key: 'r2://plenum-7',
+        json_path: '$.content.chunks[5].text',
+        score: 0.57,
+        ordering_score: 0.57,
+        source: 'lldbi_chunks',
+        unit_type: 'point',
+        point_number: '7',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        category: 'criminal_procedure',
+        document_type: 'кодекс',
+        score: 0.95,
+      },
+      {
+        rada_nreg: 'v0015700-98',
+        title: 'Про внесення змін і доповнень у деякі постанови Пленуму Верховного Суду України в цивільних справах',
+        category: 'civil',
+        document_type: 'постанова пленуму верховного суду',
+        score: 0.78,
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['4651-17', 'v0015700-98']),
+    actsSearchNregs: [],
+    familyEvidence: {
+      dominant_family_key: 'criminal_procedure',
+      family_confidence: 0.78,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal_procedure', support_score: 0.95 }],
+    },
+  });
+  const selectedNregs = result.selected_acts.map((act) => act.rada_nreg);
+  if (!selectedNregs.includes('4651-17')) {
+    throw new Error(`Expected primary-law procedural act to remain selected, got ${JSON.stringify(selectedNregs)}`);
+  }
+  if (selectedNregs.includes('v0015700-98')) {
+    throw new Error(`Expected unrelated secondary order to be blocked, got ${JSON.stringify(selectedNregs)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('ORDER_UNRELATED_BLOCKED')) {
+    throw new Error(`Expected ORDER_UNRELATED_BLOCKED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected acts blocks unrelated secondary order under primary-law dominance');
+}
+
+function testSelectedActsDropsWeakFirstSecondaryOrderFallbackEvenWithEvidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.95,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'v0015700-98',
+        title: 'Про внесення змін і доповнень у деякі постанови Пленуму Верховного Суду України в цивільних справах',
+        score: 0.74,
+        category: 'civil',
+        document_type: 'Постанова Пленуму Верховного Суду',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['4651-17', 'v0015700-98']),
+    actsSearchNregs: ['4651-17', 'v0015700-98'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.55,
+        max_score: 0.62,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.0,
+        max_ordering_score: 0.63,
+      },
+      {
+        rada_nreg: 'v0015700-98',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.47,
+        max_score: 0.52,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.62,
+        max_ordering_score: 0.54,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal_procedure',
+      family_confidence: 0.81,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal_procedure', support_score: 0.81 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v0015700-98')) {
+    throw new Error(
+      `Expected weak first secondary order fallback to be blocked even with evidence, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  console.log('[OK] selected acts blocks weak first secondary order fallback even with evidence');
+}
+
+function testSelectedActsDoesNotDiversifyIntoNoiseWhenPrimaryLawAlreadySelected(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.96,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: 'v001p710-19',
+        title: 'Рішення Конституційного Суду України у кримінальній справі',
+        score: 0.74,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2341-14', 'v001p710-19']),
+    actsSearchNregs: ['2341-14', 'v001p710-19'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 11,
+        avg_score_in_top30: 0.56,
+        max_score: 0.62,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2,
+        max_ordering_score: 0.64,
+      },
+      {
+        rada_nreg: 'v001p710-19',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.45,
+        max_score: 0.5,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.2,
+        max_ordering_score: 0.43,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal',
+      family_confidence: 0.88,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal', support_score: 0.88 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === 'v001p710-19')) {
+    throw new Error(
+      `Expected diversity guard not to manufacture noise when one primary law already covers the query, got ${JSON.stringify(result.selected_acts)}`
+    );
+  }
+  console.log('[OK] selected acts does not diversify into noise when primary law already selected');
 }
 
 function testSummarizeSelectedActsCountsKindsAndDocTypes(): void {
@@ -1255,7 +1511,7 @@ function testSingleGoalSelectedActsTailTrim(): void {
     throw new Error(`Expected single-goal tail trim to keep 3 acts, got ${result.selected_acts.length}`);
   }
   if (result.selected_acts.some((act) => act.rada_nreg === '995_153')) {
-    throw new Error(`Expected weakest tail act to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
+    throw new Error(`Expected weak tail acts to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
   }
   if (
     !result.selected_acts_reason_codes.includes('SINGLE_GOAL_TAIL_TRIMMED') &&
@@ -2118,8 +2374,11 @@ async function main(): Promise<void> {
   testGroundedQueryBuilderKeepsSignalsForNaturalLanguageQuery();
   testWithinActExpansionPrefersProceduralAndStructuralQueries();
   testStructuralCitationSelectorsCaptureNoteAndSubpoint();
+  testStructuralCitationSelectorsCaptureDottedSubpoint();
+  testStructuralCitationSelectorsCapturePluralPartSyntax();
   testStructuralCitationMatchCountsNoteSelectors();
   testStructuralCitationMatchCountsMentionedNoteWithoutExplicitNumber();
+  testStructuralCitationBareNoteMentionDoesNotOvermatch();
   testHitCitationKeyPreservesNestedFallbackSelectors();
   testArticleBackfillPrefersSingleAliasMatchedAct();
   testArticleBackfillPrefersDominantAliasMatchedAct();
@@ -2131,6 +2390,8 @@ async function main(): Promise<void> {
   testSelectedActsFinalizerRaisesConfidenceAfterRoutingPrimaryLaw();
   testSelectedActsFinalizerDoesNotInflateConfidenceWithoutEvidence();
   testSelectedActsFinalizerRemovesUnsupportedRoutingHintActs();
+  testSelectedActsBlocksUnrelatedSecondaryOrderUnderPrimaryLawDominance();
+  testSelectedActsDropsWeakFirstSecondaryOrderFallbackEvenWithEvidence();
   testSummarizeSelectedActsCountsKindsAndDocTypes();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
@@ -2158,6 +2419,7 @@ async function main(): Promise<void> {
   testSelectedActsBlocksKsuNoiseUnderPrimaryLawDominance();
   testSelectedActsBlocksKsuNoiseEvenWhenFamilyEvidenceConflicts();
   testSelectedActsBlocksWeakNoiseKindsWhenMultiGoalPrimaryLawsAlreadyCoverGoals();
+  testSelectedActsDoesNotDiversifyIntoNoiseWhenPrimaryLawAlreadySelected();
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();

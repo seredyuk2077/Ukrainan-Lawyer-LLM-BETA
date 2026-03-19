@@ -38,7 +38,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/act-candidate-ranking.ts` — act candidate scoring/ranking (metadata + hits evidence + ACTS-2 fallback)
 - `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap
 - `scripts/lexery-legal-agent/retrieval/chunk-rerank.ts` — structural chunk scoring (`ordering_score`, title/article relevance)
-- `scripts/lexery-legal-agent/retrieval/structural-citation.ts` — normalized Ukrainian structural citation parsing (`ст./ч./п./пп./абз./примітка`) for query/hit matching
+- `scripts/lexery-legal-agent/retrieval/structural-citation.ts` — normalized Ukrainian structural citation parsing (`ст./ч./п./пп./абз./примітка`) for query/hit matching; dotted `п.п.` / `ч.ч.` forms are normalized too, and bare note mentions without a note number no longer behave like full explicit selectors
 - `scripts/lexery-legal-agent/retrieval/grounded-query-builder.ts` — selector-aware retrieval query shaping that keeps narrow legal signals but strips broad generic widening on already-grounded citation queries
 - `scripts/lexery-legal-agent/retrieval/consumer.ts` — handleU4Event: load run, runCacheRag, persist trace, emit metrics, enqueue U5
 - `scripts/lexery-legal-agent/retrieval/qdrant-client.ts` — Qdrant search, timeout + 1 retry
@@ -81,6 +81,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `selected_acts` тепер жорсткіше відсікає weak cross-family acts: окремо для support candidates і для chunks-evidence tail, щоб multi-act retrieval не засмічував writer випадковими актами лише через vector overlap.
 - Generic document-type hints більше не можуть самі по собі проштовхнути support act у звичайний `selected_acts` tail; hint-only fallback лишається лише для мінімального recovery path.
 - `selected_acts` оцінює не лише `count_in_top30`, а й ранню силу evidence (`best_rank_in_top30`, `rank_mass_top30`, `max_ordering_score`), тому сильна релевантна норма з невеликою кількістю hits не губиться за шумним хвостом.
+- Для procedural-dominant traces secondary-order support потребує не лише repeated chunk evidence, а й family/hint alignment; це прибирає чужі постанови/накази з кримінально-процесуальних trace без втрати корисних support-order cases.
 - Family coverage guard тепер evidence-driven: він не має права додати PRIMARY_LAW акт лише за family/category fit, якщо у final retrieval head немає material chunk evidence. У таких випадках trace має показати `FAMILY_GUARD_NO_EVIDENCE`, а не вдавати complete legal coverage.
 - Для multi-goal policy `selected_acts` більше не згортає все до одного акта, якщо другий ранній `PRIMARY_LAW` із іншої legal family уже має матеріальний chunk evidence; це важливо для substantive+procedure кейсів на кшталт `ККУ + КПК`.
 - Коли multi-goal query уже покритий двома сильними `PRIMARY_LAW` актами, weak `KSU_DECISION` / `CASELAW_OPINION` / `BILL_DRAFT` хвіст більше не повинен повертатися в `selected_acts` через diversity guard; writer має бачити юридично корисні primary acts, а не випадковий caselaw noise.
