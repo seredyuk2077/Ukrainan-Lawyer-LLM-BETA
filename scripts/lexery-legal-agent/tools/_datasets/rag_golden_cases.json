@@ -487,5 +487,117 @@
     ],
     "expected_selected_acts": ["322-08"],
     "max_selected_acts": 3
+  },
+  {
+    "id": "border_crossing_martial_law_point21",
+    "bucket": "primary law + secondary order",
+    "priority": "high",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Хто має право перетинати державний кордон під час воєнного стану за пунктом 21 Правил перетинання державного кордону?",
+    "description": "Point-level retrieval для великого підзаконного акта: саме пункт 21 має бути раннім, без розмиття по загальних пунктах цих Правил.",
+    "expected_primary": {
+      "rada_nreg": "57-95-п",
+      "unit_type": "point",
+      "unit_numbers": ["21"],
+      "citation_paths": ["п. 21"],
+      "max_rank": 6
+    },
+    "expected_selected_acts": ["57-95-п"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "consumer_rules_information_duty_point12",
+    "bucket": "weird-doc types",
+    "priority": "normal",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Який обов'язок продавця перевірити товар і надати інформацію споживачу за пунктом 12 Правил роздрібної торгівлі непродовольчими товарами?",
+    "description": "Point-level retrieval для наказу з великим корпусом пунктів: потрібен саме пункт 12, а не загальний consumer/law noise.",
+    "expected_primary": {
+      "rada_nreg": "z1257-07",
+      "unit_type": "point",
+      "unit_numbers": ["12"],
+      "citation_paths": ["п. 12"],
+      "max_rank": 6
+    },
+    "expected_selected_acts": ["z1257-07"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "tax_notice_appeal_structural_5618",
+    "bucket": "substantive + procedure",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Як за п. 56.18 ст. 56 ПКУ оскаржується податкове повідомлення-рішення, і чи треба сплачувати суму до звернення в адмінсуд?",
+    "description": "Structural tax query: retrieval має втримати ПКУ 56/57/58 і КАСУ без noise від KSU/підзаконки.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["56"],
+        "max_rank": 4
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["57"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["58"],
+        "max_rank": 4
+      }
+    ],
+    "expected_selected_acts": ["2755-17", "2747-15"],
+    "forbidden_selected_act_kinds": ["CASELAW_OPINION"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "ccu_inheritance_restore_term",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Як прийняти спадщину, який строк для її прийняття і чи можна поновити цей строк, якщо спадкоємець запізнився?",
+    "description": "One-code civil query: ЦКУ має зібрати прийняття спадщини, строк і поновлення строку без зайвого procedural noise.",
+    "expected_hits": [
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["1268"],
+        "max_rank": 8
+      },
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["1270"],
+        "max_rank": 5
+      },
+      {
+        "rada_nreg": "435-15",
+        "article_numbers": ["1272"],
+        "max_rank": 5
+      }
+    ],
+    "expected_selected_acts": ["435-15"],
+    "forbidden_selected_act_kinds": ["CASELAW_OPINION"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "border_point21_disability_liability",
+    "bucket": "primary law + secondary order",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 14,
+    "query": "Чи має право чоловік з інвалідністю виїхати під час воєнного стану за п. 21 Правил перетинання державного кордону і яка відповідальність за порушення цих правил?",
+    "description": "Point-level order + liability tail: Правила перетинання кордону мають домінувати, а КУпАП має залишатися в selected_acts як liability source.",
+    "expected_primary": {
+      "rada_nreg": "57-95-п",
+      "unit_type": "point",
+      "unit_numbers": ["21"],
+      "citation_paths": ["п. 21"],
+      "max_rank": 3
+    },
+    "expected_selected_acts": ["57-95-п", "80731-10"],
+    "max_selected_acts": 4
   }
 ]

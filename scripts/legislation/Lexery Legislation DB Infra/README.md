@@ -66,6 +66,8 @@ pnpm exec tsx scripts/legislation/admin-cli.ts audit-qdrant-payload --nregs "275
 ```
 
 - Аудит перевіряє current-hash presence, старі версії в Qdrant, completeness полів `chunk_title/unit_type/unit_number/article_number/r2_key/json_path`, а також act payload (`summary/keywords/topics/aliases/validity_status`).
+- Для legal RAG quality chunk payload тепер критично має зберігати й глибші structural selectors: `article_part_number`, `point_number`, `subpoint_number`, `paragraph_number`, `citation_path`, `unstructured_fallback`. Без цього українські запити на кшталт `ч. 1`, `п. 12`, `пп. 6`, `примітка до статті` деградують у noisy semantic retrieval.
+- Одного `point_number` / `subpoint_number` недостатньо для production-grade retrieval у великих наказах і правилах: в одному акті може бути кілька різних `п. 12` у різних розділах. Для Harvey-like precision LLDBI має зберігати ієрархічний шлях (`citation_path`, chapter/section/act_part labels), і Qdrant collection повинна мати індекси хоча б для тих selector fields, які runtime реально використовує в structural backfill.
 - Практичне правило: якщо audit показує `QDRANT_OLD_*` → спочатку `repair qdrant-dedup`; якщо показує missing/drift на current hash → `update --nreg ... --force`.
 
 ### Cheap payload refresh path

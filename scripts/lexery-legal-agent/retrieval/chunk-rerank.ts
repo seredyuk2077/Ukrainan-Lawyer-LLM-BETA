@@ -1,4 +1,11 @@
 import type { RawHit } from './types.js';
+import {
+  buildHitCitationPath,
+  countCitationMatches,
+  extractQueryCitationSelectors,
+  getHitCitationSelectors,
+  normalizeCitationValue,
+} from './structural-citation.js';
 
 const QUERY_STOPWORDS = new Set([
   'а',
@@ -166,6 +173,10 @@ export function getChunkTitle(hit: RawHit): string {
   return typeof chunkTitle === 'string' ? chunkTitle : '';
 }
 
+export function getChunkCitationLabel(hit: RawHit): string {
+  return buildHitCitationPath(hit) ?? '';
+}
+
 export function getChunkUnitType(hit: RawHit): string | null {
   const metadata = hit.metadata as Record<string, unknown> | undefined;
   const unitType = metadata?.unit_type;
@@ -197,7 +208,9 @@ export function computeChunkStructuralScore(
 ): number {
   const queryTokens = collectInformativeTokens(query);
   const chunkTitle = getChunkTitle(hit);
-  const titleTokens = collectInformativeTokens(chunkTitle);
+  const citationLabel = getChunkCitationLabel(hit);
+  const structuralTitle = [citationLabel, chunkTitle].filter(Boolean).join(' ').trim();
+  const titleTokens = collectInformativeTokens(structuralTitle);
   const totalQueryWeight =
     queryTokens.length > 0
       ? queryTokens.reduce((sum, token) => sum + (queryTokenWeights?.get(token) ?? 1), 0)
@@ -230,6 +243,62 @@ export function computeChunkStructuralScore(
       ? 1
       : 0;
   const unitType = getChunkUnitType(hit);
+  const querySelectors = extractQueryCitationSelectors(query);
+  const hitSelectors = getHitCitationSelectors(hit);
+  const citationMatches = countCitationMatches(querySelectors, hitSelectors);
+  const selectorCoverage =
+    querySelectors.explicitSelectorCount > 0
+      ? citationMatches / querySelectors.explicitSelectorCount
+      : 0;
+  const explicitCitationBoost =
+    querySelectors.explicitSelectorCount > 0
+      ? selectorCoverage * 0.42 +
+        (querySelectors.article && hitSelectors.article ? 0.06 : 0) +
+        (querySelectors.point && hitSelectors.point ? 0.05 : 0) +
+        (querySelectors.subpoint && hitSelectors.subpoint ? 0.05 : 0)
+      : 0;
+  const exactStructuralPathBoost =
+    querySelectors.explicitSelectorCount > 0 &&
+    citationMatches === querySelectors.explicitSelectorCount &&
+    querySelectors.explicitSelectorCount >= 1
+      ? 0.16
+      : 0;
+  const exactPointBoost =
+    querySelectors.point &&
+    hitSelectors.point &&
+    normalizeCitationValue(querySelectors.point) === normalizeCitationValue(hitSelectors.point)
+      ? 0.18
+      : 0;
+  const exactSubpointBoost =
+    querySelectors.subpoint &&
+    hitSelectors.subpoint &&
+    normalizeCitationValue(querySelectors.subpoint) === normalizeCitationValue(hitSelectors.subpoint)
+      ? 0.12
+      : 0;
+  const citationTitleBoost =
+    citationLabel.length > 0 && querySelectors.explicitSelectorCount > 0 ? 0.04 : 0;
+  const explicitCitationMissPenalty =
+    querySelectors.explicitSelectorCount > 0 && citationMatches === 0 && citationLabel.length > 0
+      ? -0.08
+      : 0;
+  const mismatchedPointPenalty =
+    Boolean(querySelectors.point) &&
+    unitType === 'point' &&
+    Boolean(hitSelectors.point) &&
+    normalizeCitationValue(querySelectors.point) !== normalizeCitationValue(hitSelectors.point)
+      ? -0.18
+      : 0;
+  const mismatchedSubpointPenalty =
+    Boolean(querySelectors.subpoint) &&
+    unitType === 'subpoint' &&
+    Boolean(hitSelectors.subpoint) &&
+    normalizeCitationValue(querySelectors.subpoint) !== normalizeCitationValue(hitSelectors.subpoint)
+      ? -0.14
+      : 0;
+  const overspecificTailPenalty =
+    overlap > 0 && titleTokens.length > queryTokens.length + 2
+      ? -Math.min(0.14, (titleTokens.length - queryTokens.length - 2) * 0.02)
+      : 0;
   const articleShapeBoost = unitType === 'article' ? 0.05 : unitType === 'point' ? 0.02 : 0;
   const articleNumberBoost = hit.article_number ? 0.03 : 0;
   const conciseExactTitleBoost =
@@ -239,9 +308,18 @@ export function computeChunkStructuralScore(
   const zeroOverlapPenalty = getZeroOverlapPenalty(hit, unitType, queryTokens, titleTokens, overlap);
   return (
     zeroOverlapPenalty +
+    mismatchedPointPenalty +
+    mismatchedSubpointPenalty +
+    explicitCitationMissPenalty +
+    overspecificTailPenalty +
     articleShapeBoost +
     articleNumberBoost +
     conciseExactTitleBoost +
+    citationTitleBoost +
+    exactStructuralPathBoost +
+    exactPointBoost +
+    exactSubpointBoost +
+    explicitCitationBoost +
     weightedCoverage * 0.28 +
     overlapCoverage * 0.16 +
     compactSpan * 0.2 +

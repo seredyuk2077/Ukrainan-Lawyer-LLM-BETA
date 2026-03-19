@@ -50,3 +50,5 @@ pnpm exec tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts
 - `rag_golden_cases.json` не має бути smoke-only набором. Це article-level benchmark для українського legal RAG.
 - Для same-act multi-article сценаріїв використовуйте `expected_hits`, а не лише `expected_primary`, якщо важливо перевірити кілька норм одного кодексу.
 - Для substantive+procedure або mixed-source кейсів додавайте `expected_selected_acts` і, коли потрібно, `forbidden_selected_acts` / `forbidden_selected_act_kinds`, щоб verifier ловив не тільки miss релевантної норми, а й writer-noise.
+- Для point-level bylaw cases (`п. 12`, `п. 21`) пам’ятайте про structural ambiguity: якщо в одному акті є кілька однакових номерів пунктів у різних частинах, benchmark повинен або мати додатковий contextual cue в query, або чесно позначати такий кейс як corpus-hard, а не маскувати його під простий exact-match.
+- `verify_rag_golden` тепер пише ще й `priority_summary` та `high_priority_failures`, щоб release-gate було видно не лише загальний pass rate, а й чи валяться справді критичні українські legal сценарії.

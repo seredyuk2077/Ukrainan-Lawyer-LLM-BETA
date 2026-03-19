@@ -279,6 +279,30 @@ async function main(): Promise<void> {
     pass: summary.pass,
     fail: summary.total - summary.pass,
   }));
+  const prioritySummary = Object.entries(
+    results.reduce<Record<string, { total: number; pass: number }>>((acc, row) => {
+      const priority = row.priority ?? 'normal';
+      const current = acc[priority] ?? { total: 0, pass: 0 };
+      current.total += 1;
+      if (row.pass) current.pass += 1;
+      acc[priority] = current;
+      return acc;
+    }, {})
+  ).map(([priority, summary]) => ({
+    priority,
+    total: summary.total,
+    pass: summary.pass,
+    fail: summary.total - summary.pass,
+  }));
+  const highPriorityFailures = results
+    .filter((row) => row.priority === 'high' && !row.pass)
+    .map((row) => ({
+      id: row.id,
+      failure_codes: row.failureCodes,
+      reasons: row.reasons,
+      primary_rank: row.primaryRank,
+      latency_ms: row.latencyMs,
+    }));
 
   console.log('\n--- Golden Summary ---');
   console.log('pass:', passCount, '/', results.length);
@@ -293,6 +317,20 @@ async function main(): Promise<void> {
       Object.entries(failureCodeCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([code, count]) => `${code}=${count}`)
+        .join(', ')
+    );
+  }
+  if (prioritySummary.length > 0) {
+    console.log(
+      'priority summary:',
+      prioritySummary.map((row) => `${row.priority}=${row.pass}/${row.total}`).join(', ')
+    );
+  }
+  if (highPriorityFailures.length > 0) {
+    console.log(
+      'high priority failures:',
+      highPriorityFailures
+        .map((row) => `${row.id}[${row.failure_codes.join('|') || 'unknown'}]`)
         .join(', ')
     );
   }
@@ -314,6 +352,8 @@ async function main(): Promise<void> {
         qdrant_calls_p95: qdrantP95,
         failure_code_counts: failureCodeCounts,
         bucket_summary: bucketSummary,
+        priority_summary: prioritySummary,
+        high_priority_failures: highPriorityFailures,
         results,
       },
       null,

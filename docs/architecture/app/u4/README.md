@@ -38,6 +38,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/act-candidate-ranking.ts` — act candidate scoring/ranking (metadata + hits evidence + ACTS-2 fallback)
 - `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap
 - `scripts/lexery-legal-agent/retrieval/chunk-rerank.ts` — structural chunk scoring (`ordering_score`, title/article relevance)
+- `scripts/lexery-legal-agent/retrieval/structural-citation.ts` — normalized Ukrainian structural citation parsing (`ст./ч./п./пп./абз./примітка`) for query/hit matching
 - `scripts/lexery-legal-agent/retrieval/consumer.ts` — handleU4Event: load run, runCacheRag, persist trace, emit metrics, enqueue U5
 - `scripts/lexery-legal-agent/retrieval/qdrant-client.ts` — Qdrant search, timeout + 1 retry
 - `scripts/lexery-legal-agent/retrieval/embedding.ts` — embedQuery (OpenRouter OPENROUTER_API_KEY_ONLINE, 1536d)
@@ -46,6 +47,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/goal-splitter.ts` — taxonomy-cluster goal splitting v2
 - `scripts/lexery-legal-agent/retrieval/act-planner.ts` — LLM retrieval planner (tier 0/1/2)
 - `scripts/lexery-legal-agent/retrieval/query-rewriter-llm.ts` — LLM query rewrite + multi-aspect variants
+- `scripts/lexery-legal-agent/retrieval/query-rewrite-policy.ts` — cheap guardrail for when rewrite must be skipped on already-anchored structural legal queries
 - `scripts/lexery-legal-agent/retrieval/rrf-merge.ts` — RRF merge для multi-query
 - `scripts/lexery-legal-agent/retrieval/reference-expander.ts` — reference expansion (згадані акти/статті → додаткові hits)
 - `scripts/lexery-legal-agent/retrieval/lldbi-vocabulary.ts` — vocabulary helper (categories/document_types)
@@ -66,6 +68,9 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
 - Для простих двоклаузних legal queries (`X та Y`) U4 тепер покладається на дешевий structural multi-goal split із shared-tail carry-over, а не на обов'язковий LLM planner override; це зменшує latency/cost і прибирає planner-induced шум у procedural queries.
 - Для procedural follow-up queries U4 тепер робить дешеве semantic shaping без нових LLM calls: переносить shared subject у follow-up clause (`цю статтю` → предмет першого питання) і додає must-have procedural concept signals на кшталт `підслідність` або `початок досудового розслідування`, коли вони випливають зі змісту питання.
+- Для explicit structural citation queries (`ч./п./пп./абз./примітка` + act/title cue) U4 тепер не пускає LLM query rewrite в default path: такі запити вже достатньо заякорені, а rewrite тільки роздував latency/cost і міг породити fake multi-goal retrieval.
+- Structural citation parsing у runtime тепер Cyrillic-safe: `пунктом 12`, `підпункт 6`, `примітка до статті`, `частина 1` мають витягуватись так само стабільно, як `ст. 115`, без ASCII-only boundary bugs.
+- `goal-splitter` більше не розриває anchored citation queries лише через сполучник `і/та`, якщо в запиті вже є явні structural selectors; це прибирає false multi-goal fanout для point/title queries по підзаконних актах.
 - `ActTaxonomyStore` тепер використовує не лише alias/token matching, а й phrase-level LLDBI metadata (`title`, `summary`, `keywords`, `topics`, `aliases`, `validity_status`) для дешевшого й точнішого act candidate generation без hardcoded act lists.
 - Для document-type hints runtime тепер падає назад з `document_type` на `document_type_slug`, якщо human-readable type не збігається з U2 hint normalization.
 - `selected_acts` тепер жорсткіше відсікає weak cross-family acts: окремо для support candidates і для chunks-evidence tail, щоб multi-act retrieval не засмічував writer випадковими актами лише через vector overlap.
@@ -77,6 +82,9 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - У single-goal режимі `selected_acts` тепер може зберегти один сильний secondary supporting act, якщо він має повторний chunk-evidence у top-30; це прибирає false negative для practical-order cases на кшталт повернення товару.
 - У multi-clause запитах, де один кодекс явно покриває обидві частини питання, `selected_acts` більше не зобов'язаний добирати другий акт лише через `goals_count >= 2`; це прибирає procedural noise у same-act cases на кшталт банкрутства.
 - Corpus hygiene теж є частиною retrieval quality: якщо в LLDBI/Qdrant payload відсутні `chunk_title`, `unit_type`, `article_number` або висять старі `content_hash` версії, structural rerank у U4 втрачає точність навіть коли правильний акт уже є в корпусі.
+- Для structural legal retrieval runtime тепер очікує не лише `article_number`, а й глибші payload selectors (`article_part_number`, `point_number`, `subpoint_number`, `paragraph_number`, `citation_path`, `unstructured_fallback`); без цього українські `п./пп./ч.` запити неминуче деградують у noisy semantic search.
+- `article-backfill` тепер має two-step recovery path: спершу пробує exact structural Qdrant filter, а коли cluster не має індексу на кшталт `point_number`, падає назад до вузького within-act search + local structural post-filter. Це робить runtime стійкішим до LLDBI/Qdrant index drift без окремого hotfix per act.
+- Для великих підзаконних актів одного `point_number` недостатньо для “Harvey-like” точності: в одному наказі може існувати кілька різних `п. 12`. Якщо LLDBI не зберігає ієрархію (`citation_path`, chapter/section labels, act_part_label), U4 зможе знайти правильний номер пункту, але не завжди однозначно відрізнить потрібний контекст усередині акту.
 - `verify_rag_golden` і strict mode у `verify_retrieval_real_dev --article-rank` тепер ловлять не лише family coverage, а й article/rank misses, selected_acts leaks і latency/qdrant budget breaches.
 - Для масового cheap-repair такого drift використовується `refresh-qdrant-payload-batch` у LLDBI admin CLI; full `update --force` потрібен лише коли current-hash points реально відсутні або неповні.
 - Для контрольованого full reindex усього корпуса використовується `reload-corpus-batch`; він працює батчами, має resumable report і підходить для parser/payload/embedding кампаній на тисячах актів. Для повторного прогону transient fail-ів у тому самому report додається `--retry-failed`.

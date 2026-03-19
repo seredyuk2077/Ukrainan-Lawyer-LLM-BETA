@@ -52,19 +52,17 @@ import {
   type RoutingHintsTriggers,
   type RoutingHintsInput,
 } from './routing-hints-llm.js';
-import { callQueryRewriter } from './query-rewriter-llm.js';
-import { getLldbiVocabulary } from './lldbi-vocabulary.js';
+import { runQueryRewritePhase } from './query-rewrite-phase.js';
+import { runArticleBackfill } from './article-backfill.js';
 import { fetchRecentMemory } from './memory-store.js';
 import { rrfMerge } from './rrf-merge.js';
 import {
   incrementU4RoutingHintsNotUsed,
   incrementU4RoutingHintsUsed,
-  incrementU4QueryRewriteUsed,
   incrementU4DomainBootstrapAttempted,
   incrementU4DomainBootstrapUsed,
   incrementU4DomainBootstrapConflict,
 } from '../gateway/observability.js';
-import { extractArticleRefsStructured } from '../lib/articleRefs.js';
 import {
   applyCoverageFusion,
   applyDiversityCap,
@@ -75,6 +73,8 @@ import {
   NOISE_PENALTY_POLICY_VERSION,
 } from './hit-ranking.js';
 import { buildWithinActPool, extractActSearchNregsFromHits } from './within-act-pool.js';
+import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
+import { finalizeSelectedActsAfterRouting } from './selected-acts-finalizer.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -331,24 +331,6 @@ function effectiveQuery(query: string): string {
   const head = t.slice(0, 6000);
   const tail = t.slice(-6000);
   return head + '\n...[truncated]...\n' + tail;
-}
-
-function payloadToRawHit(
-  hit: { score: number; payload: Record<string, unknown> },
-  source: 'lldbi_chunks' | 'lldbi_acts'
-): RawHit {
-  const p = hit.payload;
-  return {
-    r2_key: String(p?.r2_key ?? ''),
-    json_path: String(p?.json_path ?? ''),
-    score: hit.score,
-    source,
-    rada_nreg: typeof p?.rada_nreg === 'string' ? p.rada_nreg : undefined,
-    article_number:
-      p?.article_number != null ? String(p.article_number) : null,
-    title: typeof p?.title === 'string' ? p.title : undefined,
-    metadata: p ? { ...p } : undefined,
-  };
 }
 
 async function fetchFilteredChunkHitsByActs(params: {
@@ -761,6 +743,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     };
     return { rawHits: [], retrievalTrace: emptyTrace };
   }
+  const runStartMs = Date.now();
   const categoryHints = lldbi?.categories_ranked_top3 ?? [];
   const documentTypeHints = lldbi?.document_types_ranked_top3 ?? [];
   const lldbiHints = { categoryHints, documentTypeHints };
@@ -942,78 +925,24 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   // U4 Query Rewriter: hoisted before multi-goal/single-goal branch so BOTH paths benefit from the
   // enriched query and variants. Multi-goal variant searches run after the per-goal loop (below).
   let queryForEmbed = query;
-  let queryRewriteMeta: {
-    enabled: boolean;
-    called: boolean;
-    used?: boolean;
-    model_id?: string;
-    attempts?: number;
-    parse_mode?: 'strict' | 'extract';
-    rewritten_query?: string;
-    variants?: string[];
-    negative_terms?: string[];
-    categories_top3?: string[];
-    doc_types_top3?: string[];
-    confidence?: number;
-    not_used_reason_codes?: string[];
-  };
-  if (config.u4QueryRewriteEnabled && config.openRouterApiKey && !isCircuitOpen()) {
-    const taxonomySnapshotSummary = taxonomyResultEarly
-      ? `Categories: ${(taxonomyResultEarly.category_hints ?? []).slice(0, 10).join(', ')}. ` +
-        `Aliases: ${[...new Set((taxonomyResultEarly.alias_hits ?? []).map((h) => h.alias))].slice(0, 15).join(', ')}.`
-      : '(multi-goal query — taxonomy computed per-goal)';
-    const vocabulary = await getLldbiVocabulary();
-    const queryRewriteResult = await callQueryRewriter({
-      original_query: query,
-      goals_summary: goalSplit.goals.map((g) => ({ goal_id: g.id, subquery: g.subquery })),
-      domainHint,
-      lldbi:
-        categoryHints.length > 0 || documentTypeHints.length > 0
-          ? { categories_ranked_top3: categoryHints, document_types_ranked_top3: documentTypeHints }
-          : undefined,
-      taxonomy_snapshot_summary: taxonomySnapshotSummary,
-      lldbi_vocabulary: vocabulary,
-      run_id,
-    });
-    const minRewriteConfidence = config.u4QueryRewriteMinConfidence;
-    const hasRewrite =
-      queryRewriteResult.output?.rewritten_query?.trim() &&
-      (queryRewriteResult.output.overall_confidence ?? 0) >= minRewriteConfidence;
-    if (hasRewrite) {
-      queryForEmbed = queryRewriteResult.output!.rewritten_query!.trim();
-      const used =
-        queryForEmbed !== query ||
-        (queryRewriteResult.output!.query_variants?.length ?? 0) > 0 ||
-        (queryRewriteResult.output!.negative_terms?.length ?? 0) > 0;
-      if (used) incrementU4QueryRewriteUsed();
-    }
-    const notUsedReasons: string[] = [];
-    if (queryRewriteResult.called && !queryRewriteResult.output) {
-      notUsedReasons.push(queryRewriteResult.call_failed_reason ?? 'FAILED');
-    } else if (
-      queryRewriteResult.output?.rewritten_query?.trim() &&
-      (queryRewriteResult.output.overall_confidence ?? 0) < minRewriteConfidence
-    ) {
-      notUsedReasons.push('LOW_CONFIDENCE');
-    }
-    queryRewriteMeta = {
-      enabled: true,
-      called: Boolean(queryRewriteResult.called),
-      used: Boolean(hasRewrite),
-      model_id: queryRewriteResult.model_id,
-      attempts: queryRewriteResult.attempts,
-      parse_mode: queryRewriteResult.parse_mode,
-      rewritten_query: queryRewriteResult.output?.rewritten_query?.slice(0, 300),
-      variants: queryRewriteResult.output?.query_variants,
-      negative_terms: queryRewriteResult.output?.negative_terms,
-      categories_top3: queryRewriteResult.output?.categories_ranked_top3,
-      doc_types_top3: queryRewriteResult.output?.document_types_ranked_top3,
-      confidence: queryRewriteResult.output?.overall_confidence,
-      not_used_reason_codes: notUsedReasons.length > 0 ? notUsedReasons : undefined,
-    };
-  } else {
-    queryRewriteMeta = { enabled: false, called: false };
-  }
+  const taxonomySnapshotSummary = taxonomyResultEarly
+    ? `Categories: ${(taxonomyResultEarly.category_hints ?? []).slice(0, 10).join(', ')}. ` +
+      `Aliases: ${[...new Set((taxonomyResultEarly.alias_hits ?? []).map((h) => h.alias))].slice(0, 15).join(', ')}.`
+    : '(multi-goal query — taxonomy computed per-goal)';
+  const queryRewritePhase = await runQueryRewritePhase({
+    query,
+    entities,
+    routing_flags,
+    goalSplit,
+    domainHint,
+    categoryHints,
+    documentTypeHints,
+    taxonomySnapshotSummary,
+    run_id,
+  });
+  queryForEmbed = queryRewritePhase.queryForEmbed;
+  const queryRewriteMeta = queryRewritePhase.meta;
+  const queryRewriteDurationMs = queryRewritePhase.durationMs;
 
   // Multi-goal path: per-goal retrieval → merge → coverage fusion → diversity cap
   if (isMultiGoal) {
@@ -1207,11 +1136,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       version: 1,
       hits: finalMulti,
       top_score: topScoreMulti,
-      latency_ms: totalLatencyMulti,
+      latency_ms: Date.now() - runStartMs,
       degraded_sources: Object.keys(degraded).length ? degraded : undefined,
       meta: {
         collections_used: [...new Set(allCollectionsUsed)],
-        steps_latency_ms: [],
+        steps_latency_ms: queryRewriteDurationMs > 0 ? [queryRewriteDurationMs] : [],
         steps_requested: ['multi_goal'],
         steps_executed: ['multi_goal'],
         query_used: query.slice(0, 200),
@@ -1303,7 +1232,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             goal_id: g.goal_id,
             act_pool_size: g.act_pool_size ?? 0,
           })),
-          stages: [{ stage: 'multi_goal', qdrant_calls_count: qdrantCallCounter.count, time_ms: totalLatencyMulti }],
+          stages: [
+            ...(queryRewriteDurationMs > 0
+              ? [{ stage: 'query_rewrite', qdrant_calls_count: 0, time_ms: queryRewriteDurationMs }]
+              : []),
+            { stage: 'multi_goal', qdrant_calls_count: qdrantCallCounter.count, time_ms: totalLatencyMulti },
+          ],
           distribution_by_goal: goalsSummary.map((g) => ({ goal_id: g.goal_id, hits_count: g.hits_count ?? 0 })),
           family_evidence_top2: familyEvidenceMulti.debug.top_families,
         },
@@ -1706,84 +1640,34 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     allHits.push(...cappedAfterExp);
   }
 
-  // U4 Article-reference backfill: strong refs only; compare and query in normalized space (332-2 vs 3322).
-  let articleBackfillMeta: { added_count: number; not_found_refs: string[]; calls: number } | undefined;
-  if (config.u4ArticleBackfillEnabled && vector) {
-    function normalizedFormsForArticle(s: string): string[] {
-      const t = String(s).trim();
-      const dash = t.match(/^(\d{1,5})-(\d{1,3})$/);
-      if (dash) return [t, dash[1]! + dash[2]!];
-      return [t];
+  // U4 Article-reference backfill: strong refs only; now structural-aware for ч./п./пп./абз.
+  const articleBackfill = await runArticleBackfill({
+    enabled: config.u4ArticleBackfillEnabled,
+    query,
+    vector,
+    collection: collections.chunks,
+    timeoutMs: config.qdrantTimeoutSec * 1000,
+    maxCalls: config.u4ArticleBackfillMaxCalls,
+    maxAddedHits: config.u4ArticleBackfillMaxAddedHits,
+    existingHits: allHits,
+    taxonomyResult,
+    callCounter: qdrantCallCounter,
+  });
+  const articleBackfillMeta = articleBackfill.meta;
+  if (articleBackfill.addedHits.length > 0) {
+    allHits.push(...articleBackfill.addedHits);
+    const deduped = dedupeHits(allHits);
+    if (taxonomyResult.debug.source === 'supabase') {
+      applyHybridOrdering(deduped, query, taxonomyResult, entities);
+    } else {
+      deduped.sort(compareRawHitByScore);
     }
-    const strongRefs = extractArticleRefsStructured(query).filter((r) => r.signal_strength === 'strong');
-    const existingRefsNormalized = new Set<string>();
-    for (const h of allHits) {
-      if (h.article_number != null) {
-        for (const form of normalizedFormsForArticle(String(h.article_number))) {
-          existingRefsNormalized.add(form);
-        }
-      }
-    }
-    const missingRefs = strongRefs.filter(
-      (r) => !r.normalized_forms.some((f) => existingRefsNormalized.has(f))
-    );
-    if (missingRefs.length > 0) {
-      const initialCount = qdrantCallCounter.count;
-      const maxCalls = config.u4ArticleBackfillMaxCalls;
-      const maxAdded = config.u4ArticleBackfillMaxAddedHits;
-      const existingKeys = new Set(allHits.map((h) => `${h.r2_key}:${h.json_path}`));
-      const backfillHits: RawHit[] = [];
-      const notFoundRefs: string[] = [];
-      for (const ref of missingRefs) {
-        if (qdrantCallCounter.count >= initialCount + maxCalls) break;
-        if (backfillHits.length >= maxAdded) break;
-        try {
-          const hits = await qdrantSearch({
-            collection: collections.chunks,
-            vector: vector,
-            limit: 5,
-            filter: {
-              should: ref.normalized_forms.map((v) => ({ key: 'article_number', match: { value: v } })),
-            },
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
-          });
-          if (hits.length === 0) {
-            notFoundRefs.push(ref.raw_ref);
-          }
-          for (const h of hits) {
-            const raw = payloadToRawHit(h, 'lldbi_chunks');
-            if (!raw.r2_key || !raw.json_path) continue;
-            const key = `${raw.r2_key}:${raw.json_path}`;
-            if (!existingKeys.has(key) && backfillHits.length < maxAdded) {
-              existingKeys.add(key);
-              backfillHits.push(raw);
-            }
-          }
-        } catch {
-          notFoundRefs.push(ref.raw_ref);
-        }
-      }
-      if (backfillHits.length > 0) {
-        allHits.push(...backfillHits);
-        const deduped = dedupeHits(allHits);
-        if (taxonomyResult.debug.source === 'supabase') {
-          applyHybridOrdering(deduped, query, taxonomyResult, entities);
-        } else {
-          deduped.sort(compareRawHitByScore);
-        }
-        allHits.length = 0;
-        allHits.push(...deduped);
-      }
-      articleBackfillMeta = {
-        added_count: backfillHits.length,
-        not_found_refs: notFoundRefs,
-        calls: qdrantCallCounter.count - initialCount,
-      };
-    }
+    const noiseAfterBackfill = applyNoisePenalty(deduped, config.u4FusionTopN);
+    const cappedAfterBackfill = applyDiversityCap(noiseAfterBackfill.hits);
+    allHits.length = 0;
+    allHits.push(...cappedAfterBackfill);
   }
 
-  const totalLatency = stepsLatencyMs.reduce((a, b) => a + b, 0);
   const hitsTotalBeforeCapSingle = allHits.length;
   const finalHits = config.u4HitsCap > 0 ? allHits.slice(0, config.u4HitsCap) : allHits;
   const hitsCapAppliedSingle = config.u4HitsCap > 0 && hitsTotalBeforeCapSingle > config.u4HitsCap;
@@ -2381,21 +2265,41 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
   }
 
+  const routingHintsAddedPrimaryLaw = routingHintsMeta.used_reason_codes.includes('ADDED_PRIMARY_LAW');
+  const selectedActsFinalMeta = finalizeSelectedActsAfterRouting({
+    selected_acts_before_routing: selected_acts,
+    selected_acts_final,
+    base_confidence: selectedActsResult.selected_acts_confidence,
+    base_decision: selected_acts_decision,
+    routing_hints_added_count: routingHintsMeta.used_effect.added_count,
+    routing_hints_added_primary_law: routingHintsAddedPrimaryLaw,
+    routing_hints_added_nregs: selected_acts_sources_breakdown_final.from_routing_hints,
+    retrieval_evidence_nregs: finalHits.slice(0, 30).map((hit) => hit.rada_nreg ?? '').filter(Boolean),
+  });
+  if (
+    low_confidence_final &&
+    routingHintsAddedPrimaryLaw &&
+    selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
+    selectedActsFinalMeta.selected_acts_confidence_final >= 0.6 &&
+    !reasonCodes.includes('OUT_OF_SCOPE') &&
+    !reasonCodes.includes('LOW_EVIDENCE') &&
+    !reasonCodes.includes('ROUTING_HINTS_LOW_CONF')
+  ) {
+    low_confidence_final = false;
+    const actSelectionLowConfidenceIndex = reasonCodes.indexOf('ACT_SELECTION_LOW_CONFIDENCE');
+    if (actSelectionLowConfidenceIndex >= 0) {
+      reasonCodes.splice(actSelectionLowConfidenceIndex, 1);
+    }
+  }
+
   const mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
-  const sampleHits = finalHits.slice(0, 5).map((h) => ({
-    source: h.source,
-    score: h.score,
-    r2_key: h.r2_key,
-    json_path: h.json_path,
-    act_title: h.title,
-    article_ref: h.article_number ?? null,
-  }));
+  const sampleHits = buildSampleHits(finalHits);
 
   const retrievalTrace: RetrievalTrace = {
     version: 1,
     hits: finalHits,
     top_score: topScore,
-    latency_ms: totalLatency,
+    latency_ms: Date.now() - runStartMs,
     degraded_sources: (Object.keys(degraded).length || mem.memoryDegraded)
       ? { ...degraded, ...(mem.memoryDegraded ? { memory: true } : {}) }
       : undefined,
@@ -2496,10 +2400,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       reason_codes: reasonCodes.length ? reasonCodes : undefined,
       selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
       chunks_evidence_top_acts,
-      selected_acts_decision,
-      selected_acts_confidence: selectedActsResult.selected_acts_confidence,
-      selected_acts_kinds_count: selectedActsResult.selected_acts_kinds_count,
-      selected_acts_document_types_top: selectedActsResult.selected_acts_document_types_top,
+      selected_acts_decision: selectedActsFinalMeta.selected_acts_decision_final,
+      selected_acts_confidence: selectedActsFinalMeta.selected_acts_confidence_final,
+      selected_acts_confidence_pre_routing: selectedActsFinalMeta.selected_acts_confidence_pre_routing,
+      selected_acts_kinds_count: selectedActsFinalMeta.selected_acts_kinds_count_final,
+      selected_acts_document_types_top: selectedActsFinalMeta.selected_acts_document_types_top_final,
       family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
       family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
       routing_hints: routingHintsMeta,
@@ -2507,12 +2412,23 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       article_backfill: articleBackfillMeta,
       ood_guard: oodGuardResult,
       low_confidence_suppressed:
-        specializedDomainNoPrimary || coverageGuardFiredButFamilyOk
+        specializedDomainNoPrimary ||
+        coverageGuardFiredButFamilyOk ||
+        (routingHintsAddedPrimaryLaw &&
+          selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
+          !low_confidence_final)
           ? {
               fired: true,
               suppressed_reasons: [
                 ...(specializedDomainNoPrimary ? ['SPECIALIZED_DOMAIN_NO_PRIMARY_LAW'] : []),
                 ...(coverageGuardFiredButFamilyOk ? ['COVERAGE_GUARD_FAMILY_OK'] : []),
+                ...(
+                  routingHintsAddedPrimaryLaw &&
+                  selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
+                  !low_confidence_final
+                    ? ['ROUTING_HINTS_RECOVERED_WITH_RETRIEVAL_EVIDENCE']
+                    : []
+                ),
                 ...(qrSignaledOod ? [] : []),
               ],
             }
@@ -2531,16 +2447,21 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       memory: mem.memoryMeta,
       retrieval_debug_bundle: {
         per_goal_act_candidates_top: actCandidatesTopHydrated.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
-        stages: (collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
-          stage: String(stage),
-          qdrant_calls_count: 1,
-          time_ms: stepsLatencyMs[i] ?? 0,
-        })),
+        stages: [
+          ...(queryRewriteDurationMs > 0
+            ? [{ stage: 'query_rewrite', qdrant_calls_count: 0, time_ms: queryRewriteDurationMs }]
+            : []),
+          ...(collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
+            stage: String(stage),
+            qdrant_calls_count: 1,
+            time_ms: stepsLatencyMs[i] ?? 0,
+          })),
+        ],
         distribution_by_act: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
         distribution_by_goal: [{ goal_id: goalSplit.goals[0].id, hits_count: finalHits.length }],
         selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
         chunks_evidence_top_acts,
-        selected_acts_decision,
+        selected_acts_decision: selectedActsFinalMeta.selected_acts_decision_final,
         family_evidence_top2: familyEvidence.debug.top_families,
       },
     },

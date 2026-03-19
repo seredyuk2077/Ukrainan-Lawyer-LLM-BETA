@@ -18,7 +18,20 @@ export const RawHitSchema = z.object({
   source: RawHitSourceSchema.optional(),
   rada_nreg: z.string().optional(),
   article_number: z.string().nullable().optional(),
+  unit_number: z.string().nullable().optional(),
+  unit_type: z.string().nullable().optional(),
+  article_part_number: z.string().nullable().optional(),
+  point_number: z.string().nullable().optional(),
+  subpoint_number: z.string().nullable().optional(),
+  paragraph_number: z.string().nullable().optional(),
+  citation_path: z.string().nullable().optional(),
   title: z.string().optional(),
+  document_type: z.string().nullable().optional(),
+  document_type_slug: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  storage_category: z.string().nullable().optional(),
+  validity_status: z.string().nullable().optional(),
+  unstructured_fallback: z.boolean().optional(),
   /** Multi-goal: which evidence goal this hit belongs to. */
   goal_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -38,6 +51,9 @@ export const SampleHitSchema = z.object({
   json_path: z.string().min(1),
   act_title: z.string().optional(),
   article_ref: z.string().nullable().optional(),
+  unit_ref: z.string().nullable().optional(),
+  unit_type: z.string().nullable().optional(),
+  citation_ref: z.string().nullable().optional(),
   chunk_id: z.union([z.string(), z.number()]).optional(),
 });
 export type SampleHit = z.infer<typeof SampleHitSchema>;
@@ -84,6 +100,10 @@ export const RetrievalTraceSchema = z.object({
             title: z.string().optional(),
             score: z.number().optional(),
             reasons: z.array(z.string()).optional(),
+            why_tag: z.string().optional(),
+            source_tier: z.string().optional(),
+            category: z.string().optional(),
+            document_type: z.string().optional(),
           })
         )
         .optional(),
@@ -189,6 +209,7 @@ export const RetrievalTraceSchema = z.object({
           from_taxonomy: z.array(z.string()).optional(),
           from_acts_search: z.array(z.string()).optional(),
           from_chunks_evidence: z.array(z.string()).optional(),
+          from_routing_hints: z.array(z.string()).optional(),
         })
         .optional(),
       /** Top acts by count/score in top-30 hits (chunks evidence). */
@@ -211,6 +232,18 @@ export const RetrievalTraceSchema = z.object({
           policy_version: z.number().optional(),
           included_from_chunks_evidence: z.boolean().optional(),
           reason_codes: z.array(z.string()).optional(),
+        })
+        .optional(),
+      selected_acts_confidence_pre_routing: z.number().optional(),
+      article_backfill: z
+        .object({
+          added_count: z.number().optional(),
+          not_found_refs: z.array(z.string()).optional(),
+          calls: z.number().optional(),
+          preferred_rada_nreg: z.string().optional(),
+          used_structural_filter: z.boolean().optional(),
+          used_post_filter_fallback: z.boolean().optional(),
+          fallback_reason_code: z.string().optional(),
         })
         .optional(),
       /** U4 Reference expansion: extract refs from top chunks, resolve via taxonomy, add hits. */
@@ -287,8 +320,10 @@ export const RetrievalTraceSchema = z.object({
         .object({
           enabled: z.boolean().optional(),
           called: z.boolean().optional(),
+          used: z.boolean().optional(),
           model_id: z.string().optional(),
           attempts: z.number().optional(),
+          duration_ms: z.number().optional(),
           parse_mode: z.enum(['strict', 'extract']).optional(),
           rewritten_query: z.string().optional(),
           variants: z.array(z.string()).optional(),

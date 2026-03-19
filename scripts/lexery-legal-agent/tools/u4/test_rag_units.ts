@@ -22,6 +22,23 @@ import {
   compareHitsByOrderingScore,
   computeChunkStructuralScore,
 } from '../../retrieval/chunk-rerank.js';
+import { decideQueryRewritePolicy } from '../../retrieval/query-rewrite-policy.js';
+import {
+  extractQueryCitationSelectors,
+  getHitCitationSelectors,
+  countCitationMatches,
+} from '../../retrieval/structural-citation.js';
+import {
+  buildArticleBackfillFilter,
+  buildStructuralOnlyBackfillFilter,
+  deriveArticleBackfillPreferredNreg,
+  hitSatisfiesBackfillExpectation,
+  hitSatisfiesStructuralSelectors,
+} from '../../retrieval/article-backfill.js';
+import {
+  finalizeSelectedActsAfterRouting,
+  summarizeSelectedActs,
+} from '../../retrieval/selected-acts-finalizer.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -81,6 +98,9 @@ function testContrastiveLiabilityGoalSplit(): void {
 function testHasMultiClauseStructure(): void {
   if (!hasMultiClauseStructure('що таке крадіжка та яке покарання')) throw new Error('Expected true for "X та Y"');
   if (!hasMultiClauseStructure('перший сегмент і другий сегмент')) throw new Error('Expected true for "X і Y"');
+  if (hasMultiClauseStructure('що передбачено пунктом 12 Правил роздрібної торгівлі та які документи потрібні')) {
+    throw new Error('Expected false for anchored structural citation query even with conjunction');
+  }
   if (hasMultiClauseStructure('a і b', 10)) throw new Error('Expected false when segments too short');
   if (hasMultiClauseStructure('single clause')) throw new Error('Expected false for single clause');
   console.log('[OK] hasMultiClauseStructure structure-only');
@@ -227,6 +247,312 @@ function testBuildWithinActPoolPromotesPlannerPreferredActs(): void {
     throw new Error(`Expected planner-preferred act to move to the front, got ${JSON.stringify(pool)}`);
   }
   console.log('[OK] within-act pool promotes planner-preferred acts without extra Qdrant search');
+}
+
+function testQueryRewritePolicySkipsAnchoredStructuralTitleQuery(): void {
+  const decision = decideQueryRewritePolicy({
+    query: 'Який обов\'язок продавця щодо інформації про товар передбачений пунктом 12 Правил роздрібної торгівлі непродовольчими товарами?',
+    entities: [{ type: 'law_title', value: 'Правил роздрібної торгівлі непродовольчими товарами' }],
+  });
+  if (decision.shouldCall) {
+    throw new Error(`Expected anchored structural title query to skip rewrite, got ${JSON.stringify(decision)}`);
+  }
+  if (!decision.reason_codes.includes('ANCHORED_STRUCTURAL_QUERY')) {
+    throw new Error(`Expected ANCHORED_STRUCTURAL_QUERY, got ${JSON.stringify(decision.reason_codes)}`);
+  }
+  console.log('[OK] query rewrite policy skips anchored structural title query');
+}
+
+function testQueryRewritePolicyAllowsBroadNaturalLanguageQuery(): void {
+  const decision = decideQueryRewritePolicy({
+    query: 'У клієнта в Facebook написали, що він шахрай. На які норми спирати вимогу про спростування недостовірної інформації та моральну шкоду?',
+    entities: [],
+  });
+  if (!decision.shouldCall) {
+    throw new Error(`Expected broad legal query to still allow rewrite, got ${JSON.stringify(decision)}`);
+  }
+  console.log('[OK] query rewrite policy keeps rewrite for broad natural-language query');
+}
+
+function testQueryRewritePolicySkipsSimpleFocusedLegalQuery(): void {
+  const decision = decideQueryRewritePolicy({
+    query: "Яка відповідальність за керування авто в стані алкогольного сп'яніння вперше?",
+    entities: [],
+    goals_count: 1,
+  });
+  if (decision.shouldCall) {
+    throw new Error(`Expected simple focused legal query to skip rewrite, got ${JSON.stringify(decision)}`);
+  }
+  if (!decision.reason_codes.includes('SIMPLE_FOCUSED_QUERY')) {
+    throw new Error(`Expected SIMPLE_FOCUSED_QUERY, got ${JSON.stringify(decision.reason_codes)}`);
+  }
+  console.log('[OK] query rewrite policy skips simple focused legal query');
+}
+
+function testStructuralCitationSelectorsCaptureNoteAndSubpoint(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачає примітка 2 до пп. 6 п. 5 ч. 1 ст. 45 ККУ?');
+  if (selectors.article !== '45') throw new Error(`Expected article 45, got ${selectors.article}`);
+  if (selectors.articlePart !== '1') throw new Error(`Expected part 1, got ${selectors.articlePart}`);
+  if (selectors.point !== '5') throw new Error(`Expected point 5, got ${selectors.point}`);
+  if (selectors.subpoint !== '6') throw new Error(`Expected subpoint 6, got ${selectors.subpoint}`);
+  if (selectors.note !== '2') throw new Error(`Expected note 2, got ${selectors.note}`);
+  if (selectors.explicitSelectorCount < 5) {
+    throw new Error(`Expected note + structural selectors to count as explicit, got ${selectors.explicitSelectorCount}`);
+  }
+  console.log('[OK] structural citation selectors capture note + article/part/point/subpoint');
+}
+
+function testStructuralCitationMatchCountsNoteSelectors(): void {
+  const querySelectors = extractQueryCitationSelectors('Що передбачає примітка 2 до ст. 45?');
+  const hitSelectors = getHitCitationSelectors({
+    article_number: '45',
+    unit_type: 'article',
+    citation_path: 'ст. 45 примітка 2',
+    metadata: {},
+  });
+  const matches = countCitationMatches(querySelectors, hitSelectors);
+  if (matches < 2) {
+    throw new Error(`Expected article + note match, got ${matches}`);
+  }
+  console.log('[OK] structural citation matching counts note selectors');
+}
+
+function testArticleBackfillPrefersSingleAliasMatchedAct(): void {
+  const preferred = deriveArticleBackfillPreferredNreg({
+    anchor_tokens: [],
+    rada_nreg_candidates: ['2755-17', '2747-15'],
+    category_hints: [],
+    alias_hits: [
+      { rada_nreg: '2755-17', alias: 'ПКУ', title: 'Податковий кодекс України', category: 'tax_customs', score: 1 },
+      { rada_nreg: '2755-17', alias: 'Податковий кодекс України', title: 'Податковий кодекс України', category: 'tax_customs', score: 1 },
+    ],
+    taxonomy_hints_used: undefined,
+    debug: { source: 'supabase', taxonomy_snapshot_version: 1 },
+  } as any);
+  if (preferred !== '2755-17') {
+    throw new Error(`Expected preferred rada_nreg 2755-17, got ${preferred}`);
+  }
+  console.log('[OK] article backfill prefers single alias-matched act when act cue is unambiguous');
+}
+
+function testArticleBackfillPrefersDominantAliasMatchedAct(): void {
+  const preferred = deriveArticleBackfillPreferredNreg({
+    anchor_tokens: [],
+    rada_nreg_candidates: ['z1257-07', '1442-97-п', '280-98-п'],
+    category_hints: [],
+    alias_hits: [
+      { rada_nreg: '1442-97-п', alias: 'роздрібної торгівлі', title: '...', category: 'energy_utilities', score: 1 },
+      { rada_nreg: '280-98-п', alias: 'роздрібної торгівлі', title: '...', category: 'business_corporate', score: 1 },
+      { rada_nreg: 'z1257-07', alias: 'торгівлі непродовольчими', title: '...', category: 'business_corporate', score: 1 },
+      { rada_nreg: 'z1257-07', alias: 'непродовольчими товарами', title: '...', category: 'business_corporate', score: 1 },
+      { rada_nreg: 'z1257-07', alias: 'роздрібної торгівлі непродовольчими', title: '...', category: 'business_corporate', score: 1 },
+      { rada_nreg: 'z1257-07', alias: 'торгівлі непродовольчими товарами', title: '...', category: 'business_corporate', score: 1 },
+    ],
+    taxonomy_hints_used: undefined,
+    debug: { source: 'supabase', taxonomy_snapshot_version: 1 },
+  } as any);
+  if (preferred !== 'z1257-07') {
+    throw new Error(`Expected dominant alias evidence to pick z1257-07, got ${preferred}`);
+  }
+  console.log('[OK] article backfill prefers dominant alias-matched act when one act clearly wins alias evidence');
+}
+
+function testArticleBackfillFilterCarriesStructuralSelectors(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачає пп. 6 п. 5 ч. 1 ст. 56 ПКУ?');
+  const filter = buildArticleBackfillFilter({
+    ref: {
+      raw_ref: '56',
+      normalized_forms: ['56'],
+      signal_strength: 'strong',
+      evidence: 'legal_prefix',
+    },
+    selectors,
+    preferredRadaNreg: '2755-17',
+  });
+  const mustKeys = (filter.must ?? []).map((item) => item.key);
+  if (!mustKeys.includes('rada_nreg')) throw new Error(`Expected rada_nreg must filter, got ${JSON.stringify(filter)}`);
+  if (!mustKeys.includes('article_part_number')) throw new Error(`Expected article_part_number must filter, got ${JSON.stringify(filter)}`);
+  if (!mustKeys.includes('point_number')) throw new Error(`Expected point_number must filter, got ${JSON.stringify(filter)}`);
+  if (!mustKeys.includes('subpoint_number')) throw new Error(`Expected subpoint_number must filter, got ${JSON.stringify(filter)}`);
+  if ((filter.should ?? []).length !== 1 || filter.should?.[0]?.key !== 'article_number') {
+    throw new Error(`Expected article_number should filters, got ${JSON.stringify(filter)}`);
+  }
+  console.log('[OK] article backfill filter carries structural selectors into Qdrant filter');
+}
+
+function testArticleBackfillDoesNotTreatWrongPointAsSatisfied(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачає пп. 6 п. 5 ч. 1 ст. 56 ПКУ?');
+  const satisfied = hitSatisfiesBackfillExpectation(
+    {
+      article_number: '56',
+      article_part_number: '1',
+      point_number: '4',
+      subpoint_number: '6',
+      unit_type: 'point',
+      citation_path: 'ст. 56 ч. 1 п. 4 пп. 6',
+      metadata: {},
+    },
+    {
+      raw_ref: '56',
+      normalized_forms: ['56'],
+      signal_strength: 'strong',
+      evidence: 'legal_prefix',
+    },
+    selectors
+  );
+  if (satisfied) {
+    throw new Error('Expected wrong point_number to fail structural backfill satisfaction');
+  }
+  console.log('[OK] article backfill requires full structural match, not article-only presence');
+}
+
+function testStructuralOnlyBackfillFilterCarriesPointSelectors(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачено п. 21 Правил перетинання державного кордону?');
+  const filter = buildStructuralOnlyBackfillFilter({
+    selectors,
+    preferredRadaNreg: '57-95-п',
+  });
+  const mustKeys = (filter?.must ?? []).map((item) => item.key);
+  if (!mustKeys.includes('rada_nreg')) throw new Error(`Expected rada_nreg must filter, got ${JSON.stringify(filter)}`);
+  if (!mustKeys.includes('point_number')) throw new Error(`Expected point_number must filter, got ${JSON.stringify(filter)}`);
+  console.log('[OK] structural-only backfill filter carries preferred act + point selector');
+}
+
+function testStructuralOnlyBackfillRequiresPointMatch(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачено п. 12 Правил роздрібної торгівлі непродовольчими товарами?');
+  const wrongPoint = hitSatisfiesStructuralSelectors(
+    {
+      unit_type: 'point',
+      unit_number: '11',
+      point_number: '11',
+      citation_path: 'п. 11',
+      metadata: {},
+    },
+    selectors
+  );
+  if (wrongPoint) {
+    throw new Error('Expected structural-only backfill to reject wrong point_number');
+  }
+  const rightPoint = hitSatisfiesStructuralSelectors(
+    {
+      unit_type: 'point',
+      unit_number: '12',
+      point_number: '12',
+      citation_path: 'п. 12',
+      metadata: {},
+    },
+    selectors
+  );
+  if (!rightPoint) {
+    throw new Error('Expected structural-only backfill to accept exact point_number');
+  }
+  console.log('[OK] structural-only backfill requires exact structural selector match');
+}
+
+function testSelectedActsFinalizerRaisesConfidenceAfterRoutingPrimaryLaw(): void {
+  const result = finalizeSelectedActsAfterRouting({
+    selected_acts_before_routing: [
+      {
+        rada_nreg: 'z1257-07',
+        act_title: 'Правила',
+        document_type: 'Наказ',
+        act_kind: 'SECONDARY_ORDER',
+      },
+    ],
+    selected_acts_final: [
+      {
+        rada_nreg: 'z1257-07',
+        act_title: 'Правила',
+        document_type: 'Наказ',
+        act_kind: 'SECONDARY_ORDER',
+      },
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Закон України Про захист прав споживачів',
+        document_type: 'Закон',
+        act_kind: 'PRIMARY_LAW',
+      },
+    ],
+    base_confidence: 0.52,
+    base_decision: {
+      policy_version: 3.1,
+      included_from_chunks_evidence: true,
+      reason_codes: ['COVERAGE_GUARD_FAILED'],
+    },
+    routing_hints_added_count: 1,
+    routing_hints_added_primary_law: true,
+    routing_hints_added_nregs: ['1023-12'],
+    retrieval_evidence_nregs: ['1023-12', 'z1257-07'],
+  });
+  if (result.selected_acts_confidence_final < 0.6) {
+    throw new Error(`Expected routing-hints finalizer to raise confidence floor, got ${result.selected_acts_confidence_final}`);
+  }
+  if (!result.routing_hints_recovered_with_retrieval_evidence) {
+    throw new Error('Expected routing-hints recovery to require retrieval evidence for the added act');
+  }
+  if (!result.selected_acts_decision_final.reason_codes?.includes('ROUTING_HINTS_ADDED_PRIMARY_LAW')) {
+    throw new Error(`Expected routing hints decision code, got ${JSON.stringify(result.selected_acts_decision_final.reason_codes)}`);
+  }
+  console.log('[OK] selected acts finalizer reconciles confidence after routing-hints primary-law recovery');
+}
+
+function testSelectedActsFinalizerDoesNotInflateConfidenceWithoutEvidence(): void {
+  const result = finalizeSelectedActsAfterRouting({
+    selected_acts_before_routing: [
+      {
+        rada_nreg: 'z1257-07',
+        act_title: 'Правила',
+        document_type: 'Наказ',
+        act_kind: 'SECONDARY_ORDER',
+      },
+    ],
+    selected_acts_final: [
+      {
+        rada_nreg: 'z1257-07',
+        act_title: 'Правила',
+        document_type: 'Наказ',
+        act_kind: 'SECONDARY_ORDER',
+      },
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Закон України Про захист прав споживачів',
+        document_type: 'Закон',
+        act_kind: 'PRIMARY_LAW',
+      },
+    ],
+    base_confidence: 0.52,
+    base_decision: {
+      policy_version: 3.1,
+      included_from_chunks_evidence: true,
+      reason_codes: ['COVERAGE_GUARD_FAILED'],
+    },
+    routing_hints_added_count: 1,
+    routing_hints_added_primary_law: true,
+    routing_hints_added_nregs: ['1023-12'],
+    retrieval_evidence_nregs: ['z1257-07'],
+  });
+  if (result.selected_acts_confidence_final !== 0.52) {
+    throw new Error(`Expected no confidence inflation without retrieval evidence, got ${result.selected_acts_confidence_final}`);
+  }
+  if (result.routing_hints_recovered_with_retrieval_evidence) {
+    throw new Error('Expected routing-hints recovery flag to stay false without retrieval evidence');
+  }
+  console.log('[OK] selected acts finalizer does not inflate confidence when routing hints add unsupported act');
+}
+
+function testSummarizeSelectedActsCountsKindsAndDocTypes(): void {
+  const summary = summarizeSelectedActs([
+    { rada_nreg: '1023-12', document_type: 'Закон', act_kind: 'PRIMARY_LAW' },
+    { rada_nreg: '435-15', document_type: 'Кодекс', act_kind: 'PRIMARY_LAW' },
+    { rada_nreg: 'z1257-07', document_type: 'Наказ', act_kind: 'SECONDARY_ORDER' },
+  ]);
+  if (summary.selected_acts_kinds_count.PRIMARY_LAW !== 2) {
+    throw new Error(`Expected 2 PRIMARY_LAW acts, got ${JSON.stringify(summary.selected_acts_kinds_count)}`);
+  }
+  if (!summary.selected_acts_document_types_top?.includes('Закон') || !summary.selected_acts_document_types_top?.includes('Наказ')) {
+    throw new Error(`Expected document types summary, got ${JSON.stringify(summary.selected_acts_document_types_top)}`);
+  }
+  console.log('[OK] selected acts summary recomputes kinds and document types from final act list');
 }
 
 function testClassifyActKindPrimaryLaw(): void {
@@ -511,6 +837,98 @@ function testStructuralScorePrefersProceduralAnchorArticleTitle(): void {
     );
   }
   console.log('[OK] structural score prefers procedural anchor article title when query carries procedural signal');
+}
+
+function testStructuralScorePrefersExplicitPointCitation(): void {
+  const query = 'Хто має право перетинати державний кордон під час воєнного стану за пунктом 21 цих Правил?';
+  const matchingPointHit = {
+    r2_key: 'legislation/other/57-95-п.json',
+    json_path: '$.content.chunks[2].text',
+    score: 0.43,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '57-95-п',
+    unit_number: '21',
+    unit_type: 'point',
+    citation_path: 'п. 21',
+    metadata: {
+      unit_type: 'point',
+      unit_number: '21',
+      citation_path: 'п. 21',
+      chunk_title: 'У разі введення на території України надзвичайного або воєнного стану перетинати державний кордон мають право:',
+    },
+  };
+  const genericPointHit = {
+    r2_key: 'legislation/other/57-95-п.json',
+    json_path: '$.content.chunks[1].text',
+    score: 0.46,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: '57-95-п',
+    unit_number: '2',
+    unit_type: 'point',
+    citation_path: 'п. 2',
+    metadata: {
+      unit_type: 'point',
+      unit_number: '2',
+      citation_path: 'п. 2',
+      chunk_title: 'Пункт 2',
+    },
+  };
+  const tokenWeights = buildDiscriminativeQueryTokenWeights([matchingPointHit, genericPointHit], query);
+  const matchingScore = computeChunkStructuralScore(matchingPointHit, query, tokenWeights);
+  const genericScore = computeChunkStructuralScore(genericPointHit, query, tokenWeights);
+  if (matchingScore <= genericScore) {
+    throw new Error(
+      `Expected explicit point citation hit to outrank generic point. matching=${matchingScore} generic=${genericScore}`
+    );
+  }
+  console.log('[OK] structural score prefers explicit point citation over generic point hit');
+}
+
+function testStructuralScoreDemotesWrongPointEvenWithLexicalOverlap(): void {
+  const query =
+    "Якщо продавець не перевірив товар і не надав інформацію за п. 12 Правил роздрібної торгівлі непродовольчими товарами?";
+  const matchingPointHit = {
+    r2_key: 'legislation/other/z1257-07.json',
+    json_path: '$.content.chunks[14].text',
+    score: 0.43,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: 'z1257-07',
+    unit_number: '12',
+    unit_type: 'point',
+    citation_path: 'п. 12',
+    metadata: {
+      unit_type: 'point',
+      unit_number: '12',
+      citation_path: 'п. 12',
+      chunk_title:
+        "Продавець зобов'язаний надати покупцеві необхідну, доступну, достовірну та своєчасну інформацію про товар.",
+    },
+  };
+  const wrongPointHit = {
+    r2_key: 'legislation/other/z1257-07.json',
+    json_path: '$.content.chunks[31].text',
+    score: 0.56,
+    source: 'lldbi_chunks' as const,
+    rada_nreg: 'z1257-07',
+    unit_number: '31',
+    unit_type: 'point',
+    citation_path: 'п. 31',
+    metadata: {
+      unit_type: 'point',
+      unit_number: '31',
+      citation_path: 'п. 31',
+      chunk_title: 'Продавець перевіряє товар перед продажем та повідомляє покупця про його властивості.',
+    },
+  };
+  const tokenWeights = buildDiscriminativeQueryTokenWeights([matchingPointHit, wrongPointHit], query);
+  const matchingScore = computeChunkStructuralScore(matchingPointHit, query, tokenWeights);
+  const wrongScore = computeChunkStructuralScore(wrongPointHit, query, tokenWeights);
+  if (matchingScore <= wrongScore) {
+    throw new Error(
+      `Expected exact point citation to outrank wrong lexical-overlap point. matching=${matchingScore} wrong=${wrongScore}`
+    );
+  }
+  console.log('[OK] structural score demotes wrong point even when another point has strong lexical overlap');
 }
 
 function testGoalSplitAddsErdrProceduralSignal(): void {
@@ -1197,6 +1615,62 @@ function testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal(): void {
   console.log('[OK] selected_acts keeps early procedural primary-law evidence in multi-goal retrieval');
 }
 
+function testSelectedActsFallbackDoesNotReAddBlockedNoiseAct(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        r2_key: 'legislation/criminal/2341-14.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.72,
+        source: 'lldbi_chunks',
+        rada_nreg: '2341-14',
+      },
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 3.2,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '1-v/2024',
+        title: 'Рішення Конституційного Суду України',
+        score: 2.6,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2341-14', '1-v/2024']),
+    actsSearchNregs: ['2341-14', '1-v/2024'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.68,
+        max_score: 0.72,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.71,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal',
+      family_confidence: 0.9,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal', support_score: 1 }],
+    },
+  });
+  if (result.selected_acts.some((act) => act.rada_nreg === '1-v/2024')) {
+    throw new Error(`Expected blocked noise act to stay out of fallback fill, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] selected_acts fallback does not re-add blocked noise act');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -1216,6 +1690,20 @@ async function main(): Promise<void> {
   testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
   testBuildWithinActPoolPromotesPlannerPreferredActs();
+  testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
+  testQueryRewritePolicySkipsSimpleFocusedLegalQuery();
+  testQueryRewritePolicyAllowsBroadNaturalLanguageQuery();
+  testStructuralCitationSelectorsCaptureNoteAndSubpoint();
+  testStructuralCitationMatchCountsNoteSelectors();
+  testArticleBackfillPrefersSingleAliasMatchedAct();
+  testArticleBackfillPrefersDominantAliasMatchedAct();
+  testArticleBackfillFilterCarriesStructuralSelectors();
+  testArticleBackfillDoesNotTreatWrongPointAsSatisfied();
+  testStructuralOnlyBackfillFilterCarriesPointSelectors();
+  testStructuralOnlyBackfillRequiresPointMatch();
+  testSelectedActsFinalizerRaisesConfidenceAfterRoutingPrimaryLaw();
+  testSelectedActsFinalizerDoesNotInflateConfidenceWithoutEvidence();
+  testSummarizeSelectedActsCountsKindsAndDocTypes();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
   testClassifyActKindUnknown();
@@ -1229,6 +1717,8 @@ async function main(): Promise<void> {
   testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
   testStructuralScoreSoftensZeroOverlapPenaltyForStrongArticleHits();
   testStructuralScorePrefersProceduralAnchorArticleTitle();
+  testStructuralScorePrefersExplicitPointCitation();
+  testStructuralScoreDemotesWrongPointEvenWithLexicalOverlap();
   testSingleGoalSelectedActsTailTrim();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
@@ -1243,6 +1733,7 @@ async function main(): Promise<void> {
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
+  testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
   console.log('\nAll RAG unit tests passed.');
 }
 
