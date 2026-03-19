@@ -385,6 +385,27 @@ function testQueryRewritePolicySkipsGroundedCitationWithActCue(): void {
   console.log('[OK] query rewrite policy skips grounded citation with act cue');
 }
 
+function testQueryRewritePolicySkipsWhenStrongTaxonomySignalExists(): void {
+  const decision = decideQueryRewritePolicy({
+    query: 'Як оскаржити податкове повідомлення-рішення і чи треба платити суму на час оскарження?',
+    entities: [],
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 4,
+      alias_hit_count: 2,
+      category_hint_count: 2,
+      document_type_hint_count: 1,
+    },
+  });
+  if (decision.shouldCall) {
+    throw new Error(`Expected strong taxonomy signal to skip rewrite, got ${JSON.stringify(decision)}`);
+  }
+  if (!decision.reason_codes.includes('STRONG_TAXONOMY_SIGNAL')) {
+    throw new Error(`Expected STRONG_TAXONOMY_SIGNAL, got ${JSON.stringify(decision.reason_codes)}`);
+  }
+  console.log('[OK] query rewrite policy skips when single-goal taxonomy signal is already strong');
+}
+
 function testQueryRewritePolicyAllowsBroadNaturalLanguageQuery(): void {
   const decision = decideQueryRewritePolicy({
     query: 'У клієнта в Facebook написали, що він шахрай. На які норми спирати вимогу про спростування недостовірної інформації та моральну шкоду?',
@@ -2368,6 +2389,7 @@ async function main(): Promise<void> {
   testBuildWithinActPoolPromotesPlannerPreferredActs();
   testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
   testQueryRewritePolicySkipsGroundedCitationWithActCue();
+  testQueryRewritePolicySkipsWhenStrongTaxonomySignalExists();
   testQueryRewritePolicySkipsSimpleFocusedLegalQuery();
   testQueryRewritePolicyAllowsBroadNaturalLanguageQuery();
   testGroundedQueryBuilderDropsGenericSignalsForStructuralQuery();

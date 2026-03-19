@@ -968,6 +968,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     categoryHints,
     documentTypeHints,
     taxonomySnapshotSummary,
+    taxonomyStrength: !isMultiGoal
+      ? {
+          taxonomy_act_count: taxonomyResultEarly?.rada_nreg_candidates?.length ?? 0,
+          alias_hit_count: taxonomyResultEarly?.alias_hits?.length ?? 0,
+          category_hint_count: taxonomyResultEarly?.category_hints?.length ?? 0,
+          document_type_hint_count: documentTypeHints.length,
+        }
+      : undefined,
     run_id,
   });
   queryForEmbed = queryRewritePhase.queryForEmbed;
