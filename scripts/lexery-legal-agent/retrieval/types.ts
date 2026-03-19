@@ -67,6 +67,9 @@ export const DegradedSourcesSchema = z.object({
   doclist: z.boolean().optional(),
 });
 
+export const CoverageGapSchema = z.enum(['none', 'weak_evidence', 'likely_missing_act', 'out_of_scope']);
+export type CoverageGap = z.infer<typeof CoverageGapSchema>;
+
 export const RetrievalTraceSchema = z.object({
   version: z.number().int().min(1),
   hits: RawHitsSchema,
@@ -86,6 +89,7 @@ export const RetrievalTraceSchema = z.object({
       hits_count: z.number().int().min(0).optional(),
       avg_score: z.number().optional(),
       low_confidence: z.boolean().optional(),
+      coverage_gap: CoverageGapSchema.optional(),
       query_variants_used: z.array(z.string()).optional(),
       multi_query_variants_count: z.number().int().min(0).optional(),
       used_filtered_chunks_search: z.boolean().optional(),

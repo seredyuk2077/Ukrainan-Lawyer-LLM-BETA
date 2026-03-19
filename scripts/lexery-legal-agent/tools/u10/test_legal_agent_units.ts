@@ -234,6 +234,30 @@ function test10(): void {
   console.log('[OK] test 10: evidenceInsufficient → system prefix injected');
 }
 
+function test10a(): void {
+  const assembled: AssembledPrompt = {
+    systemPrompt: 'You are a legal assistant.',
+    userPrompt: 'Query',
+    contextParts: [],
+  };
+  const ctx: RunContext = {
+    ...BLANK_CONTEXT,
+    retrieval_trace: {
+      version: 1,
+      hits: [],
+      meta: { coverage_gap: 'likely_missing_act', low_confidence: true, hits_count: 0 },
+    },
+  };
+  assert(isEvidenceInsufficient(assembled, ctx), 'coverage_gap should force evidenceInsufficient');
+  const messages = buildMessagesFromAssembled(assembled, {
+    evidenceInsufficient: true,
+    coverageGap: 'likely_missing_act',
+  });
+  assert(messages[0].content.includes('CORPUS COVERAGE GAP'), 'likely_missing_act prefix must be explicit');
+  assert(messages[0].content.includes('may be absent from the indexed corpus'), 'prefix must mention indexed corpus gap');
+  console.log('[OK] test 10a: likely_missing_act forces explicit corpus-gap prompt mode');
+}
+
 // ---- Test 11: contextTruncated → warning in system ----
 function test11(): void {
   const assembled: AssembledPrompt = {
@@ -399,6 +423,7 @@ async function main(): Promise<void> {
   test8();
   test9();
   test10();
+  test10a();
   test11();
   test12();
   test13();

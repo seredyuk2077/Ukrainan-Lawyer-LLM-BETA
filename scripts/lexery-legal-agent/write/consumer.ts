@@ -144,12 +144,17 @@ export async function handleU10Event(event: RunEvent): Promise<void> {
               (stored?.search_plan as RunContext['search_plan']) ??
               ((runFromDb?.search_plan as RunContext['search_plan']) ?? null),
             gate_decision: stored?.gate_decision as RunContext['gate_decision'],
+            retrieval_trace:
+              (stored?.retrieval_trace as RunContext['retrieval_trace']) ??
+              ((runFromDb?.retrieval_trace as RunContext['retrieval_trace']) ?? null),
             prompt_stack: previewPromptStack,
           };
           const previewEvidenceInsufficient = isEvidenceInsufficient(assembled, previewRunContext);
+          const previewCoverageGap = previewRunContext.retrieval_trace?.meta?.coverage_gap;
           const messages = buildMessagesFromAssembled(assembled, {
             promptStack: previewPromptStack,
             evidenceInsufficient: previewEvidenceInsufficient,
+            coverageGap: previewCoverageGap,
             contextTruncated: assembled.meta?.budget?.truncated === true,
           });
           const systemMsg = messages.find((m) => m.role === 'system')?.content ?? '';
@@ -161,6 +166,7 @@ export async function handleU10Event(event: RunEvent): Promise<void> {
             model: config.legalAgentModelId,
             prompt_stack_keys: Object.entries(ps ?? {}).filter(([, v]) => v).map(([k]) => k),
             evidence_insufficient: previewEvidenceInsufficient,
+            coverage_gap: previewCoverageGap ?? 'none',
             context_truncated: assembled.meta?.budget?.truncated === true,
             counts: {
               law: assembled.meta?.sources?.lawCount ?? 0,
@@ -280,6 +286,7 @@ export async function handleU10Event(event: RunEvent): Promise<void> {
         ...ctx,
         law_count: assembled.meta?.sources?.lawCount ?? 0,
         degraded: assembled.meta?.degraded ?? false,
+        coverage_gap: runContext.retrieval_trace?.meta?.coverage_gap ?? 'none',
       });
     }
 
@@ -521,6 +528,7 @@ export async function handleU10Event(event: RunEvent): Promise<void> {
     const messagesForAgent = buildMessagesFromAssembled(assembledForAgent, {
       promptStack: promptStack,
       evidenceInsufficient,
+      coverageGap: runContext.retrieval_trace?.meta?.coverage_gap,
       contextTruncated: assembledForAgent.meta?.budget?.truncated === true,
       taskType: focusSpec.taskType,
     });

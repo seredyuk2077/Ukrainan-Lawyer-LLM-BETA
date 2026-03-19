@@ -14,6 +14,7 @@ import type {
   LegalAgentResult,
   PromptStack,
 } from '../lib/pipeline/contracts.js';
+import type { CoverageGap } from '../retrieval/types.js';
 import { config } from '../lib/config.js';
 import { openRouterChat, OpenRouterError } from '../lib/openrouter.js';
 
@@ -87,6 +88,34 @@ const EVIDENCE_INSUFFICIENT_PREFIX =
   'Inform the user that insufficient legal norms were found, describe what is missing, ' +
   'and suggest they clarify or rephrase the question. Do not fabricate any legal articles.';
 
+const WEAK_EVIDENCE_PREFIX =
+  '⚠️ EVIDENCE WEAK: The indexed LLDBI corpus returned some snippets, but they are not reliable enough for a confident legal answer. ' +
+  'Do NOT answer from general legal knowledge. State that the indexed evidence is insufficient, specify what legal link or governing norm is still missing, and avoid invented article numbers or deadlines.';
+
+const LIKELY_MISSING_ACT_PREFIX =
+  '⚠️ CORPUS COVERAGE GAP: The indexed LLDBI corpus does not currently provide a reliable governing act or norm for this legally specific query. ' +
+  'Do NOT pretend the answer is grounded. Explicitly state that the relevant act or norm may be absent from the indexed corpus, summarize only any weak nearby evidence if present, and avoid fabricated citations.';
+
+const OUT_OF_SCOPE_PREFIX =
+  '⚠️ OUT OF SCOPE OR NO RELIABLE LEGAL BASIS: The current indexed evidence does not support a grounded legal answer for this query. ' +
+  'Do NOT answer from general knowledge. State that no reliable legal basis was found in the indexed corpus and avoid fabricated norms.';
+
+function resolveEvidencePrefix(coverageGap: CoverageGap | null | undefined): string {
+  switch (coverageGap) {
+    case 'weak_evidence':
+      return WEAK_EVIDENCE_PREFIX;
+    case 'likely_missing_act':
+      return LIKELY_MISSING_ACT_PREFIX;
+    case 'out_of_scope':
+      return OUT_OF_SCOPE_PREFIX;
+    case 'none':
+    case undefined:
+    case null:
+    default:
+      return EVIDENCE_INSUFFICIENT_PREFIX;
+  }
+}
+
 /**
  * Build a stacked system prompt from PromptStack.
  * Order: global_safety → project → chat → user_additional_constraints.
@@ -112,7 +141,9 @@ export function buildPromptStack(stack?: PromptStack): string {
  * True only when: law channel is empty, or degraded with significant load errors.
  * gate.expand no longer forces insufficient — it triggers triage + ambiguous_query warning.
  */
-export function isEvidenceInsufficient(assembled: AssembledPrompt, _runContext: RunContext): boolean {
+export function isEvidenceInsufficient(assembled: AssembledPrompt, runContext: RunContext): boolean {
+  const coverageGap = runContext.retrieval_trace?.meta?.coverage_gap;
+  if (coverageGap && coverageGap !== 'none') return true;
   const lawCount = assembled.meta?.sources?.lawCount ?? assembled.contextParts.filter((p) => p.type === 'law').length;
   const docCount = assembled.meta?.sources?.docCount ?? assembled.contextParts.filter((p) => p.type === 'doc').length;
   const degraded = assembled.meta?.degraded === true;
@@ -170,12 +201,13 @@ export function buildMessagesFromAssembled(
   options?: {
     promptStack?: PromptStack;
     evidenceInsufficient?: boolean;
+    coverageGap?: CoverageGap | null;
     contextTruncated?: boolean;
     /** When crime_composition, add mandatory template (DEV RUN v14). When memory_recall, add MEMORY ANSWER MODE. */
     taskType?: 'crime_composition' | 'citation_only' | 'general' | 'memory_recall';
   }
 ): Array<{ role: 'system' | 'user'; content: string }> {
-  const { promptStack, evidenceInsufficient, contextTruncated, taskType } = options ?? {};
+  const { promptStack, evidenceInsufficient, coverageGap, contextTruncated, taskType } = options ?? {};
   const lawParts = assembled.contextParts.filter((p) => p.type === 'law');
   const docParts = assembled.contextParts.filter((p) => p.type === 'doc');
   const memoryParts = assembled.contextParts.filter((p) => p.type === 'memory');
@@ -202,7 +234,7 @@ export function buildMessagesFromAssembled(
       systemPrompt = buildPromptStack(promptStack);
     }
     if (evidenceInsufficient) {
-      systemPrompt = EVIDENCE_INSUFFICIENT_PREFIX + '\n\n' + systemPrompt;
+      systemPrompt = resolveEvidencePrefix(coverageGap) + '\n\n' + systemPrompt;
     }
     if (contextTruncated) {
       systemPrompt += '\n\n⚠️ NOTE: The legal context was truncated due to token budget limits. Some law snippets may be missing.';
@@ -354,6 +386,7 @@ export async function runLegalAgent(args: {
   }
 
   const evidenceInsufficient = isEvidenceInsufficient(assembled, runContext);
+  const coverageGap = runContext.retrieval_trace?.meta?.coverage_gap;
   const contextTruncated = assembled.meta?.budget?.truncated === true;
   const promptStack = runContext.prompt_stack;
 
@@ -362,6 +395,7 @@ export async function runLegalAgent(args: {
     buildMessagesFromAssembled(assembled, {
       promptStack,
       evidenceInsufficient,
+      coverageGap,
       contextTruncated,
       taskType: focusSpec?.taskType,
     });

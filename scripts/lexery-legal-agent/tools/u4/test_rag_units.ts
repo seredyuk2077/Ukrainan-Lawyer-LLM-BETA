@@ -16,7 +16,11 @@ import {
 } from '../../retrieval/act-taxonomy-store.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
 import { selectActPlannerTier } from '../../retrieval/act-planner.js';
-import { buildWithinActPool, extractActSearchNregsFromHits } from '../../retrieval/within-act-pool.js';
+import {
+  buildWithinActPool,
+  extractActSearchNregsFromHits,
+  extractChunkEvidenceNregsFromHits,
+} from '../../retrieval/within-act-pool.js';
 import {
   buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
@@ -45,6 +49,8 @@ import {
   finalizeSelectedActsAfterRouting,
   summarizeSelectedActs,
 } from '../../retrieval/selected-acts-finalizer.js';
+import { deriveCoverageGap } from '../../retrieval/coverage-gap.js';
+import { normalizeFinalReasonCodes } from '../../retrieval/single-goal-selected-acts.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -273,6 +279,38 @@ function testGoalSplitCompactsProceduralBundleWithAnaphora(): void {
   console.log('[OK] heuristicGoalSplit compacts anaphoric procedural bundle into one goal');
 }
 
+function testGoalSplitCompactsProceduralBundleWithSharedProcessReference(): void {
+  const q = 'Як оскаржити податкове повідомлення-рішення і чи треба сплачувати суму під час оскарження?';
+  const r = heuristicGoalSplit(q, 'tax_customs', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected shared-process procedural bundle compaction to keep 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected compacted tax bundle to stay procedural, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('procedural_bundle_compaction')) {
+    throw new Error(`Expected procedural_bundle_compaction for shared-process tax bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  const mustHaveSignals = r.goals[0]?.must_have_signals ?? [];
+  if (!mustHaveSignals.includes('оскарження податкового повідомлення-рішення')) {
+    throw new Error(`Expected compacted tax bundle to preserve shared tax appeal signal, got ${JSON.stringify(mustHaveSignals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts shared-process procedural bundle into one goal');
+}
+
+function testGoalSplitCompactsSameActNormBundle(): void {
+  const q =
+    'У день звільнення з працівником не розрахувалися повністю. Де шукати норму про строк остаточного розрахунку і норму про наслідки затримки?';
+  const r = heuristicGoalSplit(q, 'labor_social', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected same-act norm bundle compaction to keep 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction reason code, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts same-act norm bundle into one goal');
+}
+
 function testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists(): void {
   const tier = selectActPlannerTier({
     goalsCount: 1,
@@ -355,6 +393,36 @@ function testBuildWithinActPoolPromotesPlannerPreferredActs(): void {
     throw new Error(`Expected planner-preferred act to move to the front, got ${JSON.stringify(pool)}`);
   }
   console.log('[OK] within-act pool promotes planner-preferred acts without extra Qdrant search');
+}
+
+function testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence(): void {
+  const nregs = extractChunkEvidenceNregsFromHits([
+    { source: 'lldbi_chunks', rada_nreg: '2755-17', score: 0.4 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '2747-15', score: 0.7 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '2755-17', score: 0.6 } as const,
+    { source: 'lldbi_acts', rada_nreg: '80731-10', score: 0.99 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '2747-15', score: 0.5 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '2747-15', score: 0.4 } as const,
+  ]);
+  if (JSON.stringify(nregs) !== JSON.stringify(['2747-15', '2755-17'])) {
+    throw new Error(`Expected chunk evidence nregs to rank by repeated chunk support, got ${JSON.stringify(nregs)}`);
+  }
+  console.log('[OK] within-act pool extracts chunk-evidence nregs by repeated chunk support');
+}
+
+function testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns(): void {
+  const pool = buildWithinActPool({
+    taxonomyNregs: ['80731-10', '2341-14'],
+    actSearchNregs: ['2341-14', '111-11'],
+    chunkEvidenceNregs: ['322-08', '100-95-п'],
+    categoryHintCount: 2,
+    preferChunkEvidence: true,
+    limit: 4,
+  });
+  if (JSON.stringify(pool) !== JSON.stringify(['322-08', '100-95-п', '2341-14', '111-11'])) {
+    throw new Error(`Expected strong-run within-act pool to follow first-pass chunk evidence, got ${JSON.stringify(pool)}`);
+  }
+  console.log('[OK] within-act pool can prefer first-pass chunk evidence on strong runs');
 }
 
 function testQueryRewritePolicySkipsAnchoredStructuralTitleQuery(): void {
@@ -460,6 +528,44 @@ function testWithinActExpansionPrefersProceduralAndStructuralQueries(): void {
     throw new Error(`Expected procedural structural query to keep broader within-act expansion, got ${JSON.stringify(decision)}`);
   }
   console.log('[OK] within-act expansion keeps broader fanout for procedural structural query');
+}
+
+function testWithinActExpansionCompactsSignalOnlyBundleQueries(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors(
+      'Яка відповідальність роботодавця за затримку остаточного розрахунку при звільненні і які норми про середній заробіток за цей час?'
+    ),
+    entities: [],
+    goalType: 'liability',
+    goalReasonCodes: ['multi_clause_structure'],
+    mustHaveSignalsCount: 0,
+    weakLimit: 5,
+  });
+  if (decision.limit !== 2) {
+    throw new Error(`Expected signal-only bundle query to use compact within-act limit, got ${JSON.stringify(decision)}`);
+  }
+  console.log('[OK] within-act expansion compacts signal-only bundle queries');
+}
+
+function testWithinActExpansionCompactsProceduralNonStructuralQueries(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors(
+      'Як оскаржити податкове повідомлення-рішення і чи треба сплачувати суму під час оскарження?'
+    ),
+    entities: [],
+    goalType: 'procedure',
+    goalReasonCodes: ['procedural_bundle_compaction', 'multi_clause_structure'],
+    mustHaveSignalsCount: 2,
+    weakLimit: 5,
+  });
+  if (decision.limit !== 2) {
+    throw new Error(`Expected non-structural procedural bundle to use compact procedural within-act limit, got ${JSON.stringify(decision)}`);
+  }
+  console.log('[OK] within-act expansion compacts non-structural procedural bundle queries');
 }
 
 function testQueryRewritePolicySkipsSimpleFocusedLegalQuery(): void {
@@ -1543,6 +1649,136 @@ function testSingleGoalSelectedActsTailTrim(): void {
   console.log('[OK] selected_acts cleans weak single-goal tail acts when primary evidence dominates');
 }
 
+function testSelectedActsTrimNonPrimaryOnlyTailAndLowerConfidence(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '1178-2022-п',
+        title: 'Особливості здійснення публічних закупівель',
+        score: 0.92,
+        category: 'admin',
+        document_type: 'Постанова КМУ',
+      },
+      {
+        rada_nreg: '33-2026-п',
+        title: 'Про внесення змін до Порядку формування та використання електронного каталогу',
+        score: 0.71,
+        category: 'admin',
+        document_type: 'Постанова КМУ',
+      },
+      {
+        rada_nreg: 'va07p710-20',
+        title: 'Рішення Першого сенату Конституційного Суду України',
+        score: 0.38,
+        category: 'judiciary_justice',
+        document_type: 'Рішення КСУ',
+      },
+      {
+        rada_nreg: 'v0015700-98',
+        title: 'Про внесення змін і доповнень у деякі постанови Пленуму Верховного Суду України',
+        score: 0.32,
+        category: 'judiciary_justice',
+        document_type: 'Постанова Пленуму Верховного Суду',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['1178-2022-п', '33-2026-п', 'va07p710-20', 'v0015700-98']),
+    actsSearchNregs: ['1178-2022-п', '33-2026-п', 'va07p710-20', 'v0015700-98'],
+    chunks_evidence_top_acts: [
+      { rada_nreg: '1178-2022-п', count_in_top30: 9, avg_score_in_top30: 0.61, max_score: 0.68, best_rank_in_top30: 1, rank_mass_top30: 1.9, max_ordering_score: 0.63 },
+      { rada_nreg: '33-2026-п', count_in_top30: 2, avg_score_in_top30: 0.56, max_score: 0.61, best_rank_in_top30: 3, rank_mass_top30: 0.58, max_ordering_score: 0.58 },
+      { rada_nreg: 'va07p710-20', count_in_top30: 1, avg_score_in_top30: 0.35, max_score: 0.35, best_rank_in_top30: 10, rank_mass_top30: 0.1, max_ordering_score: 0.38 },
+      { rada_nreg: 'v0015700-98', count_in_top30: 1, avg_score_in_top30: 0.31, max_score: 0.31, best_rank_in_top30: 12, rank_mass_top30: 0.08, max_ordering_score: 0.33 },
+    ],
+  });
+  if (result.selected_acts.length !== 2) {
+    throw new Error(`Expected non-primary-only tail trim to keep 2 acts, got ${result.selected_acts.length}`);
+  }
+  if (result.selected_acts.some((act) => act.rada_nreg === 'va07p710-20' || act.rada_nreg === 'v0015700-98')) {
+    throw new Error(`Expected weak non-primary tail acts to be removed, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('NON_PRIMARY_ONLY_WEAK_CONFIDENCE')) {
+    throw new Error(`Expected NON_PRIMARY_ONLY_WEAK_CONFIDENCE, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  if (result.selected_acts_confidence > 0.55) {
+    throw new Error(`Expected non-primary-only selection confidence <= 0.55, got ${result.selected_acts_confidence}`);
+  }
+  console.log('[OK] selected_acts trims non-primary-only tails and lowers confidence without explicit non-primary hint');
+}
+
+function testCoverageGapTreatsNoPrimaryLawAsWeakEvidence(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['NO_PRIMARY_LAW_EVIDENCE', 'LOW_EVIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.55,
+    hitsCount: 12,
+    topScore: 0.67,
+    categoryHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected NO_PRIMARY_LAW_EVIDENCE to map to weak_evidence, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap treats no-primary-law low-confidence runs as weak evidence');
+}
+
+function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['LOW_EVIDENCE', 'NON_PRIMARY_ONLY_WEAK_CONFIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.41,
+    selectedActKinds: ['SECONDARY_ORDER'],
+    hitsCount: 6,
+    topScore: 0.31,
+    domainHint: 'intellectual_property',
+    categoryHintCount: 0,
+    documentTypeHintCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected specific-domain low-confidence non-primary-only run to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes legally specific weak runs to likely_missing_act');
+}
+
+function testNormalizeFinalReasonCodesDropsRecoveredWeakSignals(): void {
+  const finalReasonCodes = normalizeFinalReasonCodes(
+    [
+      'LOW_EVIDENCE',
+      'ACT_SELECTION_LOW_CONFIDENCE',
+      'ROUTING_HINTS_LOW_CONF',
+      'FINALIZER_DROPPED_ROUTING_ADD',
+      'FAMILY_GUARD_NO_EVIDENCE',
+    ],
+    false
+  );
+  if (finalReasonCodes.includes('LOW_EVIDENCE')) {
+    throw new Error(`Expected LOW_EVIDENCE to be dropped after recovery, got ${JSON.stringify(finalReasonCodes)}`);
+  }
+  if (finalReasonCodes.includes('ACT_SELECTION_LOW_CONFIDENCE')) {
+    throw new Error(
+      `Expected ACT_SELECTION_LOW_CONFIDENCE to be dropped after recovery, got ${JSON.stringify(finalReasonCodes)}`
+    );
+  }
+  if (finalReasonCodes.includes('ROUTING_HINTS_LOW_CONF')) {
+    throw new Error(
+      `Expected ROUTING_HINTS_LOW_CONF to be dropped after recovery, got ${JSON.stringify(finalReasonCodes)}`
+    );
+  }
+  if (!finalReasonCodes.includes('FINALIZER_DROPPED_ROUTING_ADD')) {
+    throw new Error(`Expected forensic non-confidence code to be preserved, got ${JSON.stringify(finalReasonCodes)}`);
+  }
+  if (!finalReasonCodes.includes('FAMILY_GUARD_NO_EVIDENCE')) {
+    throw new Error(`Expected generic forensic reason code to be preserved, got ${JSON.stringify(finalReasonCodes)}`);
+  }
+  console.log('[OK] final reason code normalization drops stale low-confidence signals after recovery');
+}
+
 function testProcedureCategoryEnvelopeFallsBackToProcedureFamilies(): void {
   const envelope = getProcedureCategoryEnvelope(['tax_customs']);
   const expected = [
@@ -2379,13 +2615,17 @@ async function main(): Promise<void> {
   testGoalSplitAddsSpecificTaxAppealSignals();
   testGoalSplitMarksProceduralSingleGoal();
   testGoalSplitCompactsProceduralBundleWithAnaphora();
+  testGoalSplitCompactsProceduralBundleWithSharedProcessReference();
+  testGoalSplitCompactsSameActNormBundle();
   testGoalSplitAddsErdrProceduralSignal();
   testGoalSplitCompactsErdrComplaintBundle();
   testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
   testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
+  testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
+  testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns();
   testBuildWithinActPoolPromotesPlannerPreferredActs();
   testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
   testQueryRewritePolicySkipsGroundedCitationWithActCue();
@@ -2395,6 +2635,8 @@ async function main(): Promise<void> {
   testGroundedQueryBuilderDropsGenericSignalsForStructuralQuery();
   testGroundedQueryBuilderKeepsSignalsForNaturalLanguageQuery();
   testWithinActExpansionPrefersProceduralAndStructuralQueries();
+  testWithinActExpansionCompactsSignalOnlyBundleQueries();
+  testWithinActExpansionCompactsProceduralNonStructuralQueries();
   testStructuralCitationSelectorsCaptureNoteAndSubpoint();
   testStructuralCitationSelectorsCaptureDottedSubpoint();
   testStructuralCitationSelectorsCapturePluralPartSyntax();
@@ -2431,6 +2673,10 @@ async function main(): Promise<void> {
   testStructuralScorePrefersExplicitPointCitation();
   testStructuralScoreDemotesWrongPointEvenWithLexicalOverlap();
   testSingleGoalSelectedActsTailTrim();
+  testSelectedActsTrimNonPrimaryOnlyTailAndLowerConfidence();
+  testCoverageGapTreatsNoPrimaryLawAsWeakEvidence();
+  testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
+  testNormalizeFinalReasonCodesDropsRecoveredWeakSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testSelectedActsAvoidWeakSingleGoalSupportNoise();

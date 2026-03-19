@@ -68,8 +68,8 @@ export type RoutingHintsTriggers = {
   selected_acts_confidence_below_06?: boolean;
   /** v4: confidence < 0.65 for single-goal low-confidence trigger. Catches 0.6 = one_strong_act cases. */
   selected_acts_confidence_below_065?: boolean;
-  /** v4: confidence < 0.9 for single-goal trigger. Catches 0.5/0.55/0.6/0.75 (at most one strong act). */
-  selected_acts_confidence_below_09?: boolean;
+  /** v5: confidence < 0.75 for single-goal trigger. Keeps routing off already-strong single-goal paths. */
+  selected_acts_confidence_below_075?: boolean;
   reason_codes_include_coverage_guard_failed: boolean;
   reason_codes_include_no_strong_act_evidence: boolean;
   query_short_cryptic_high_entropy?: boolean;
@@ -112,18 +112,12 @@ export function shouldCallRoutingHints(triggers: RoutingHintsTriggers): boolean 
     (triggers.goals_count ?? 1) === 1 &&
     triggers.selected_acts_confidence_below_055 === true;
   if (noEvidenceSingleGoal) return true;
-  // Low-confidence single-goal path: confidence < 0.9 + single-goal.
-  // Catches: 0.5 (no chunk evidence), 0.55 (taxonomy-only), 0.6 (no strong chunk act),
-  //          0.75 (exactly one strong act) — all below the 0.9 "two-or-more strong acts" bar.
-  // At confidence < 0.9, at most one act is strongly evidenced — routing hints can confirm
-  // the act family and suggest search variants without topic-word guessing.
-  // Family evidence is intentionally NOT required: general corpus hits produce strong family
-  // evidence even when the specific queried act has limited dedicated chunk coverage.
-  // Note: queries with 2+ strongly-evidenced acts (confidence = 0.9) are NOT triggered —
-  // this preserves the "do not force routing-hints into well-evidenced smoke queries" contract.
+  // Low-confidence single-goal path: confidence < 0.75 + single-goal.
+  // We keep routing off for already-strong single-goal runs that have one clear primary law
+  // with material chunk evidence, and reserve the extra LLM hop for genuinely shaky paths.
   const lowConfSingleGoal =
     (triggers.goals_count ?? 1) === 1 &&
-    triggers.selected_acts_confidence_below_09 === true;
+    triggers.selected_acts_confidence_below_075 === true;
   if (lowConfSingleGoal) return true;
   const coverageWithEvidence =
     triggers.reason_codes_include_coverage_guard_failed === true &&

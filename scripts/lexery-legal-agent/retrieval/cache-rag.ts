@@ -46,20 +46,12 @@ import {
   type SelectedActOutput,
 } from './selected-acts.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
-import {
-  shouldCallRoutingHints,
-  callRoutingHints,
-  type RoutingHintsTriggers,
-  type RoutingHintsInput,
-} from './routing-hints-llm.js';
 import { runQueryRewritePhase } from './query-rewrite-phase.js';
 import { runArticleBackfill } from './article-backfill.js';
 import { fetchRecentMemory } from './memory-store.js';
 import { rrfMerge } from './rrf-merge.js';
 import { buildGroundedRetrievalQuery } from './grounded-query-builder.js';
 import {
-  incrementU4RoutingHintsNotUsed,
-  incrementU4RoutingHintsUsed,
   incrementU4DomainBootstrapAttempted,
   incrementU4DomainBootstrapUsed,
   incrementU4DomainBootstrapConflict,
@@ -73,11 +65,17 @@ import {
   dedupeHits,
   NOISE_PENALTY_POLICY_VERSION,
 } from './hit-ranking.js';
-import { buildWithinActPool, extractActSearchNregsFromHits } from './within-act-pool.js';
+import {
+  buildWithinActPool,
+  extractActSearchNregsFromHits,
+  extractChunkEvidenceNregsFromHits,
+} from './within-act-pool.js';
 import { decideWithinActExpansion } from './within-act-expansion-policy.js';
 import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
-import { finalizeSelectedActsAfterRouting } from './selected-acts-finalizer.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
+import { deriveCoverageGap } from './coverage-gap.js';
+import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
+import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -96,6 +94,25 @@ function toLldbiHintsUsed(
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+}
+
+function shouldSkipReferenceExpansionForStrongCoverage(
+  finalHits: RawHit[],
+  querySelectors: ReturnType<typeof extractQueryCitationSelectors>
+): boolean {
+  if (querySelectors.explicitSelectorCount > 0 || querySelectors.noteMentioned) return false;
+  const headHits = finalHits.filter((hit) => hit.rada_nreg).slice(0, 12);
+  if (headHits.length === 0) return false;
+  const uniqueActs = new Set(headHits.map((hit) => hit.rada_nreg as string));
+  if (uniqueActs.size <= 2) return true;
+  const evidence = computeChunksEvidenceTopActs(headHits);
+  if (evidence.length < 2) return false;
+  const totalRankMass = evidence.reduce((sum, item) => sum + (item.rank_mass_top30 ?? 0), 0);
+  if (totalRankMass <= 0) return false;
+  const top2RankMass = evidence
+    .slice(0, 2)
+    .reduce((sum, item) => sum + (item.rank_mass_top30 ?? 0), 0);
+  return top2RankMass / totalRankMass >= 0.88 && (evidence[1]?.count_in_top30 ?? 0) >= 2;
 }
 
 async function prioritizeProcedureActs(nregs: string[]): Promise<string[]> {
@@ -353,6 +370,7 @@ async function fetchFilteredChunkHitsByActs(params: {
         limit: params.limit,
         filter: { must: [{ key: 'rada_nreg', match: { value: radaNreg } }] },
         timeoutMs: params.timeoutMs,
+        retry: false,
         callCounter: params.callCounter,
       });
       return hits
@@ -609,7 +627,9 @@ async function runOneGoal(
     taxonomyNregs: taxonomyCandidatesNregs,
     actSearchNregs: actNregsFromStep,
     bootstrapActNregs,
+    chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
     categoryHintCount: lldbiHints?.categoryHints.length ?? 0,
+    preferChunkEvidence: topScore != null && topScore >= GOOD_SCORE_THRESHOLD,
     limit: TWO_STAGE_ACTS_TOP,
   });
 
@@ -738,6 +758,7 @@ async function fetchMemoryForRun(params: {
 export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagResult> {
   const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id, tenant_id, user_id, conversation_id } = input;
   const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  const topLevelQuerySelectors = extractQueryCitationSelectors(query);
   if (query.length === 0) {
     const emptyTrace: RetrievalTrace = {
       version: 1,
@@ -757,6 +778,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         hits_total_after_cap: 0,
         hits_cap_applied: false,
         low_confidence: true,
+        coverage_gap: 'out_of_scope',
         reason_codes: ['EMPTY_QUERY'],
       },
     };
@@ -1073,6 +1095,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
                 vector: embedding.embedding,
                 limit: varTopK,
                 timeoutMs: config.qdrantTimeoutSec * 1000,
+                retry: false,
                 callCounter: qdrantCallCounter,
               })
             )
@@ -1172,7 +1195,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       chunks_evidence_top_acts: chunksEvidenceMulti,
       familyEvidence: toFamilyEvidenceSummary(familyEvidenceMulti),
     });
-    const selected_acts_multi = await hydrateSelectedActsMeta(
+    let selected_acts_multi = await hydrateSelectedActsMeta(
       selectedActsMulti.selected_acts,
       selectedActsMulti.selected_acts_confidence
     );
@@ -1184,9 +1207,26 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         ...noiseResultMulti.guardReasonCodes,
       ]),
     ];
+    const multiGoalSingleActCoverageAllowed = selectedActsMulti.selected_acts_reason_codes.includes(
+      'MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED'
+    );
+    const multiPrimaryActsCount = selected_acts_multi.filter((act) => act.act_kind === 'PRIMARY_LAW').length;
+    const multiPrimaryCoverageWeak =
+      goalsSummary.length >= 2 &&
+      !multiGoalSingleActCoverageAllowed &&
+      multiPrimaryActsCount < Math.min(2, goalsSummary.length);
+    const multiFamilyMismatchSignals = multiReasonCodesFinal.some((code) =>
+      ['CHUNKS_FAMILY_MISMATCH_DEMOTED', 'SUPPORT_FAMILY_MISMATCH_BLOCKED', 'ORDER_UNRELATED_BLOCKED'].includes(code)
+    );
+    const multiWeakTailWithFamilyMismatch =
+      goalsSummary.length >= 2 &&
+      selected_acts_multi.length > goalsSummary.length &&
+      multiFamilyMismatchSignals;
     const multiLowConfidence =
       selectedActsMulti.selected_acts_confidence < 0.6 ||
       familyEvidenceMulti.family_conflict ||
+      multiPrimaryCoverageWeak ||
+      multiWeakTailWithFamilyMismatch ||
       multiReasonCodesFinal.some((code) =>
         [
           'GOAL_ACT_POOL_WEAK',
@@ -1205,6 +1245,47 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     ) {
       multiReasonCodesFinal.push('ACT_SELECTION_LOW_CONFIDENCE');
     }
+    if (multiPrimaryCoverageWeak) {
+      multiReasonCodesFinal.push('MULTI_GOAL_PRIMARY_COVERAGE_WEAK');
+      multiReasonCodesFinal.push('LOW_EVIDENCE');
+    }
+    if (multiWeakTailWithFamilyMismatch) {
+      multiReasonCodesFinal.push('MULTI_GOAL_FAMILY_MISMATCH_TAIL');
+      multiReasonCodesFinal.push('LOW_EVIDENCE');
+    }
+    if (multiLowConfidence && selected_acts_multi.length > 2) {
+      const multiEvidenceByNreg = new Map(
+        selectedActsMulti.chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
+      );
+      selected_acts_multi = [...selected_acts_multi]
+        .sort((left, right) => {
+          const leftEvidence = multiEvidenceByNreg.get(left.rada_nreg ?? '');
+          const rightEvidence = multiEvidenceByNreg.get(right.rada_nreg ?? '');
+          const rankMassDiff = (rightEvidence?.rank_mass_top30 ?? 0) - (leftEvidence?.rank_mass_top30 ?? 0);
+          if (rankMassDiff !== 0) return rankMassDiff;
+          const bestRankDiff =
+            (leftEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) -
+            (rightEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY);
+          if (bestRankDiff !== 0) return bestRankDiff;
+          return (right.score ?? 0) - (left.score ?? 0);
+        })
+        .slice(0, 2);
+      multiReasonCodesFinal.push('LOW_CONFIDENCE_TAIL_TRIMMED');
+    }
+    const multiCoverageGap = deriveCoverageGap({
+      lowConfidence: multiLowConfidence,
+      reasonCodes: multiReasonCodesFinal,
+      selectedActsCount: selected_acts_multi.length,
+      selectedActsConfidence: selectedActsMulti.selected_acts_confidence,
+      selectedActKinds: selected_acts_multi.map((act) => act.act_kind ?? 'UNKNOWN'),
+      hitsCount: finalMulti.length,
+      topScore: topScoreMulti,
+      domainHint,
+      categoryHintCount: categoryHints.length,
+      documentTypeHintCount: documentTypeHints.length,
+      entitiesCount: entities?.length ?? 0,
+      anchorsCount: topLevelQuerySelectors.explicitSelectorCount + (topLevelQuerySelectors.noteMentioned ? 1 : 0),
+    });
 
     const multiTrace: RetrievalTrace = {
       version: 1,
@@ -1226,6 +1307,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         scores_computed_on: 'final_hits_after_cap_and_guards',
         avg_score_source: 'final_hits_after_cap_and_guards',
         low_confidence: multiLowConfidence,
+        coverage_gap: multiCoverageGap,
         why_low_confidence: multiLowConfidence
           ? familyEvidenceMulti.family_conflict
             ? 'family_conflict'
@@ -1620,11 +1702,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const topNregs = buildWithinActPool({
       taxonomyNregs: taxonomyResult.rada_nreg_candidates ?? [],
       actSearchNregs: extractActSearchNregsFromHits(rawPerStep),
+      chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
       plannerPreferredNregs:
         actPlannerOutput?.goals?.[0]?.act_candidates
           ?.filter((candidate) => candidate.rada_nreg)
           .map((candidate) => candidate.rada_nreg as string) ?? [],
       categoryHintCount: categoryHints.length,
+      preferChunkEvidence: !needTwoStage,
       limit: withinActLimit,
     });
     if (topNregs.length > 0) {
@@ -1677,10 +1761,15 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     parse_hits_used: 0,
     skipped_reason_codes: [],
   };
+  const skipReferenceExpansionForStrongCoverage = shouldSkipReferenceExpansionForStrongCoverage(
+    allHits,
+    singleGoalQuerySelectors
+  );
   if (
     config.u4ReferenceExpansionEnabled &&
     vector &&
-    allHits.length > 0
+    allHits.length > 0 &&
+    !skipReferenceExpansionForStrongCoverage
   ) {
     const initialQdrantCount = qdrantCallCounter.count;
     const maxExtraCalls = config.u4ReferenceExpansionMaxQdrantCalls ?? 4;
@@ -1708,6 +1797,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         limit: params.limit,
         filter: { must: [{ key: 'rada_nreg', match: { value: params.rada_nreg } }] },
         timeoutMs: config.qdrantTimeoutSec * 1000,
+        retry: false,
         callCounter: qdrantCallCounter,
       });
       return hits.map((h) => payloadToRawHit(h, 'lldbi_chunks'));
@@ -1743,6 +1833,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     } catch {
       referenceExpansionMeta.skipped_reason_codes.push('EXPANSION_ERROR');
     }
+  } else if (skipReferenceExpansionForStrongCoverage) {
+    referenceExpansionMeta.skipped_reason_codes.push('STRONG_HEAD_COVERAGE');
   }
 
   // Re-apply noise penalty + diversity cap after reference expansion so that
@@ -1862,730 +1954,159 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     actCandidatesTop,
     chunks_evidence_top_acts_pre
   );
-  const familyEvidence = await computeFamilyEvidence({
-    chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
-    getActMeta,
-  });
-
-  const familyWeakOrNoPrimary =
-    familyEvidence.reason_codes.includes('FAMILY_WEAK_EVIDENCE') ||
-    familyEvidence.reason_codes.includes('NO_PRIMARY_LAW_EVIDENCE');
-
-  // Phase 2: evidence-driven selected_acts (buildSelectedActs 2.0 + v3 family guard)
-  const selectedActsResult = buildSelectedActs({
+  const selectedActsResolution = await resolveSingleGoalSelectedActs({
+    query,
+    goalId: goalSplit.goals[0].id,
     finalHits,
-    actCandidatesTop: actCandidatesTopHydrated,
-    goals_summary: [{ goal_id: goalSplit.goals[0].id }],
-    hits_by_act_top3: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
-    avg_score_by_act_top3: Object.keys(avgScoreByActTop3).length > 0 ? avgScoreByActTop3 : undefined,
+    actCandidatesTopHydrated,
+    plannerRationaleByNreg,
+    hitsByActTop3,
+    avgScoreByActTop3,
+    precomputedChunksEvidenceTopActs: chunks_evidence_top_acts_pre,
     taxonomyNregs: taxonomyNregSet,
     actsSearchNregs: actNregsFromSearch,
     domainHint,
-    documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,
-    actSelectionLowConfidence: actSelectionLowConfidence || familyWeakOrNoPrimary,
-    chunks_evidence_top_acts: chunks_evidence_top_acts_pre,
-    familyEvidence: toFamilyEvidenceSummary(familyEvidence),
-  });
-  const selected_acts_raw = selectedActsResult.selected_acts.map((a) => ({
-    ...a,
-    why_selected: plannerRationaleByNreg.get(a.rada_nreg) ?? a.why_selected,
-  }));
-  const selected_acts = await hydrateSelectedActsMeta(selected_acts_raw, selectedActsResult.selected_acts_confidence);
-  const selected_acts_sources_breakdown = selectedActsResult.selected_acts_sources_breakdown;
-  const chunks_evidence_top_acts = selectedActsResult.chunks_evidence_top_acts;
-  const selected_acts_decision = selectedActsResult.selected_acts_decision;
-  if (selectedActsResult.selected_acts_reason_codes.length) {
-    reasonCodes.push(...selectedActsResult.selected_acts_reason_codes);
-  }
-  if (familyEvidence.reason_codes.length) {
-    reasonCodes.push(...familyEvidence.reason_codes);
-  }
-  // Fix A: Specialized-domain suppression of NO_PRIMARY_LAW_EVIDENCE from triggering low_confidence.
-  // In domains like healthcare, border_migration, procurement, international_eu — SECONDARY_ORDER /
-  // INTERNATIONAL_TREATY / KSU_DECISION ARE the authoritative source, not PRIMARY_LAW (Закон/Кодекс).
-  // Detection: data-driven via act_kind of hydrated selected_acts (no hardcoded domain names).
-  // Condition: NO_PRIMARY_LAW_EVIDENCE fires BUT at least 1 selected act is a non-primary authoritative
-  // kind with strong chunks evidence (count >= 5). If so, suppress low_confidence for this signal only.
-  const NON_PRIMARY_AUTHORITATIVE_KINDS = new Set(['SECONDARY_ORDER', 'INTERNATIONAL_TREATY', 'KSU_DECISION']);
-  const specializedDomainNoPrimary =
-    familyEvidence.reason_codes.includes('NO_PRIMARY_LAW_EVIDENCE') &&
-    chunks_evidence_top_acts_pre.some((e) => {
-      if (e.count_in_top30 < 5) return false;
-      const hydratedAct = selected_acts.find((sa) => sa.rada_nreg === e.rada_nreg);
-      return hydratedAct && NON_PRIMARY_AUTHORITATIVE_KINDS.has(hydratedAct.act_kind ?? '');
-    });
-
-  // Fix B: COVERAGE_GUARD_FAILED + FAMILY_DOMINANT_OK coexistence — guard fires due to missing
-  // candidateByNreg metadata for acts added via chunks evidence that are not in actCandidatesTop.
-  // FAMILY_DOMINANT_OK already guarantees that PRIMARY_LAW evidence IS present and strong.
-  // The guard's purpose (ensure PRIMARY_LAW in selected) is effectively already met: the act IS in
-  // selected (via CHUNKS_EVIDENCE section A), just not re-detected due to metadata lookup gap.
-  //
-  // OOD safety: do NOT suppress if the query rewriter signals OOD (called but not used due to low
-  // overall_confidence). In that case, COVERAGE_GUARD_FAILED is a genuine uncertainty signal for a
-  // borderline OOD query that accidentally matched legal vocabulary.
-  // Detection: data-driven via QR overall_confidence (LLM signal) — no hardcoded topics.
-  // Low confidence means the LLM rewriter itself deems the query non-legal/out-of-scope.
-  // Note: U2 rules path may give a plausible-looking domain for OOD queries (false classification);
-  // QR confidence is more reliable as it's specifically prompted to score legal domain relevance.
-  const qrSignaledOod =
-    queryRewriteMeta.called &&
-    queryRewriteMeta.used === false &&
-    queryRewriteMeta.not_used_reason_codes?.includes('LOW_CONFIDENCE');
-  const coverageGuardFiredButFamilyOk =
-    selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') &&
-    familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK') &&
-    !qrSignaledOod;
-
-  // Phase 6.1: Routing-hints LLM (budgeted, rare) — only when triggers fire
-  type RoutingHintsUsedEffect = {
-    added_act?: { rada_nreg: string; title: string; family_key: string; source: string };
-    added_count: number;
-  };
-  let routingHintsMeta: {
-    enabled: boolean;
-    called: boolean;
-    call_failed_reason?: string;
-    model_id?: string;
-    tokens_approx?: number;
-    families_ranked_top2?: Array<{ family_key: string; confidence?: number }>;
-    goals_count: number;
-    used_reason_codes: string[];
-    not_used_reason_codes: string[];
-    used_effect: RoutingHintsUsedEffect;
-    attempts?: number;
-    parse_mode?: 'strict' | 'extract';
-    routing_path?: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE';
-  } = {
-    enabled: config.u4RoutingHintsEnabled,
-    called: false,
-    goals_count: 0,
-    used_reason_codes: [],
-    not_used_reason_codes: [],
-    used_effect: { added_count: 0 },
-  };
-  let selected_acts_final = selected_acts;
-  let selected_acts_sources_breakdown_final = selected_acts_sources_breakdown;
-  const recoveredEmptySelected =
-    selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE') ||
-    selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY');
-  let low_confidence_final =
-    useLowConfidenceFallback ||
-    actSelectionLowConfidence ||
-    // familyWeakOrNoPrimary is suppressed in specialized domains where non-primary acts are authoritative
-    (familyWeakOrNoPrimary && !specializedDomainNoPrimary) ||
-    // COVERAGE_GUARD_FAILED is suppressed when FAMILY_DOMINANT_OK already confirms strong PRIMARY_LAW evidence
-    (selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') && !coverageGuardFiredButFamilyOk) ||
-    recoveredEmptySelected;
-
-  // OOD Confidence Guard: force low_confidence when evidence is globally weak + domain unknown + no U2 hints.
-  // Detects out-of-domain queries without hardcoded "banned topics" lists.
-  // Conditions (all must hold):
-  //   1. top_score below threshold (weak vector match overall)
-  //   2. domainHint absent/general (no clear domain signal from U2)
-  //   3. no U2 LLDBI category hints (no vocabulary-based signal)
-  //   4. avg_score of all hits below threshold (confirming weak global relevance)
-  type OodGuardResult = { fired: boolean; why: string[]; thresholds: { top_score: number; avg_score: number } };
-  let oodGuardResult: OodGuardResult = {
-    fired: false,
-    why: [],
-    thresholds: {
-      top_score: config.u4OodGuardTopScoreThreshold,
-      avg_score: config.u4OodGuardAvgScoreThreshold,
+    documentTypeHints,
+    actSelectionLowConfidence,
+    reasonCodes,
+    useLowConfidenceFallback,
+    queryRewriteMeta,
+    topScore,
+    avgScore,
+    categoryHintsCount: categoryHints.length,
+    entitiesCount: entities?.length ?? 0,
+    anchorsCount:
+      anchorsUsed.length +
+      topLevelQuerySelectors.explicitSelectorCount +
+      (topLevelQuerySelectors.noteMentioned ? 1 : 0),
+    domainWeak: isDomainWeak(domainHint),
+    getActMeta,
+    hydrateSelectedActsMeta,
+    searchActsForRouting: async (queryVariant?: string) => {
+      const searchVector =
+        queryVariant != null
+          ? (await embedQuery(queryVariant.slice(0, 500))).embedding
+          : vector;
+      const extraHits = await qdrantSearch({
+        collection: collections.acts,
+        vector: searchVector,
+        limit: 20,
+        timeoutMs: config.qdrantTimeoutSec * 1000,
+        retry: false,
+        callCounter: qdrantCallCounter,
+      });
+      return extraHits
+        .map((hit) => ({
+          rada_nreg: String(hit.payload?.rada_nreg ?? '').trim(),
+          score: typeof hit.score === 'number' ? hit.score : undefined,
+        }))
+        .filter((hit) => hit.rada_nreg.length > 0);
     },
-  };
-  if (config.u4OodGuardEnabled && !low_confidence_final) {
-    const oodWhy: string[] = [];
-    const topScoreWeak = topScore == null || topScore < config.u4OodGuardTopScoreThreshold;
-    const domainWeak = isDomainWeak(domainHint);
-    const noCategoryHints = categoryHints.length === 0;
-    const avgScoreWeak = avgScore == null || avgScore < config.u4OodGuardAvgScoreThreshold;
-    if (topScoreWeak) oodWhy.push('TOP_SCORE_WEAK');
-    if (domainWeak) oodWhy.push('DOMAIN_WEAK');
-    if (noCategoryHints) oodWhy.push('NO_CATEGORY_HINTS');
-    if (avgScoreWeak) oodWhy.push('AVG_SCORE_WEAK');
-    // All 4 conditions must hold to avoid false positives on legitimate weak-score queries
-    if (oodWhy.length === 4) {
-      low_confidence_final = true;
-      oodGuardResult = { fired: true, why: oodWhy, thresholds: oodGuardResult.thresholds };
-      if (!reasonCodes.includes('OUT_OF_SCOPE')) reasonCodes.push('OUT_OF_SCOPE');
-      if (!reasonCodes.includes('LOW_EVIDENCE')) reasonCodes.push('LOW_EVIDENCE');
-    }
-  }
-
-  // E.3: ensure low_confidence has an explicit reason (OUT_OF_SCOPE / NO_STRONG_ACT_EVIDENCE / LOW_EVIDENCE / ACT_SELECTION_LOW_CONFIDENCE)
-  const lowConfReasonCodes = ['OUT_OF_SCOPE', 'NO_STRONG_ACT_EVIDENCE', 'LOW_EVIDENCE', 'ACT_SELECTION_LOW_CONFIDENCE'];
-  if (low_confidence_final && !reasonCodes.some((r) => lowConfReasonCodes.includes(r))) {
-    reasonCodes.push('ACT_SELECTION_LOW_CONFIDENCE');
-  }
-
-  const allowedFamilyKeysSet = new Set<string>(['unknown']);
-  for (const f of familyEvidence.debug.top_families) allowedFamilyKeysSet.add(f.family_key);
-  for (const a of actCandidatesTopHydrated) {
-    const meta = await getActMeta(a.rada_nreg);
-    if (meta?.category) {
-      const key = (meta.category ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
-      allowedFamilyKeysSet.add(key);
-    }
-  }
-  const allowed_family_keys = Array.from(allowedFamilyKeysSet);
-
-  const CONFIDENT_FAMILY_SUPPORT_THRESHOLD = 0.62;
-  let confidentFamilyMismatch = false;
-  if (
-    familyEvidence.dominant_family_key &&
-    familyEvidence.family_confidence >= CONFIDENT_FAMILY_SUPPORT_THRESHOLD &&
-    !familyEvidence.family_conflict
-  ) {
-    const toKey = (c: string | null | undefined) =>
-      (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
-    let hasSelectedActFromDominantFamily = false;
-    for (const s of selected_acts) {
-      const meta = await getActMeta(s.rada_nreg);
-      if (toKey(meta?.category) === familyEvidence.dominant_family_key) {
-        hasSelectedActFromDominantFamily = true;
-        break;
-      }
-    }
-    confidentFamilyMismatch = !hasSelectedActFromDominantFamily;
-  }
-
-  const goalsCount = goalSplit.goals?.length ?? 1;
-  const routingTriggers: RoutingHintsTriggers = {
-    family_weak_evidence: familyWeakOrNoPrimary,
-    family_conflict: familyEvidence.family_conflict,
-    selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) <= 0.55,
-    selected_acts_confidence_below_06: (selectedActsResult.selected_acts_confidence ?? 0) < 0.6,
-    selected_acts_confidence_below_065: (selectedActsResult.selected_acts_confidence ?? 0) < 0.65,
-    selected_acts_confidence_below_075: (selectedActsResult.selected_acts_confidence ?? 0) < 0.75,
-    reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
-      'COVERAGE_GUARD_FAILED'
-    ),
-    reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
-    confident_family_mismatch: confidentFamilyMismatch,
-    goals_count: goalsCount,
-    selected_acts_empty_or_very_low: selected_acts.length === 0,
-  };
-
-  if (!shouldCallRoutingHints(routingTriggers)) {
-    routingHintsMeta = { ...routingHintsMeta, not_used_reason_codes: ['NOT_CALLED'] };
-    incrementU4RoutingHintsNotUsed('NOT_CALLED');
-  } else {
-    const strongTrigger =
-      confidentFamilyMismatch ||
-      (familyEvidence.family_conflict && (selectedActsResult.selected_acts_confidence ?? 0) < 0.6);
-    const evidenceFamilyKeys = new Set<string>();
-    if (familyEvidence.dominant_family_key) evidenceFamilyKeys.add(familyEvidence.dominant_family_key);
-    for (const f of familyEvidence.debug.top_families) evidenceFamilyKeys.add(f.family_key);
-    const toFamilyKeyPrecheck = (c: string | undefined | null) =>
-      (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
-    // Pass document_type so classifyActKind uses structural metadata, not title fallback
-    const hasTaxonomyPrimaryForEvidence = [...evidenceFamilyKeys].some((fam) =>
-      actCandidatesTopHydrated.some(
-        (c) => toFamilyKeyPrecheck(c.category) === fam && classifyActKind(c.title ?? '', c.document_type) === 'PRIMARY_LAW'
-      )
-    );
-    const zeroRecallCall = routingTriggers.selected_acts_empty_or_very_low === true;
-    // Allow routing hints to fire even when taxonomy has a primary law candidate, if:
-    // - single-goal AND confidence < 0.9 (low-confidence single-goal trigger fired).
-    // Rationale: taxonomy may know the law exists (index hit) but Qdrant has at most one
-    // strongly-evidenced act. Routing hints can suggest alternative search angles or confirm.
-    const mediumLowConfTrigger =
-      (routingTriggers.goals_count ?? 1) === 1 &&
-      routingTriggers.selected_acts_confidence_below_075 === true;
-    if (!strongTrigger && !hasTaxonomyPrimaryForEvidence && !zeroRecallCall && !mediumLowConfTrigger) {
-      routingHintsMeta = { ...routingHintsMeta, not_used_reason_codes: ['NOT_CALLED_NO_TAXONOMY_PRIMARY'] };
-      incrementU4RoutingHintsNotUsed('NOT_CALLED_NO_TAXONOMY_PRIMARY');
-    } else {
-    const taxonomySnapshotSummary = `Categories: ${allowed_family_keys.slice(0, 20).join(', ')}`;
-    const routingInput: RoutingHintsInput = {
-      original_query: query,
-      goals_summary: [{ goal_id: goalSplit.goals[0].id }],
-      taxonomy_snapshot_summary: taxonomySnapshotSummary,
-      family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
-      selected_acts_decision_summary: {
-        confidence: selectedActsResult.selected_acts_confidence,
-        reason_codes: selected_acts_decision.reason_codes,
-      },
-      allowed_family_keys,
-      max_goals: 3,
-    };
-    const routingResult = await callRoutingHints(routingInput);
-    const used_reason_codes: string[] = [];
-    const not_used_reason_codes: string[] = [];
-    const used_effect: RoutingHintsUsedEffect = { added_count: 0 };
-
-    if (routingResult.call_failed_reason) {
-      if (
-        routingResult.call_failed_reason === 'INVALID_JSON' ||
-        routingResult.call_failed_reason === 'INVALID_JSON_PARSE'
-      )
-        not_used_reason_codes.push('INVALID_JSON');
-      else if (
-        routingResult.call_failed_reason === 'VALIDATION_FAILED' ||
-        routingResult.call_failed_reason === 'INVALID_JSON_SCHEMA'
-      )
-        not_used_reason_codes.push('SCHEMA_MISMATCH');
-      else not_used_reason_codes.push(routingResult.call_failed_reason.slice(0, 32));
-    }
-    if (routingResult.output && !routingResult.output.routing?.families_ranked?.length) {
-      not_used_reason_codes.push('NO_FAMILIES');
-    }
-    if (
-      routingResult.output?.overall_confidence != null &&
-      routingResult.output.overall_confidence < 0.55
-    ) {
-      not_used_reason_codes.push('CONF_TOO_LOW');
-    }
-    const conf = routingResult.output?.overall_confidence ?? 0;
-    const expandAllowed =
-      confidentFamilyMismatch ||
-      familyWeakOrNoPrimary ||
-      selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
-      reasonCodes.includes('NO_STRONG_ACT_EVIDENCE');
-    if (conf < 0.55 && !expandAllowed && routingResult.output?.routing?.families_ranked?.length) {
-      not_used_reason_codes.push('EXPAND_NOT_ALLOWED');
-    }
-
-    routingHintsMeta = {
-      enabled: config.u4RoutingHintsEnabled,
-      called: routingResult.called,
-      call_failed_reason: routingResult.call_failed_reason,
-      model_id: routingResult.model_id,
-      tokens_approx: routingResult.tokens_approx,
-      families_ranked_top2: routingResult.output?.routing?.families_ranked?.slice(0, 2),
-      goals_count: routingResult.output?.suggested_goals?.length ?? 0,
-      used_reason_codes,
-      not_used_reason_codes,
-      used_effect,
-      attempts: routingResult.attempts,
-      parse_mode: routingResult.parse_mode,
-    };
-    if (routingResult.output?.overall_confidence != null && routingResult.output.overall_confidence < 0.55) {
-      low_confidence_final = true;
-      reasonCodes.push('ROUTING_HINTS_LOW_CONF');
-    }
-    const steerMode = conf >= 0.55;
-    const expandOnlyMode = conf < 0.55 && expandAllowed;
-    const mayApplyRouting =
-      (routingResult.output?.routing?.families_ranked?.length ?? 0) > 0 && (steerMode || expandOnlyMode);
-    if (mayApplyRouting) {
-      const toFamilyKey = (c: string | undefined | null) =>
-        (c ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, '_').trim() || 'unknown';
-      const familiesRanked = (routingResult.output?.routing?.families_ranked ?? []).slice(0, 5).map((f) => f.family_key);
-      const existingNregs = new Set(selected_acts_final.map((s) => s.rada_nreg));
-      const breakdown: {
-        from_taxonomy: string[];
-        from_acts_search: string[];
-        from_chunks_evidence: string[];
-        from_routing_hints?: string[];
-      } = {
-        ...selected_acts_sources_breakdown_final,
-        from_routing_hints: [],
-      };
-      const hasPrimaryFromFamilyFor = async (fam: string): Promise<boolean> => {
-        for (const s of selected_acts_final) {
-          const cand = actCandidatesTopHydrated.find((a) => a.rada_nreg === s.rada_nreg);
-          if (!cand) continue;
-          const meta = await getActMeta(s.rada_nreg);
-          if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) === 'PRIMARY_LAW' && toFamilyKey(meta?.category) === fam) return true;
-        }
-        return false;
-      };
-      const hasTaxonomyPrimaryForFamily = (fam: string): boolean =>
-        actCandidatesTopHydrated.some(
-          (c) =>
-            toFamilyKey(c.category) === fam &&
-            classifyActKind(c.title ?? '', c.document_type, c.category) === 'PRIMARY_LAW' &&
-            !existingNregs.has(c.rada_nreg)
-        );
-      let allRankedCovered = true;
-      for (const fam of familiesRanked) {
-        if (!(await hasPrimaryFromFamilyFor(fam))) {
-          allRankedCovered = false;
-          break;
-        }
-      }
-      if (allRankedCovered) not_used_reason_codes.push('ALREADY_COVERED');
-      let family_key_target: string | null = null;
-      if (confidentFamilyMismatch && familyEvidence.dominant_family_key) {
-        if (!(await hasPrimaryFromFamilyFor(familyEvidence.dominant_family_key))) {
-          family_key_target = familyEvidence.dominant_family_key;
-        }
-      }
-      if (family_key_target == null) {
-        for (const fam of familiesRanked) {
-          if (await hasPrimaryFromFamilyFor(fam)) continue;
-          if (hasTaxonomyPrimaryForFamily(fam)) {
-            family_key_target = fam;
-            break;
-          }
-        }
-      }
-      if (family_key_target == null && familiesRanked.length > 0) {
-        let firstUncovered: string | null = null;
-        for (const fam of familiesRanked) {
-          if (!(await hasPrimaryFromFamilyFor(fam))) {
-            firstUncovered = fam;
-            break;
-          }
-        }
-        if (firstUncovered != null) {
-          family_key_target = firstUncovered;
-          not_used_reason_codes.push('NO_TAXONOMY_PRIMARY_ACT_PRECHECK');
-        }
-      }
-      let capBlockedPushed = false;
-      let onlyOrdersFoundPushed = false;
-      if (family_key_target != null && used_effect.added_count < 1) {
-        if (selected_acts_final.length >= SELECTED_ACTS_MAX_OUT) {
-          not_used_reason_codes.push('CAP_BLOCKED');
-          capBlockedPushed = true;
-        } else {
-          // 4.1 USEFULNESS v3: taxonomy-first — PRIMARY_LAW from actCandidatesTop by category, no Qdrant
-          const taxonomyCandidates = actCandidatesTopHydrated.filter((cand) => {
-            if (existingNregs.has(cand.rada_nreg)) return false;
-            const famKey = toFamilyKey(cand.category);
-            if (famKey !== family_key_target) return false;
-            if (classifyActKind(cand.title ?? '', cand.document_type, cand.category) !== 'PRIMARY_LAW') return false;
-            return true;
-          });
-          const hadCandidatesForFamily = actCandidatesTopHydrated.some((cand) => {
-            const famKey = toFamilyKey(cand.category);
-            return famKey === family_key_target;
-          });
-          const hadPrimaryInTaxonomy = taxonomyCandidates.length > 0;
-          if (!hadPrimaryInTaxonomy && hadCandidatesForFamily && !onlyOrdersFoundPushed) {
-            not_used_reason_codes.push('ONLY_ORDERS_FOUND');
-            onlyOrdersFoundPushed = true;
-          }
-          if (taxonomyCandidates.length > 0) {
-            taxonomyCandidates.sort((a, b) => {
-              const diff = (b.score ?? 0) - (a.score ?? 0);
-              if (diff !== 0) return diff;
-              return (a.rada_nreg ?? '').localeCompare(b.rada_nreg ?? '');
-            });
-            const best = taxonomyCandidates[0];
-            selected_acts_final = [
-              ...selected_acts_final,
-              {
-                rada_nreg: best.rada_nreg,
-                act_title: best.title ?? '',
-                score: best.score ?? 0,
-                why_selected: expandOnlyMode ? 'routing_hints_family_boost' : 'routing_hints',
-                reason_tag: 'from_routing_hints' as const,
-                source_tags: ['ROUTING_HINTS'],
-                document_type: (best as { document_type?: string }).document_type ?? undefined,
-                category: (best as { category?: string }).category ?? undefined,
-                act_kind: classifyActKind(best.title ?? '', (best as { document_type?: string }).document_type, (best as { category?: string }).category),
-                flags: {},
-              },
-            ];
-            (breakdown.from_routing_hints ??= []).push(best.rada_nreg);
-            existingNregs.add(best.rada_nreg);
-            used_effect.added_count += 1;
-            used_effect.added_act = {
-              rada_nreg: best.rada_nreg,
-              title: best.title ?? '',
-              family_key: family_key_target,
-              source: 'routing_hints_taxonomy',
-            };
-            used_reason_codes.push('ADDED_PRIMARY_LAW_FROM_TAXONOMY');
-            if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
-          } else {
-            not_used_reason_codes.push('NO_TAXONOMY_PRIMARY_ACT');
-            const precheckFailed = not_used_reason_codes.includes('NO_TAXONOMY_PRIMARY_ACT_PRECHECK');
-            const strongTrigger = confidentFamilyMismatch || (familyEvidence.family_conflict && (selectedActsResult.selected_acts_confidence ?? 0) < 0.6);
-            const runExtraSearch =
-              (precheckFailed ? conf >= 0.55 && strongTrigger : true) && (!expandOnlyMode || used_effect.added_count < 1);
-            if (runExtraSearch) {
-              try {
-                const extraVector =
-                  routingResult.output?.query_variants?.[0] != null
-                    ? (await embedQuery(routingResult.output.query_variants[0].slice(0, 500))).embedding
-                    : vector;
-                const extraHits = await qdrantSearch({
-                  collection: collections.acts,
-                  vector: extraVector,
-                  limit: 20,
-                  timeoutMs: config.qdrantTimeoutSec * 1000,
-                  callCounter: qdrantCallCounter,
-                });
-                for (const h of extraHits) {
-                  const nreg = (h.payload?.rada_nreg as string)?.trim();
-                  if (!nreg || existingNregs.has(nreg)) continue;
-                  const meta = await getActMeta(nreg);
-                  const title = meta?.title ?? (h.payload?.title as string) ?? '';
-                  const famKey = toFamilyKey(meta?.category);
-                  if (famKey !== family_key_target) continue;
-                  if (classifyActKind(title, meta?.document_type, meta?.category) !== 'PRIMARY_LAW') continue;
-                  selected_acts_final = [
-                    ...selected_acts_final,
-                    {
-                      rada_nreg: nreg,
-                      act_title: title,
-                      score: (h.score as number) ?? 0,
-                      why_selected: 'routing_hints_family_boost',
-                      reason_tag: 'from_routing_hints' as const,
-                      source_tags: ['ROUTING_HINTS'],
-                      document_type: meta?.document_type ?? undefined,
-                      category: meta?.category ?? undefined,
-                      act_kind: classifyActKind(title, meta?.document_type, meta?.category),
-                      flags: {},
-                    },
-                  ];
-                  (breakdown.from_routing_hints ??= []).push(nreg);
-                  existingNregs.add(nreg);
-                  used_effect.added_count += 1;
-                  used_effect.added_act = { rada_nreg: nreg, title, family_key: famKey, source: 'extra_acts_search' };
-                  used_reason_codes.push('ADDED_PRIMARY_LAW_FROM_ACTS_SEARCH');
-                  if (expandOnlyMode) used_reason_codes.push('EXPAND_LOW_CONF');
-                  break;
-                }
-                if (used_effect.added_count === 0) not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
-              } catch {
-                not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
-              }
-            } else {
-              not_used_reason_codes.push('NO_PRIMARY_ACT_FOUND');
-            }
-          }
-        }
-      }
-      if (used_effect.added_count > 0) {
-        used_reason_codes.push('ADDED_PRIMARY_LAW');
-        incrementU4RoutingHintsUsed();
-      } else {
-        for (const r of not_used_reason_codes) incrementU4RoutingHintsNotUsed(r);
-      }
-      const routing_path: 'TAXONOMY_FIRST' | 'ACTS_SEARCH' | 'NONE' =
-        used_effect.added_act?.source === 'routing_hints_taxonomy'
-          ? 'TAXONOMY_FIRST'
-          : used_effect.added_act?.source === 'extra_acts_search'
-            ? 'ACTS_SEARCH'
-            : 'NONE';
-      routingHintsMeta = {
-        ...routingHintsMeta,
-        used_reason_codes,
-        not_used_reason_codes,
-        used_effect,
-        routing_path,
-      };
-      selected_acts_sources_breakdown_final = breakdown as typeof selected_acts_sources_breakdown_final;
-    } else {
-      if (used_effect.added_count === 0) {
-        for (const r of not_used_reason_codes) incrementU4RoutingHintsNotUsed(r);
-      }
-      routingHintsMeta = { ...routingHintsMeta, used_reason_codes, not_used_reason_codes, used_effect };
-    }
-  }
-  }
-
-  const routingHintsAddedPrimaryLaw = routingHintsMeta.used_reason_codes.includes('ADDED_PRIMARY_LAW');
-  const selectedActsFinalMeta = finalizeSelectedActsAfterRouting({
-    selected_acts_before_routing: selected_acts,
-    selected_acts_final,
-    base_confidence: selectedActsResult.selected_acts_confidence,
-    base_decision: selected_acts_decision,
-    routing_hints_added_count: routingHintsMeta.used_effect.added_count,
-    routing_hints_added_primary_law: routingHintsAddedPrimaryLaw,
-    routing_hints_added_nregs: selected_acts_sources_breakdown_final.from_routing_hints,
-    retrieval_evidence_nregs: finalHits.slice(0, 30).map((hit) => hit.rada_nreg ?? '').filter(Boolean),
   });
-  selected_acts_final = selectedActsFinalMeta.selected_acts_final;
-  if (
-    low_confidence_final &&
-    routingHintsAddedPrimaryLaw &&
-    selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
-    selectedActsFinalMeta.selected_acts_confidence_final >= 0.6 &&
-    !reasonCodes.includes('OUT_OF_SCOPE') &&
-    !reasonCodes.includes('LOW_EVIDENCE') &&
-    !reasonCodes.includes('ROUTING_HINTS_LOW_CONF')
-  ) {
-    low_confidence_final = false;
-    const actSelectionLowConfidenceIndex = reasonCodes.indexOf('ACT_SELECTION_LOW_CONFIDENCE');
-    if (actSelectionLowConfidenceIndex >= 0) {
-      reasonCodes.splice(actSelectionLowConfidenceIndex, 1);
-    }
-  }
+  reasonCodes.length = 0;
+  reasonCodes.push(...selectedActsResolution.reasonCodes);
+  const familyEvidence = selectedActsResolution.familyEvidence;
+  const chunks_evidence_top_acts = selectedActsResolution.chunks_evidence_top_acts;
+  const selected_acts_final = selectedActsResolution.selected_acts_final;
+  const selected_acts_sources_breakdown_final =
+    selectedActsResolution.selected_acts_sources_breakdown_final;
+  const selectedActsFinalMeta = selectedActsResolution.selectedActsFinalMeta;
+  const routingHintsMeta = selectedActsResolution.routingHintsMeta;
+  const low_confidence_final = selectedActsResolution.low_confidence_final;
+  const coverageGap = selectedActsResolution.coverageGap;
+  const oodGuardResult = selectedActsResolution.oodGuardResult;
+  const specializedDomainNoPrimary = selectedActsResolution.specializedDomainNoPrimary;
+  const coverageGuardFiredButFamilyOk = selectedActsResolution.coverageGuardFiredButFamilyOk;
+  const recoveredEmptySelected = selectedActsResolution.recoveredEmptySelected;
+  const routingHintsAddedPrimaryLaw =
+    routingHintsMeta.used_reason_codes.includes('ADDED_PRIMARY_LAW');
 
   const mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
   const sampleHits = buildSampleHits(finalHits);
-
-  const retrievalTrace: RetrievalTrace = {
-    version: 1,
+  const retrievalTrace: RetrievalTrace = buildSingleGoalRetrievalTrace({
     hits: finalHits,
-    top_score: topScore,
-    latency_ms: Date.now() - runStartMs,
-    degraded_sources: (Object.keys(degraded).length || mem.memoryDegraded)
-      ? { ...degraded, ...(mem.memoryDegraded ? { memory: true } : {}) }
+    topScore,
+    latencyMs: Date.now() - runStartMs,
+    degradedSources:
+      (Object.keys(degraded).length || mem.memoryDegraded)
+        ? { ...degraded, ...(mem.memoryDegraded ? { memory: true } : {}) }
+        : undefined,
+    collectionsUsed,
+    stepsLatencyMs,
+    sampleHits,
+    stepsRequested,
+    effectiveQuery: effective,
+    hitsTotalBeforeCap: hitsTotalBeforeCapSingle,
+    hitsCapApplied: hitsCapAppliedSingle,
+    topNUsedForDistribution: config.u4FusionTopN,
+    avgScore,
+    lowConfidence: low_confidence_final,
+    coverageGap,
+    useLowConfidenceFallback,
+    reasonCodes,
+    recoveredEmptySelected,
+    selectedActs: selected_acts_final,
+    plannerFamilyHints: plannerFamilyHints.length
+      ? plannerFamilyHints.slice(0, 5).map((hint) => hint.family)
       : undefined,
-    meta: {
-      collections_used: collectionsUsed,
-      steps_latency_ms: stepsLatencyMs,
-      sample_hits: sampleHits,
-      steps_requested: stepsRequested,
-      steps_executed: [...collectionsUsed],
-      query_used: effective.slice(0, 200),
-      hits_count: finalHits.length,
-      hits_total_before_cap: hitsTotalBeforeCapSingle,
-      hits_total_after_cap: finalHits.length,
-      hits_cap_applied: hitsCapAppliedSingle,
-      topN_used_for_distribution: config.u4FusionTopN,
-      scores_computed_on: 'final_hits_after_cap_and_guards',
-      avg_score_source: 'final_hits_after_cap_and_guards',
-      avg_score: avgScore,
-      low_confidence: low_confidence_final,
-      why_low_confidence:
-        useLowConfidenceFallback && rawPerStep.length > 0
-          ? 'all_hits_below_min_score_fallback_to_top_k'
-          : reasonCodes.includes('ROUTING_HINTS_LOW_CONF')
-            ? 'ROUTING_HINTS_LOW_CONF'
-            : recoveredEmptySelected
-              ? 'EMPTY_SELECTED_ACTS_RECOVERED'
-              : actSelectionLowConfidence
-                ? 'ACT_SELECTION_LOW_CONFIDENCE'
-                : undefined,
-      selected_acts: selected_acts_final,
-      family_hints: plannerFamilyHints.length
-        ? plannerFamilyHints.slice(0, 5).map((h) => h.family)
-        : undefined,
-      prior_applied:
-        plannerFamilyHints.length > 0
-          ? { applied: priorAppliedAny, boost_used: priorBoostUsed }
-          : undefined,
-      lldbi_soft_prior: lldbiSoftPriorMeta,
-      acts2_used: acts2Used,
-      acts2_trigger: acts2Trigger.length ? acts2Trigger : undefined,
-      acts2_queries: acts2Queries.length ? acts2Queries : undefined,
-      acts2_qdrant_calls: acts2Used ? acts2QdrantCalls : undefined,
-      acts2_debug_top_titles:
-        process.env.DEBUG_ACTS_LOOKUP === '1' && acts2DebugTopTitles.length
-          ? acts2DebugTopTitles
-          : undefined,
-      used_act_planner: actPlannerCalledThisRun,
-      query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
-      multi_query_variants_count: useMultiQuery ? variants.length : undefined,
-      used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
-      within_act_policy: withinActDecision.reason_codes.length
-        ? withinActDecision.reason_codes
-        : undefined,
-      anchors_used: anchorsUsed.length ? anchorsUsed : undefined,
-      taxonomy_snapshot_version: taxonomySnapshotVersion ?? undefined,
-      lldbi_hints_present: lldbiHintsPresent,
-      lldbi_hints_used: toLldbiHintsUsed(taxonomyResult.taxonomy_hints_used),
-      taxonomy_hints_used: taxonomyResult.taxonomy_hints_used,
-      hybrid_rescore_used: taxonomyResult.debug.source === 'supabase' ? true : undefined,
-      thesaurus_version: 1,
-      act_candidates_top: actCandidatesTopHydrated,
-      query_rewrite: queryRewriteMeta,
-      stage_decisions: {
-        used_taxonomy: taxonomyResult.debug.source === 'supabase',
-        used_acts_search: usedActsSearch,
-        used_filtered_chunks: usedFilteredChunksSearch,
-        used_llm_rewrite: queryRewriteMeta.used === true,
-        used_llm_rerank: false,
-        used_multi_query: useMultiQuery,
-        used_goal_splitter: true,
-        used_llm_planner: goalSplit.used_llm_planner,
-        used_act_planner: actPlannerCalledThisRun,
-        per_goal_act_retrieval: false,
-        used_global_fallback: useLowConfidenceFallback,
-      },
-      goals_summary: [
-        {
-          goal_id: goalSplit.goals[0].id,
-          goal_type: goalSplit.goals[0].goal_type,
-          subquery_preview: goalSplit.goals[0].subquery.slice(0, 200),
-          used_llm_planner: goalSplit.used_llm_planner,
-          act_candidates_top3: actCandidatesTopHydrated.slice(0, 3).map((a) => a.rada_nreg),
-          hits_count: finalHits.length,
-          top_score: topScore,
-        },
-      ],
-      distribution:
-        Object.keys(hitsByActTop3).length > 0 ||
-        noiseResultSingle.penaltyCount > 0 ||
-        noiseResultSingle.guardBlockedCount > 0
-          ? {
-              hits_by_act_top3: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
-              avg_score_by_act_top3: Object.keys(avgScoreByActTop3).length > 0 ? avgScoreByActTop3 : undefined,
-              noise_penalty_applied_count: noiseResultSingle.penaltyCount > 0 ? noiseResultSingle.penaltyCount : undefined,
-              noise_penalty_policy_version: NOISE_PENALTY_POLICY_VERSION,
-              noise_penalty_guard_blocked: noiseResultSingle.guardBlockedCount > 0,
-              noise_penalty_guard_reason_codes:
-                noiseResultSingle.guardReasonCodes.length > 0 ? noiseResultSingle.guardReasonCodes : undefined,
-            }
-          : undefined,
-      reason_codes: reasonCodes.length ? reasonCodes : undefined,
-      selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
-      chunks_evidence_top_acts,
-      selected_acts_decision: selectedActsFinalMeta.selected_acts_decision_final,
-      selected_acts_confidence: selectedActsFinalMeta.selected_acts_confidence_final,
-      selected_acts_confidence_pre_routing: selectedActsFinalMeta.selected_acts_confidence_pre_routing,
-      selected_acts_kinds_count: selectedActsFinalMeta.selected_acts_kinds_count_final,
-      selected_acts_document_types_top: selectedActsFinalMeta.selected_acts_document_types_top_final,
-      family_evidence_summary: toFamilyEvidenceSummary(familyEvidence),
-      family_evidence_reason_codes: familyEvidence.reason_codes.length ? familyEvidence.reason_codes : undefined,
-      routing_hints: routingHintsMeta,
-      reference_expansion: referenceExpansionMeta,
-      article_backfill: articleBackfillMeta,
-      ood_guard: oodGuardResult,
-      low_confidence_suppressed:
-        specializedDomainNoPrimary ||
-        coverageGuardFiredButFamilyOk ||
-        (routingHintsAddedPrimaryLaw &&
-          selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
-          !low_confidence_final)
-          ? {
-              fired: true,
-              suppressed_reasons: [
-                ...(specializedDomainNoPrimary ? ['SPECIALIZED_DOMAIN_NO_PRIMARY_LAW'] : []),
-                ...(coverageGuardFiredButFamilyOk ? ['COVERAGE_GUARD_FAMILY_OK'] : []),
-                ...(
-                  routingHintsAddedPrimaryLaw &&
-                  selectedActsFinalMeta.routing_hints_recovered_with_retrieval_evidence &&
-                  !low_confidence_final
-                    ? ['ROUTING_HINTS_RECOVERED_WITH_RETRIEVAL_EVIDENCE']
-                    : []
-                ),
-                ...(qrSignaledOod ? [] : []),
-              ],
-            }
-          : undefined,
-      qdrant_calls_count_total: qdrantCallCounter.count,
-      planner: {
-        tier_selected: plannerMeta.tier,
-        called: plannerCalledThisRun,
-        call_failed_reason: plannerMeta.reason_codes?.[0],
-        tier: plannerMeta.tier,
-        model_id: plannerMeta.model_id,
-        duration_ms: plannerMeta.duration_ms,
-        degraded: plannerMeta.degraded,
-        reason_codes: plannerMeta.reason_codes,
-      },
-      memory: mem.memoryMeta,
-      retrieval_debug_bundle: {
-        per_goal_act_candidates_top: actCandidatesTopHydrated.map((a) => ({ rada_nreg: a.rada_nreg, title: a.title, score: a.score })),
-        stages: [
-          ...(queryRewriteDurationMs > 0
-            ? [{ stage: 'query_rewrite', qdrant_calls_count: 0, time_ms: queryRewriteDurationMs }]
-            : []),
-          ...(collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
-            stage: String(stage),
-            qdrant_calls_count: 1,
-            time_ms: stepsLatencyMs[i] ?? 0,
-          })),
-        ],
-        distribution_by_act: Object.keys(hitsByActTop3).length > 0 ? hitsByActTop3 : undefined,
-        distribution_by_goal: [{ goal_id: goalSplit.goals[0].id, hits_count: finalHits.length }],
-        selected_acts_sources_breakdown: selected_acts_sources_breakdown_final,
-        chunks_evidence_top_acts,
-        selected_acts_decision: selectedActsFinalMeta.selected_acts_decision_final,
-        family_evidence_top2: familyEvidence.debug.top_families,
-      },
-    },
-  };
+    priorAppliedAny,
+    priorBoostUsed,
+    lldbiSoftPriorMeta,
+    acts2Used,
+    acts2Trigger,
+    acts2Queries,
+    acts2QdrantCalls,
+    acts2DebugTopTitles,
+    debugActsLookupEnabled: process.env.DEBUG_ACTS_LOOKUP === '1',
+    actPlannerCalledThisRun,
+    plannerCalledThisRun,
+    queryVariantsUsed,
+    useMultiQuery,
+    usedFilteredChunksSearch,
+    withinActPolicyReasonCodes: withinActDecision.reason_codes,
+    anchorsUsed,
+    taxonomySnapshotVersion,
+    lldbiHintsPresent,
+    lldbiHintsUsed: toLldbiHintsUsed(taxonomyResult.taxonomy_hints_used),
+    taxonomyHintsUsed: taxonomyResult.taxonomy_hints_used,
+    usedTaxonomy: taxonomyResult.debug.source === 'supabase',
+    usedLlmPlanner: goalSplit.used_llm_planner,
+    hybridRescoreUsed: taxonomyResult.debug.source === 'supabase' ? true : undefined,
+    actCandidatesTopHydrated,
+    queryRewriteMeta,
+    usedActsSearch,
+    goalId: goalSplit.goals[0].id,
+    goalType: goalSplit.goals[0].goal_type,
+    hitsByActTop3,
+    avgScoreByActTop3,
+    noisePenaltyCount: noiseResultSingle.penaltyCount,
+    noisePenaltyGuardBlockedCount: noiseResultSingle.guardBlockedCount,
+    noisePenaltyGuardReasonCodes: noiseResultSingle.guardReasonCodes,
+    selectedActsSourcesBreakdown: selected_acts_sources_breakdown_final,
+    chunksEvidenceTopActs: chunks_evidence_top_acts,
+    selectedActsFinalMeta,
+    familyEvidence,
+    routingHintsMeta,
+    referenceExpansionMeta,
+    articleBackfillMeta,
+    oodGuardResult,
+    specializedDomainNoPrimary,
+    coverageGuardFiredButFamilyOk,
+    routingHintsAddedPrimaryLaw,
+    plannerMeta,
+    qdrantCallsCountTotal: qdrantCallCounter.count,
+    memoryMeta: mem.memoryMeta,
+    retrievalDebugStages: [
+      ...(queryRewriteDurationMs > 0
+        ? [{ stage: 'query_rewrite', qdrant_calls_count: 0, time_ms: queryRewriteDurationMs }]
+        : []),
+      ...(collectionsUsed.length ? collectionsUsed : ['lldbi_chunks', 'lldbi_acts']).map((stage, i) => ({
+        stage: String(stage),
+        qdrant_calls_count: 1,
+        time_ms: stepsLatencyMs[i] ?? 0,
+      })),
+    ],
+  });
 
   return {
     rawHits: finalHits,

@@ -44,6 +44,7 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
       ? rawHits.reduce((s, h) => s + h.score, 0) / rawHits.length
       : null;
   const degradedLldbi = !!retrievalTrace?.degraded_sources?.lldbi;
+  const coverageGap = retrievalTrace?.meta?.coverage_gap ?? 'none';
   const ambiguous = !!queryProfile?.ambiguity?.is_ambiguous;
   const needDeepRetrieval = !!queryProfile?.routing_flags?.need_deep_retrieval;
   const hasDirectCitation = !!queryProfile?.computed_flags?.has_direct_citation;
@@ -98,6 +99,7 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
     ambiguous,
     degraded_lldbi: degradedLldbi,
     need_deep_retrieval: needDeepRetrieval,
+    coverage_gap: coverageGap,
     direct_refs_total: directRefsTotal > 0 ? directRefsTotal : undefined,
     direct_refs_hit: directRefsTotal > 0 ? directRefsHit : undefined,
     direct_act_hints_total: directActHintsTotal > 0 ? directActHintsTotal : undefined,
@@ -105,7 +107,6 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
   };
 
   const reasons: GateDecisionReasonCode[] = [];
-
   if (config.forceExpand) {
     reasons.push('FORCE_EXPAND');
     const duration = Date.now() - start;
@@ -120,6 +121,9 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
 
   if (!config.doclistEnabled) {
     if (planUseDoclist) reasons.push('DOCLIST_DISABLED');
+    if (coverageGap === 'likely_missing_act') reasons.push('LIKELY_MISSING_ACT');
+    else if (coverageGap === 'weak_evidence') reasons.push('WEAK_EVIDENCE');
+    else if (coverageGap === 'out_of_scope') reasons.push('OUT_OF_SCOPE_QUERY');
     const duration = Date.now() - start;
     return {
       expand: false,
@@ -131,10 +135,14 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
   }
 
   if (searchPlan && !legalRetrievalActive) {
+    const noLegalReasons: GateDecisionReasonCode[] = [];
+    if (coverageGap === 'likely_missing_act') noLegalReasons.push('LIKELY_MISSING_ACT');
+    else if (coverageGap === 'weak_evidence') noLegalReasons.push('WEAK_EVIDENCE');
+    else if (coverageGap === 'out_of_scope') noLegalReasons.push('OUT_OF_SCOPE_QUERY');
     const duration = Date.now() - start;
     return {
       expand: false,
-      reason_codes: ['OK'],
+      reason_codes: noLegalReasons.length > 0 ? noLegalReasons : ['OK'],
       thresholds: { min_hits: minHits, min_avg_score: minAvgScore },
       signals,
       meta: { decision_version: version, evaluated_at_ms: start, duration_ms: duration },
@@ -169,6 +177,13 @@ export function evaluateGate(input: EvaluateGateInput): GateDecision {
   }
   if (directRefMissing) {
     reasons.push('DIRECT_REF_MISSING');
+  }
+  if (coverageGap === 'likely_missing_act') {
+    reasons.push('LIKELY_MISSING_ACT');
+  } else if (coverageGap === 'weak_evidence') {
+    reasons.push('WEAK_EVIDENCE');
+  } else if (coverageGap === 'out_of_scope') {
+    reasons.push('OUT_OF_SCOPE_QUERY');
   }
 
   const expand = reasons.length > 0;

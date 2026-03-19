@@ -145,6 +145,60 @@ function testEvaluateGoldenCaseFailsOnLatencyBudgetBreach(): void {
   console.log('[OK] golden eval enforces latency and qdrant budgets');
 }
 
+function testEvaluateGoldenCaseMatchesPointLevelCitation(): void {
+  const goldenCase: GoldenCase = {
+    id: 'point-citation',
+    query: '...',
+    description: '...',
+    expected_primary: {
+      rada_nreg: '57-95-п',
+      unit_type: 'point',
+      unit_numbers: ['21'],
+      citation_paths: ['п. 21'],
+      max_rank: 3,
+    },
+    expected_selected_acts: ['57-95-п'],
+  };
+  const trace: RetrievalTraceLike = {
+    hits: [
+      { rada_nreg: '57-95-п', unit_type: 'point', unit_number: '21', citation_path: 'п. 21' },
+      { rada_nreg: '57-95-п', unit_type: 'point', unit_number: '2', citation_path: 'п. 2' },
+    ],
+    meta: {
+      selected_acts: [{ rada_nreg: '57-95-п' }],
+      hits_count: 2,
+    },
+  };
+  const result = evaluateGoldenCase(goldenCase, trace);
+  assert(result.pass === true, 'point-level citation expectation must pass');
+  assert(result.metrics.primary_rank === 1, 'point-level citation should resolve primary rank');
+  console.log('[OK] golden eval matches point-level citation expectations');
+}
+
+function testEvaluateGoldenCaseChecksCoverageGapExpectations(): void {
+  const goldenCase: GoldenCase = {
+    id: 'coverage-gap',
+    query: '...',
+    description: '...',
+    shadow: true,
+    expect_low_confidence: true,
+    expected_coverage_gap: 'likely_missing_act',
+  };
+  const trace: RetrievalTraceLike = {
+    hits: [],
+    meta: {
+      hits_count: 0,
+      low_confidence: true,
+      coverage_gap: 'likely_missing_act',
+      selected_acts: [],
+    },
+  };
+  const result = evaluateGoldenCase(goldenCase, trace);
+  assert(result.pass === true, 'matching coverage_gap expectation must pass');
+  assert(result.metrics.coverage_gap === 'likely_missing_act', 'coverage_gap metric must be reported');
+  console.log('[OK] golden eval supports coverage_gap and low_confidence expectations');
+}
+
 function main(): void {
   console.log('rag_golden_eval unit tests\n');
   testFindExpectationRankNormalizesHyphenatedArticles();
@@ -152,6 +206,8 @@ function main(): void {
   testEvaluateGoldenCaseRequiresSelectedActsCoverage();
   testEvaluateGoldenCaseFailsOnForbiddenSelectedActNoise();
   testEvaluateGoldenCaseFailsOnLatencyBudgetBreach();
+  testEvaluateGoldenCaseMatchesPointLevelCitation();
+  testEvaluateGoldenCaseChecksCoverageGapExpectations();
   console.log('\nAll rag_golden_eval unit tests passed.');
 }
 

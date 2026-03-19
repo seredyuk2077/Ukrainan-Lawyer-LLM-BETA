@@ -341,6 +341,16 @@ function hasRepeatedSecondaryOrderSupport(item: ChunksEvidenceItem | undefined):
   return item.count_in_top30 >= NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN;
 }
 
+function isExplicitlyHintedNonPrimaryAct(
+  act: SelectedActOutput,
+  candidate: ActCandidateInput | undefined,
+  documentTypeHints: string[]
+): boolean {
+  const kind = classifyActKind(candidate?.title ?? act.act_title ?? '', candidate?.document_type, candidate?.category);
+  if (kind !== 'SECONDARY_ORDER' && kind !== 'INTERNATIONAL_TREATY') return false;
+  return documentTypeHintMatches(candidate?.document_type, documentTypeHints);
+}
+
 function candidateHasFamilyGuardEvidenceSupport(
   radaNreg: string,
   chunksEvidenceByNreg: Map<string, ChunksEvidenceItem>
@@ -565,6 +575,19 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   const fromTaxonomy: string[] = [];
   const fromActsSearch: string[] = [];
   const fromChunksEvidence: string[] = [];
+  const removeSelectedActsByNreg = (nregsToRemove: Set<string>): void => {
+    if (nregsToRemove.size === 0) return;
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      if (nregsToRemove.has(selected[index].rada_nreg)) selected.splice(index, 1);
+    }
+    fromTaxonomy.splice(0, fromTaxonomy.length, ...fromTaxonomy.filter((nreg) => !nregsToRemove.has(nreg)));
+    fromActsSearch.splice(0, fromActsSearch.length, ...fromActsSearch.filter((nreg) => !nregsToRemove.has(nreg)));
+    fromChunksEvidence.splice(
+      0,
+      fromChunksEvidence.length,
+      ...fromChunksEvidence.filter((nreg) => !nregsToRemove.has(nreg))
+    );
+  };
   const hasStrongPrimaryLawEvidence = chunks_evidence_top_acts.some((item) => {
     const candidate = candidateByNreg.get(item.rada_nreg);
     return (
@@ -833,10 +856,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     }
   }
   if (toRemoveOrders.size > 0) {
-    for (let i = selected.length - 1; i >= 0; i--) {
-      if (toRemoveOrders.has(selected[i].rada_nreg)) selected.splice(i, 1);
-    }
-    fromChunksEvidence.splice(0, fromChunksEvidence.length, ...fromChunksEvidence.filter((n) => !toRemoveOrders.has(n)));
+    removeSelectedActsByNreg(toRemoveOrders);
   }
 
   // --- Policy v2: KSU decisions need repeated evidence when primary law already dominates ---
@@ -851,10 +871,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       }
     }
     if (ksuToRemove.size > 0) {
-      for (let i = selected.length - 1; i >= 0; i -= 1) {
-        if (ksuToRemove.has(selected[i].rada_nreg)) selected.splice(i, 1);
-      }
-      fromChunksEvidence.splice(0, fromChunksEvidence.length, ...fromChunksEvidence.filter((n) => !ksuToRemove.has(n)));
+      removeSelectedActsByNreg(ksuToRemove);
       reasonCodes.push('KSU_BLOCKED_PRIMARY_PRESENT');
     }
   }
@@ -878,14 +895,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         }
       }
       if (multiGoalNoiseToRemove.size > 0) {
-        for (let i = selected.length - 1; i >= 0; i -= 1) {
-          if (multiGoalNoiseToRemove.has(selected[i].rada_nreg)) selected.splice(i, 1);
-        }
-        fromChunksEvidence.splice(
-          0,
-          fromChunksEvidence.length,
-          ...fromChunksEvidence.filter((n) => !multiGoalNoiseToRemove.has(n))
-        );
+        removeSelectedActsByNreg(multiGoalNoiseToRemove);
         reasonCodes.push('MULTI_GOAL_NOISE_BLOCKED_PRIMARY_PRESENT');
       }
     }
@@ -951,6 +961,14 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   let includedFromFamilyGuard = false;
   if (familyEvidence && selected.length < SELECTED_ACTS_MAX_OUT) {
     const goalId = input.goals_summary[0]?.goal_id ?? 'goal_0';
+    const strongPrimarySelectedActsCount = selected.filter((act) => {
+      const candidate = candidateByNreg.get(act.rada_nreg);
+      return (
+        classifyActKind(candidate?.title ?? act.act_title ?? '', candidate?.document_type, candidate?.category) ===
+          'PRIMARY_LAW' && isStrongChunksEvidence(chunksEvidenceByNreg.get(act.rada_nreg))
+      );
+    }).length;
+    const skipSingleGoalDominantFamilyRecovery = !isMultiGoal && strongPrimarySelectedActsCount >= 2;
     if (
       familyEvidence.dominant_family_key &&
       familyEvidence.family_confidence >= FAMILY_GUARD_CONFIDENCE_THRESHOLD
@@ -960,7 +978,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         if (classifyActKind(cand?.title ?? s.act_title ?? '', cand?.document_type, cand?.category) !== 'PRIMARY_LAW') return false;
         return categoryToFamilyKey(cand?.category) === familyEvidence.dominant_family_key;
       });
-      if (!hasDominantFamily) {
+      if (!hasDominantFamily && !skipSingleGoalDominantFamilyRecovery) {
         const candidate = actCandidatesTop.find((a) => {
           if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
           if (classifyActKind(a.title ?? '', a.document_type, a.category) !== 'PRIMARY_LAW') return false;
@@ -982,6 +1000,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         } else {
           pushReasonCode(reasonCodes, candidate ? 'FAMILY_GUARD_NO_EVIDENCE' : 'COVERAGE_GUARD_FAILED');
         }
+      } else if (!hasDominantFamily && skipSingleGoalDominantFamilyRecovery) {
+        pushReasonCode(reasonCodes, 'FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
       }
     }
     if (
@@ -1169,9 +1189,9 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       .every((act) => !isStrongChunksEvidence(evidenceByNreg.get(act.rada_nreg)));
     if (top3.length === 3 && (trailingWeak || (evidenceAll > 0 && evidenceTop3 / evidenceAll >= 0.8))) {
       const keep = new Set(top3.map((act) => act.rada_nreg));
-      for (let i = selected.length - 1; i >= 0; i -= 1) {
-        if (!keep.has(selected[i].rada_nreg)) selected.splice(i, 1);
-      }
+      removeSelectedActsByNreg(
+        new Set(selected.map((act) => act.rada_nreg).filter((radaNreg) => !keep.has(radaNreg)))
+      );
       reasonCodes.push('SINGLE_GOAL_TAIL_TRIMMED');
     }
   }
@@ -1216,13 +1236,16 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           if (isStrongChunksEvidence(evidence)) return false;
           const dominantRankMass = dominantEvidence.rank_mass_top30 ?? 0;
           const candidateRankMass = evidence?.rank_mass_top30 ?? 0;
-          return dominantRankMass >= candidateRankMass * SINGLE_GOAL_PRIMARY_FAMILY_DOMINANCE_RATIO;
+          const familyMismatchOrUnknown =
+            familyKey === 'unknown' || familyKey !== familyEvidence.dominant_family_key;
+          return (
+            familyMismatchOrUnknown &&
+            dominantRankMass >= candidateRankMass * SINGLE_GOAL_PRIMARY_FAMILY_DOMINANCE_RATIO
+          );
         });
         if (offFamilyPrimaryActs.length > 0) {
           const offFamilyNregs = new Set(offFamilyPrimaryActs.map((act) => act.rada_nreg));
-          for (let index = selected.length - 1; index >= 0; index -= 1) {
-            if (offFamilyNregs.has(selected[index].rada_nreg)) selected.splice(index, 1);
-          }
+          removeSelectedActsByNreg(offFamilyNregs);
           reasonCodes.push('SINGLE_GOAL_OFF_FAMILY_PRIMARY_TRIMMED');
         }
       }
@@ -1247,9 +1270,9 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     });
     if (trailingActs.length > 0 && trailingWeak) {
       const keep = new Set(rankedByEvidence.slice(0, targetCount).map((act) => act.rada_nreg));
-      for (let index = selected.length - 1; index >= 0; index -= 1) {
-        if (!keep.has(selected[index].rada_nreg)) selected.splice(index, 1);
-      }
+      removeSelectedActsByNreg(
+        new Set(selected.map((act) => act.rada_nreg).filter((radaNreg) => !keep.has(radaNreg)))
+      );
       reasonCodes.push('MULTI_GOAL_TAIL_TRIMMED');
     }
   }
@@ -1269,6 +1292,32 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       if (!keep.has(selected[index].rada_nreg)) selected.splice(index, 1);
     }
     reasonCodes.push('MULTI_GOAL_SINGLE_ACT_TAIL_TRIMMED');
+  }
+
+  if (isSingleGoal) {
+    const selectedPrimaryCount = selected.filter((act) => {
+      const candidate = candidateByNreg.get(act.rada_nreg);
+      return (
+        classifyActKind(candidate?.title ?? act.act_title ?? '', candidate?.document_type, candidate?.category) ===
+        'PRIMARY_LAW'
+      );
+    }).length;
+    if (selectedPrimaryCount === 0 && selected.length > 2) {
+      const rankedNonPrimary = [...selected].sort((left, right) => {
+        const leftEvidence = chunksEvidenceByNreg.get(left.rada_nreg);
+        const rightEvidence = chunksEvidenceByNreg.get(right.rada_nreg);
+        if (leftEvidence && rightEvidence) {
+          const diff = compareChunksEvidenceStrength(leftEvidence, rightEvidence);
+          if (diff !== 0) return diff;
+        }
+        return (right.score ?? 0) - (left.score ?? 0);
+      });
+      const keep = new Set(rankedNonPrimary.slice(0, 2).map((act) => act.rada_nreg));
+      for (let index = selected.length - 1; index >= 0; index -= 1) {
+        if (!keep.has(selected[index].rada_nreg)) selected.splice(index, 1);
+      }
+      reasonCodes.push('NON_PRIMARY_ONLY_TAIL_TRIMMED');
+    }
   }
 
   // Enrich selected items for Writer: document_type, category, act_kind, flags (E.2)
@@ -1315,6 +1364,17 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     selected_acts_confidence = 0.55;
   } else {
     reasonCodes.push('NO_STRONG_ACT_EVIDENCE');
+  }
+
+  const selectedPrimaryCount = selectedCapped.filter((act) => act.act_kind === 'PRIMARY_LAW').length;
+  if (selectedPrimaryCount === 0 && selectedCapped.length > 0) {
+    const explicitNonPrimaryHinted = selectedCapped.some((act) =>
+      isExplicitlyHintedNonPrimaryAct(act, candidateByNreg.get(act.rada_nreg), documentTypeHints ?? [])
+    );
+    if (!explicitNonPrimaryHinted) {
+      selected_acts_confidence = Math.min(selected_acts_confidence, 0.55);
+      pushReasonCode(reasonCodes, 'NON_PRIMARY_ONLY_WEAK_CONFIDENCE');
+    }
   }
 
   const selectedNregs = new Set(selectedCapped.map((s) => s.rada_nreg));

@@ -3,6 +3,8 @@ import type { QueryCitationSelectors } from './structural-citation.js';
 
 const STRUCTURAL_WITHIN_ACT_LIMIT = 4;
 const PROCEDURAL_WITHIN_ACT_LIMIT = 4;
+const COMPACT_PROCEDURAL_WITHIN_ACT_LIMIT = 3;
+const SIGNAL_ONLY_WITHIN_ACT_LIMIT = 2;
 const ACT_ANCHORED_WITHIN_ACT_LIMIT = 3;
 
 export interface WithinActExpansionDecision {
@@ -67,16 +69,35 @@ export function decideWithinActExpansion(input: {
     reasonCodes.add('MULTI_CLAUSE_QUERY');
   }
 
-  if (reasonCodes.has('STRUCTURAL_QUERY') || reasonCodes.has('PROCEDURAL_GOAL')) {
+  if (reasonCodes.has('STRUCTURAL_QUERY')) {
     return {
       limit: STRUCTURAL_WITHIN_ACT_LIMIT,
       reason_codes: [...reasonCodes],
     };
   }
 
+  if (reasonCodes.has('PROCEDURAL_GOAL')) {
+    const compactBundleQuery =
+      (input.goalReasonCodes ?? []).includes('procedural_bundle_compaction') &&
+      input.querySelectors.explicitSelectorCount === 0 &&
+      !input.querySelectors.noteMentioned &&
+      !hasActCue(input.entities);
+    return {
+      limit:
+        compactBundleQuery
+          ? SIGNAL_ONLY_WITHIN_ACT_LIMIT
+          : input.querySelectors.explicitSelectorCount === 0 &&
+              !input.querySelectors.noteMentioned &&
+              !hasActCue(input.entities)
+          ? COMPACT_PROCEDURAL_WITHIN_ACT_LIMIT
+          : PROCEDURAL_WITHIN_ACT_LIMIT,
+      reason_codes: [...reasonCodes],
+    };
+  }
+
   if (reasonCodes.size > 0) {
     return {
-      limit: PROCEDURAL_WITHIN_ACT_LIMIT,
+      limit: SIGNAL_ONLY_WITHIN_ACT_LIMIT,
       reason_codes: [...reasonCodes],
     };
   }

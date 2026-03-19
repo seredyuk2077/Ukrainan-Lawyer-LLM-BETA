@@ -243,6 +243,30 @@ function testStrongLegalEvidenceDoesNotExpandOnSoftAmbiguityAlone(): void {
   console.log('[OK] strong legal evidence suppresses soft ambiguity-only expand');
 }
 
+function testCoverageGapLikelyMissingActForcesRagMissing(): void {
+  const hits = [makeHit(0.31, 'random-1', null, 'Сторонній акт')];
+  const decision = evaluateGate({
+    retrievalTrace: makeTrace({
+      hits,
+      top_score: 0.31,
+      meta: {
+        hits_count: 1,
+        low_confidence: true,
+        coverage_gap: 'likely_missing_act',
+      },
+    }),
+    rawHits: hits,
+    queryProfile: null,
+    searchPlan: { sources: { use_lldbi: true, use_doclist: true }, steps: [] },
+  });
+  if (!decision.expand) throw new Error('Expected expand=true for likely_missing_act coverage gap');
+  if (!decision.reason_codes.includes('LIKELY_MISSING_ACT')) {
+    throw new Error(`Expected LIKELY_MISSING_ACT, got ${JSON.stringify(decision.reason_codes)}`);
+  }
+  if (gateStatus(decision) !== 'rag_missing') throw new Error('Expected rag_missing for likely_missing_act');
+  console.log('[OK] coverage_gap=likely_missing_act forces rag_missing path');
+}
+
 async function main(): Promise<void> {
   console.log('U5 Gate unit tests\n');
   testGateEmptyHitsRagMissing();
@@ -253,6 +277,7 @@ async function main(): Promise<void> {
   testDirectRefMissingWhenAbsent();
   testMemoryPlanDoesNotExpandOnSoftAmbiguityAlone();
   testStrongLegalEvidenceDoesNotExpandOnSoftAmbiguityAlone();
+  testCoverageGapLikelyMissingActForcesRagMissing();
   console.log('\nAll gate unit tests passed.');
 }
 

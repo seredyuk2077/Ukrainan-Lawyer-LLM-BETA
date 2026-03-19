@@ -599,5 +599,195 @@
     },
     "expected_selected_acts": ["57-95-п", "80731-10"],
     "max_selected_acts": 4
+  },
+  {
+    "id": "kpk_erdr_registration_and_complaint",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Після заяви про злочин слідчий каже, що спочатку перевірить обставини, а вже потім внесе відомості до реєстру. На що посилатися і як це оскаржується?",
+    "description": "КПК same-act procedural bundle: retrieval має знайти і обов'язок внесення до ЄРДР, і механізм оскарження без шуму від інших кодексів.",
+    "expected_hits": [
+      {
+        "rada_nreg": "4651-17",
+        "article_numbers": ["214"],
+        "max_rank": 8
+      },
+      {
+        "rada_nreg": "4651-17",
+        "article_numbers": ["303"],
+        "max_rank": 14
+      }
+    ],
+    "expected_selected_acts": ["4651-17"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "kzpp_final_settlement_delay",
+    "bucket": "same-act multi-article",
+    "priority": "high",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "У день звільнення з працівником не розрахувалися повністю. Де шукати норму про строк остаточного розрахунку і норму про наслідки затримки?",
+    "description": "Практичний labor case: КЗпП повинен зібрати строки виплати та відповідальність за затримку в одному кодексі.",
+    "expected_hits": [
+      {
+        "rada_nreg": "322-08",
+        "article_numbers": ["116"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "322-08",
+        "article_numbers": ["117"],
+        "max_rank": 10
+      }
+    ],
+    "expected_selected_acts": ["322-08"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "cpc_claim_missing_attachments",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Позовну заяву подали без належних додатків і без підтвердження судового збору. Де шукати вимоги до змісту, додатків і наслідків таких недоліків?",
+    "description": "ЦПК bundle: у видачі мають зійтися зміст позову, додатки та наслідки недоліків без noise від інших процесуальних кодексів.",
+    "expected_hits": [
+      {
+        "rada_nreg": "1618-15",
+        "article_numbers": ["175"],
+        "max_rank": 10
+      },
+      {
+        "rada_nreg": "1618-15",
+        "article_numbers": ["177"],
+        "max_rank": 12
+      },
+      {
+        "rada_nreg": "1618-15",
+        "article_numbers": ["185"],
+        "max_rank": 12
+      }
+    ],
+    "expected_selected_acts": ["1618-15"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "pku_tax_debt_definition_and_enforcement",
+    "bucket": "same-act multi-article",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "У Податковому кодексі є підпункт із визначенням податкового боргу. Коли борг уже вважається таким, що підлягає примусовому стягненню, і з яких норм це збирається?",
+    "description": "Структурний tax stress case: retrieval має впоратися з пп./п. селектором і дістати пов'язаний enforcement path у межах ПКУ.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["14"],
+        "max_rank": 12
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["59"],
+        "max_rank": 14
+      },
+      {
+        "rada_nreg": "2755-17",
+        "article_numbers": ["95"],
+        "max_rank": 14
+      }
+    ],
+    "expected_selected_acts": ["2755-17"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "ccu_theft_note_significant_damage",
+    "bucket": "weird-doc types",
+    "priority": "normal",
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 16,
+    "query": "Для крадіжки важливо, що саме вважається значною шкодою за відповідною приміткою. Де це шукати і як це впливає на кваліфікацію?",
+    "description": "ККУ note-level stress case: retrieval має втримувати і сам склад крадіжки, і норму з примітки, а не зводитися до загального кримінального шуму.",
+    "expected_hits": [
+      {
+        "rada_nreg": "2341-14",
+        "article_numbers": ["185"],
+        "max_rank": 10
+      }
+    ],
+    "expected_selected_acts": ["2341-14"],
+    "max_selected_acts": 3
+  },
+  {
+    "id": "shadow_public_procurement_rejection_appeal",
+    "bucket": "ood / corpus-gap",
+    "priority": "high",
+    "shadow": true,
+    "query": "Як оскаржити рішення замовника про відхилення тендерної пропозиції в публічній закупівлі?",
+    "description": "Shadow case: якщо спеціальний procurement акт відсутній або слабко покритий у LLDBI, RAG має чесно визнати corpus gap, а не підміняти його ЦПК або випадковою підзаконкою.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_personal_data_breach_notification",
+    "bucket": "ood / corpus-gap",
+    "priority": "high",
+    "shadow": true,
+    "query": "Чи потрібно повідомляти клієнтів і регулятора про витік персональних даних, і в який строк це робиться?",
+    "description": "Shadow case: за відсутності профільного data-protection акту в LLDBI система має перейти в honest low-confidence mode.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_software_copyright_registration",
+    "bucket": "ood / corpus-gap",
+    "priority": "normal",
+    "shadow": true,
+    "query": "Як зареєструвати авторське право на комп'ютерну програму і які документи треба подати?",
+    "description": "Shadow IP procedure case: retrieval не має задовольнятись загальними нормами ЦКУ, якщо спеціального registration path в LLDBI немає.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "foreign_arbitral_award_enforcement",
+    "bucket": "large-code competition",
+    "priority": "high",
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Як в Україні примусово виконати рішення міжнародного комерційного арбітражу?",
+    "description": "CPC procedure case: LLDBI already covers the CPC enforcement block for foreign arbitral awards, so retrieval має стабільно повертати ЦПК як основний акт без фальшивого corpus-gap signal.",
+    "expected_primary": {
+      "rada_nreg": "1618-15",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1618-15"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_environmental_impact_assessment",
+    "bucket": "ood / corpus-gap",
+    "priority": "normal",
+    "shadow": true,
+    "query": "Чи потрібна оцінка впливу на довкілля для будівництва сміттєпереробного заводу?",
+    "description": "Shadow environmental regime case: без профільного EIA coverage система не повинна маскувати прогалину загальними нормами землі чи будівництва.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_trademark_registration_and_opposition",
+    "bucket": "ood / corpus-gap",
+    "priority": "normal",
+    "shadow": true,
+    "query": "Як зареєструвати торговельну марку і що робити, якщо хтось подасть заперечення?",
+    "description": "Shadow trademark procedure case: коли спеціальний IP regime відсутній у LLDBI, retrieval має повернути honest low-confidence trace замість фальшиво впевненого fallback.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2
   }
 ]

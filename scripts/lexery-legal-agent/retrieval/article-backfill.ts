@@ -90,6 +90,9 @@ export function buildArticleBackfillFilter(input: {
   if (input.selectors.paragraph) {
     must.push(buildMatch('paragraph_number', input.selectors.paragraph));
   }
+  if (input.selectors.note) {
+    must.push(buildMatch('note_number', input.selectors.note));
+  }
 
   return {
     ...(must.length > 0 ? { must } : {}),
@@ -130,6 +133,9 @@ export function buildStructuralOnlyBackfillFilter(input: {
   }
   if (input.selectors.paragraph) {
     must.push(buildMatch('paragraph_number', input.selectors.paragraph));
+  }
+  if (input.selectors.note) {
+    must.push(buildMatch('note_number', input.selectors.note));
   }
   return must.length > 0 ? { must } : null;
 }
@@ -190,6 +196,7 @@ export function hitSatisfiesStructuralSelectors(
     | 'point_number'
     | 'subpoint_number'
     | 'paragraph_number'
+    | 'note_number'
     | 'unstructured_fallback'
     | 'metadata'
   >,
@@ -210,6 +217,7 @@ export function hitSatisfiesBackfillExpectation(
     | 'point_number'
     | 'subpoint_number'
     | 'paragraph_number'
+    | 'note_number'
     | 'unstructured_fallback'
     | 'metadata'
   >,
@@ -280,6 +288,7 @@ export async function runArticleBackfill(input: {
         limit: structuralOnly ? 12 : 5,
         filter,
         timeoutMs: input.timeoutMs,
+        retry: false,
         callCounter: input.callCounter,
       };
       let hits = await qdrantSearch(options);
@@ -293,6 +302,7 @@ export async function runArticleBackfill(input: {
             limit: 30,
             filter: broadStructuralFilter,
             timeoutMs: input.timeoutMs,
+            retry: false,
             callCounter: input.callCounter,
           });
           usedFallbackForRef = true;
@@ -342,6 +352,7 @@ export async function runArticleBackfill(input: {
           limit: structuralOnly ? 30 : 12,
           filter: fallbackFilter,
           timeoutMs: input.timeoutMs,
+          retry: false,
           callCounter: input.callCounter,
         });
         let addedForRef = 0;

@@ -25,6 +25,9 @@ interface RetrievalHitLike {
   rada_nreg?: string;
   title?: string;
   article_number?: string | null;
+  unit_number?: string | null;
+  unit_type?: string | null;
+  citation_path?: string | null;
   act_title?: string;
   ordering_score?: number;
   score?: number;
@@ -36,6 +39,7 @@ interface RetrievalTraceLike {
   meta?: {
     hits_count?: number;
     low_confidence?: boolean;
+    coverage_gap?: string;
     reason_codes?: string[];
     qdrant_calls_count_total?: number;
     selected_acts?: Array<{
@@ -152,6 +156,7 @@ function printSummary(query: string, runId: string, latencyMs: number, trace: Re
   console.log(`latency_ms: ${latencyMs}`);
   console.log(`hits_count: ${meta?.hits_count ?? hits.length}`);
   console.log(`low_confidence: ${String(meta?.low_confidence === true)}`);
+  console.log(`coverage_gap: ${meta?.coverage_gap ?? 'none'}`);
   console.log(`qdrant_calls: ${meta?.qdrant_calls_count_total ?? 'n/a'}`);
   console.log(`reason_codes: ${(meta?.reason_codes ?? []).join(', ') || 'none'}`);
 
@@ -165,8 +170,9 @@ function printSummary(query: string, runId: string, latencyMs: number, trace: Re
 
   console.log('\nTop hits:');
   for (const [index, hit] of hits.slice(0, 12).entries()) {
+    const citation = hit.citation_path ?? hit.article_number ?? hit.unit_number ?? '-';
     console.log(
-      `${index + 1}. ${hit.rada_nreg ?? 'n/a'} | art=${hit.article_number ?? '-'} | goal=${hit.goal_id ?? '-'} | ord=${typeof hit.ordering_score === 'number' ? hit.ordering_score.toFixed(3) : 'n/a'} | vec=${typeof hit.score === 'number' ? hit.score.toFixed(3) : 'n/a'} | ${hit.act_title ?? hit.title ?? 'Untitled'}`
+      `${index + 1}. ${hit.rada_nreg ?? 'n/a'} | cite=${citation} | type=${hit.unit_type ?? '-'} | goal=${hit.goal_id ?? '-'} | ord=${typeof hit.ordering_score === 'number' ? hit.ordering_score.toFixed(3) : 'n/a'} | vec=${typeof hit.score === 'number' ? hit.score.toFixed(3) : 'n/a'} | ${hit.act_title ?? hit.title ?? 'Untitled'}`
     );
   }
   if (hits.length === 0) console.log('none');

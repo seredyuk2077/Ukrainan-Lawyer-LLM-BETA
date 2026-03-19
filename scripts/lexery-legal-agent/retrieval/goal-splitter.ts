@@ -358,6 +358,8 @@ function hasProceduralBundleReference(query: string): boolean {
     /цю\s+заяв/iu,
     /цю\s+скарг/iu,
     /це\s+рішенн/iu,
+    /(?:під|на)\s+час\s+(?:оскаржен|розгляд\p{L}*|подан\p{L}*|розслідуван\p{L}*|виконан\p{L}*)/iu,
+    /(?:при|після|у\s+ході)\s+(?:оскаржен|розгляд\p{L}*|подан\p{L}*|розслідуван\p{L}*|виконан\p{L}*)/iu,
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -389,6 +391,64 @@ function tryCompactProceduralBundleGoals(
       subquery: query.slice(0, 4000),
       domain_hint: domainHint,
       must_have_signals: mergeGoalSignals(goals),
+    },
+  ];
+}
+
+function looksLikeNormLocatorBundle(query: string, goals: EvidenceGoal[]): boolean {
+  if (goals.length < 2) return false;
+  const normalized = query.normalize('NFC');
+  const hasLocatorCue = [
+    /де\s+шукати\s+(?:норм|статт|положенн|вимог)/iu,
+    /на\s+що\s+посилат/iu,
+    /з\s+яких\s+норм/iu,
+    /яка\s+(?:норм|статт|підстава)/iu,
+    /які\s+(?:норм|статт|положенн|вимог)/iu,
+    /де\s+це\s+написано/iu,
+  ].some((pattern) => pattern.test(normalized));
+  if (!hasLocatorCue) return false;
+  const goalText = goals.map((goal) => goal.subquery).join(' ');
+  return /(?:норм|статт|положенн|вимог|наслідк|підстав|строк)/iu.test(goalText);
+}
+
+function tryCompactSameActBundleGoals(
+  query: string,
+  goals: EvidenceGoal[],
+  domainHint: string | undefined,
+  isComplianceContext: boolean,
+  reasonCodes: string[]
+): EvidenceGoal[] | null {
+  if (goals.length < 2) return null;
+  if (!reasonCodes.includes('multi_clause_structure')) return null;
+  const questionMarks = (query.match(/\?/g) || []).length;
+  if (reasonCodes.includes('multi_question') && questionMarks >= 2) return null;
+  if (reasonCodes.includes('contrastive_liability_split')) return null;
+  if (!looksLikeNormLocatorBundle(query, goals)) return null;
+  if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
+  const distinctGoalDomains = new Set(
+    goals
+      .map((goal) => (goal.domain_hint ?? '').normalize('NFC').toLowerCase().trim())
+      .filter(Boolean)
+  );
+  if (distinctGoalDomains.size > 1) return null;
+
+  const mergedSignals = mergeGoalSignals(goals);
+  const hasProcedure = goals.some((goal) => goal.goal_type === 'procedure');
+  const hasLiability = goals.some((goal) => goal.goal_type === 'liability');
+  if (hasProcedure && hasLiability) return null;
+  const compactedGoalType = hasProcedure && !hasLiability
+    ? 'procedure'
+    : hasLiability && !hasProcedure
+      ? 'liability'
+      : inferGoalType(query, isComplianceContext);
+
+  return [
+    {
+      id: 'goal_0',
+      goal_type: isComplianceContext ? 'compliance_check' : compactedGoalType,
+      subquery: query.slice(0, 4000),
+      domain_hint: domainHint,
+      must_have_signals: mergedSignals,
     },
   ];
 }
@@ -463,6 +523,22 @@ export function heuristicGoalSplit(
       used_heuristic: true,
       used_llm_planner: false,
       reason_codes: [...reasonCodes, 'procedural_bundle_compaction'],
+    };
+  }
+
+  const compactedSameActGoals = tryCompactSameActBundleGoals(
+    query,
+    goals,
+    domainHint,
+    inputLikeContract,
+    reasonCodes
+  );
+  if (compactedSameActGoals) {
+    return {
+      goals: compactedSameActGoals,
+      used_heuristic: true,
+      used_llm_planner: false,
+      reason_codes: [...reasonCodes, 'same_act_bundle_compaction'],
     };
   }
 

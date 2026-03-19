@@ -135,6 +135,9 @@ export const RAG_MISSING_REASON_CODES: GateDecisionReasonCode[] = [
   'DEGRADED_LLDBI',
   'AMBIGUOUS_QUERY',
   'NEED_DEEP_RETRIEVAL',
+  'WEAK_EVIDENCE',
+  'LIKELY_MISSING_ACT',
+  'OUT_OF_SCOPE_QUERY',
 ];
 
 // --- U9/U10 contracts (LEX-130, LEX-132) ---

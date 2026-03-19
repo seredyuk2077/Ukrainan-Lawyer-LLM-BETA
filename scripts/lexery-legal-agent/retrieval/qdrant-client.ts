@@ -11,10 +11,11 @@ export interface QdrantSearchHit {
   payload: Record<string, unknown>;
 }
 
-/** Qdrant filter: must (AND) or should (OR). For "rada_nreg in [a,b]" use should with match value. */
-export type QdrantFilter =
-  | { must: Array<{ key: string; match: { value: string } }> }
-  | { should: Array<{ key: string; match: { value: string } }> };
+/** Qdrant filter: optional must (AND) + optional should (OR). */
+export type QdrantFilter = {
+  must?: Array<{ key: string; match: { value: string } }>;
+  should?: Array<{ key: string; match: { value: string } }>;
+};
 
 export interface QdrantSearchOptions {
   collection: string;
@@ -22,6 +23,7 @@ export interface QdrantSearchOptions {
   limit: number;
   filter?: QdrantFilter;
   timeoutMs?: number;
+  retry?: boolean;
   /** Optional: increment .count on each actual Qdrant API call (for observability). */
   callCounter?: { count: number };
 }
@@ -87,7 +89,7 @@ export async function qdrantSearch(
   } catch (firstErr) {
     const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
     const isRetryable =
-      config.qdrantRetryOnce &&
+      (options.retry ?? config.qdrantRetryOnce) &&
       (msg.includes('502') ||
         msg.includes('timeout') ||
         msg.includes('ETIMEDOUT') ||

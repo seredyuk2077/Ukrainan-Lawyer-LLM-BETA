@@ -137,12 +137,18 @@ async function main(): Promise<void> {
   const allCases: GoldenCase[] = JSON.parse(readFileSync(casesPath, 'utf8'));
   const onlyArg = process.argv.find((arg) => arg.startsWith('--only='));
   const onlyValue = onlyArg?.slice('--only='.length)?.toLowerCase();
+  const includeShadow = process.argv.includes('--include-shadow');
+  const warmupEnabled = process.argv.includes('--warmup') || process.env.U4_VERIFY_WARMUP === '1';
   const cases =
     onlyValue === 'smoke'
-      ? allCases.filter((c) => c.smoke === true)
+      ? allCases.filter((c) => c.smoke === true && c.shadow !== true)
+      : onlyValue === 'shadow'
+        ? allCases.filter((c) => c.shadow === true)
       : onlyValue
         ? allCases.filter((c) => c.id === onlyValue)
-        : allCases;
+        : includeShadow
+          ? allCases
+          : allCases.filter((c) => c.shadow !== true);
 
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -181,6 +187,7 @@ async function main(): Promise<void> {
     qdrantCalls?: number;
     maxQdrantCalls?: number;
     lowConfidence: boolean;
+    coverageGap?: string;
     primaryRank?: number;
     selectedActsPresent: string[];
     expectedHitRanks: Record<string, number | null>;
@@ -197,6 +204,9 @@ async function main(): Promise<void> {
 
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
+    if (warmupEnabled) {
+      await runQuery(baseUrl, 'ККУ ст. 115 умисне вбивство', tenantId, userId).catch(() => undefined);
+    }
 
     for (const c of cases) {
       const { run, runId, latencyMs } = await runQuery(baseUrl, c.query, tenantId, userId);
@@ -218,6 +228,7 @@ async function main(): Promise<void> {
         qdrantCalls: evaluated.metrics.qdrant_calls_count_total,
         maxQdrantCalls: evaluated.metrics.max_qdrant_calls,
         lowConfidence: evaluated.metrics.low_confidence,
+        coverageGap: evaluated.metrics.coverage_gap,
         primaryRank: evaluated.metrics.primary_rank,
         selectedActsPresent: evaluated.metrics.selected_acts_present,
         expectedHitRanks: evaluated.metrics.expected_hit_ranks,
