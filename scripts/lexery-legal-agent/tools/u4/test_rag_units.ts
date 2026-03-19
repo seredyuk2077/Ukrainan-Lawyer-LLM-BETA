@@ -24,10 +24,16 @@ import {
 } from '../../retrieval/chunk-rerank.js';
 import { decideQueryRewritePolicy } from '../../retrieval/query-rewrite-policy.js';
 import {
+  buildGroundedRetrievalQuery,
+  filterGroundingSignalsForQuery,
+} from '../../retrieval/grounded-query-builder.js';
+import {
+  buildHitCitationKey,
   extractQueryCitationSelectors,
   getHitCitationSelectors,
   countCitationMatches,
 } from '../../retrieval/structural-citation.js';
+import { decideWithinActExpansion } from '../../retrieval/within-act-expansion-policy.js';
 import {
   buildArticleBackfillFilter,
   buildStructuralOnlyBackfillFilter,
@@ -76,7 +82,7 @@ function testNoTopicBasedMultiGoal(): void {
 function testContrastiveLiabilityGoalSplit(): void {
   const q = 'Яка відповідальність за ухилення від мобілізації та коли це адміністративна, а коли кримінальна?';
   const r = heuristicGoalSplit(q, undefined, undefined);
-  if (r.goals.length !== 3) throw new Error(`Expected 3 goals for contrastive liability query, got ${r.goals.length}`);
+  if (r.goals.length !== 2) throw new Error(`Expected 2 goals for contrastive liability query, got ${r.goals.length}`);
   if (!r.reason_codes.includes('contrastive_liability_split')) {
     throw new Error(`Expected contrastive_liability_split reason code, got ${JSON.stringify(r.reason_codes)}`);
   }
@@ -93,6 +99,58 @@ function testContrastiveLiabilityGoalSplit(): void {
     throw new Error(`Expected administrative goal to use compact subject focus instead of duplicating full phrase, got ${JSON.stringify(subqueries)}`);
   }
   console.log('[OK] heuristicGoalSplit(contrastive liability) → shared-subject multi-goal split');
+}
+
+function testFamilyGuardDoesNotInjectUnsupportedPrimaryLaw(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2341-14',
+        r2_key: 'r2://1',
+        json_path: '$.content.chunks[0].text',
+        score: 0.76,
+        ordering_score: 0.76,
+        source: 'lldbi_chunks',
+        article_number: '190',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        category: 'criminal',
+        document_type: 'кодекс',
+        score: 0.8,
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        category: 'criminal_procedure',
+        document_type: 'кодекс',
+        score: 0.79,
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    taxonomyNregs: new Set(['2341-14', '4651-17']),
+    actsSearchNregs: [],
+    familyEvidence: {
+      dominant_family_key: 'criminal',
+      family_confidence: 0.7,
+      family_conflict: true,
+      top2: [
+        { family_key: 'criminal', support_score: 0.9 },
+        { family_key: 'criminal_procedure', support_score: 0.7 },
+      ],
+    },
+  });
+  const selectedNregs = result.selected_acts.map((act) => act.rada_nreg);
+  if (selectedNregs.includes('4651-17')) {
+    throw new Error(`Expected family guard to avoid unsupported primary-law injection, got ${JSON.stringify(selectedNregs)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('FAMILY_GUARD_NO_EVIDENCE')) {
+    throw new Error(`Expected FAMILY_GUARD_NO_EVIDENCE reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts family guard does not inject unsupported primary law');
 }
 
 function testHasMultiClauseStructure(): void {
@@ -150,6 +208,37 @@ function testGoalSplitCarriesSubjectIntoProceduralQuestion(): void {
   console.log('[OK] heuristicGoalSplit carries subject into procedural multi-question follow-up');
 }
 
+function testGoalSplitCarriesSubjectIntoYesNoFollowUp(): void {
+  const q =
+    'У який строк треба сплатити суму за податковим повідомленням-рішенням? Чи зупиняє подання скарги обов`язок сплати?';
+  const r = heuristicGoalSplit(q, 'tax_customs', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected multi-question split for tax follow-up, got ${r.goals.length}`);
+  }
+  const followUpGoal = r.goals[1];
+  if (!followUpGoal?.subquery.toLowerCase().includes('податков')) {
+    throw new Error(`Expected yes/no follow-up to inherit shared tax subject, got ${followUpGoal?.subquery}`);
+  }
+  console.log('[OK] heuristicGoalSplit carries subject into yes/no follow-up question');
+}
+
+function testGoalSplitAddsSpecificTaxAppealSignals(): void {
+  const q =
+    'У який строк треба сплатити суму за податковим повідомленням-рішенням? Чи зупиняє подання скарги обов`язок сплати?';
+  const r = heuristicGoalSplit(q, 'tax_customs', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected split tax appeal query to produce 2 goals, got ${r.goals.length}`);
+  }
+  const followUpSignals = r.goals[1]?.must_have_signals ?? [];
+  if (!followUpSignals.includes("грошове зобов'язання")) {
+    throw new Error(`Expected tax payment follow-up to add money-obligation signal, got ${JSON.stringify(followUpSignals)}`);
+  }
+  if (!followUpSignals.includes('оскарження податкового повідомлення-рішення')) {
+    throw new Error(`Expected tax payment follow-up to keep tax-notice appeal signal, got ${JSON.stringify(followUpSignals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit adds specific tax appeal signals for payment/complaint follow-up');
+}
+
 function testGoalSplitMarksProceduralSingleGoal(): void {
   const q = 'Який строк оскарження податкового повідомлення-рішення?';
   const r = heuristicGoalSplit(q, 'tax_customs', undefined);
@@ -163,6 +252,25 @@ function testGoalSplitMarksProceduralSingleGoal(): void {
     throw new Error(`Expected no extra must-have signals when query already contains procedural anchors, got ${JSON.stringify(r.goals[0]?.must_have_signals)}`);
   }
   console.log('[OK] heuristicGoalSplit marks procedural single-goal query without redundant soft signals');
+}
+
+function testGoalSplitCompactsProceduralBundleWithAnaphora(): void {
+  const q = 'Чи можна подати апеляцію на заочне рішення суду і який строк на таке оскарження?';
+  const r = heuristicGoalSplit(q, 'civil_procedure', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected procedural bundle compaction to keep 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected compacted goal to stay procedural, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('procedural_bundle_compaction')) {
+    throw new Error(`Expected procedural_bundle_compaction reason code, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  const mustHaveSignals = r.goals[0]?.must_have_signals ?? [];
+  if (!mustHaveSignals.includes('оскарження') || !mustHaveSignals.includes('подання')) {
+    throw new Error(`Expected compacted procedural goal to preserve merged procedural soft signals, got ${JSON.stringify(mustHaveSignals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts anaphoric procedural bundle into one goal');
 }
 
 function testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists(): void {
@@ -263,6 +371,20 @@ function testQueryRewritePolicySkipsAnchoredStructuralTitleQuery(): void {
   console.log('[OK] query rewrite policy skips anchored structural title query');
 }
 
+function testQueryRewritePolicySkipsGroundedCitationWithActCue(): void {
+  const decision = decideQueryRewritePolicy({
+    query: 'Що передбачає КУпАП ст. 130 за перше керування у стані сп`яніння?',
+    entities: [
+      { type: 'act_abbrev', value: 'КУпАП' },
+      { type: 'article_ref', value: 'ст. 130' },
+    ],
+  });
+  if (decision.shouldCall) {
+    throw new Error(`Expected grounded citation with act cue to skip rewrite, got ${JSON.stringify(decision)}`);
+  }
+  console.log('[OK] query rewrite policy skips grounded citation with act cue');
+}
+
 function testQueryRewritePolicyAllowsBroadNaturalLanguageQuery(): void {
   const decision = decideQueryRewritePolicy({
     query: 'У клієнта в Facebook написали, що він шахрай. На які норми спирати вимогу про спростування недостовірної інформації та моральну шкоду?',
@@ -272,6 +394,51 @@ function testQueryRewritePolicyAllowsBroadNaturalLanguageQuery(): void {
     throw new Error(`Expected broad legal query to still allow rewrite, got ${JSON.stringify(decision)}`);
   }
   console.log('[OK] query rewrite policy keeps rewrite for broad natural-language query');
+}
+
+function testGroundedQueryBuilderDropsGenericSignalsForStructuralQuery(): void {
+  const result = buildGroundedRetrievalQuery({
+    subquery: 'Що передбачає КПК ст. 214?',
+    mustHaveSignals: ['строк', 'порядок', 'початок досудового розслідування'],
+  });
+  if (result.queryForRetrieval.includes('строк') || result.queryForRetrieval.includes('порядок')) {
+    throw new Error(`Expected grounded query builder to drop generic procedural signals, got ${JSON.stringify(result)}`);
+  }
+  if (!result.queryForRetrieval.includes('початок досудового розслідування')) {
+    throw new Error(`Expected grounded query builder to keep specific procedural signal, got ${JSON.stringify(result)}`);
+  }
+  console.log('[OK] grounded query builder keeps only specific signals for structural query');
+}
+
+function testGroundedQueryBuilderKeepsSignalsForNaturalLanguageQuery(): void {
+  const filtered = filterGroundingSignalsForQuery('Хто розслідує шахрайство і як це оскаржується?', [
+    'підслідність',
+    'оскарження',
+  ]);
+  if (!filtered.includes('підслідність') || !filtered.includes('оскарження')) {
+    throw new Error(`Expected natural-language query to keep shaping signals, got ${JSON.stringify(filtered)}`);
+  }
+  console.log('[OK] grounded query builder keeps signals for non-structural query');
+}
+
+function testWithinActExpansionPrefersProceduralAndStructuralQueries(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors('Що передбачає КПК ст. 214?'),
+    entities: [
+      { type: 'act_abbrev', value: 'КПК' },
+      { type: 'article_ref', value: 'ст. 214' },
+    ],
+    goalType: 'procedure',
+    goalReasonCodes: [],
+    mustHaveSignalsCount: 1,
+    weakLimit: 5,
+  });
+  if (decision.limit < 4) {
+    throw new Error(`Expected procedural structural query to keep broader within-act expansion, got ${JSON.stringify(decision)}`);
+  }
+  console.log('[OK] within-act expansion keeps broader fanout for procedural structural query');
 }
 
 function testQueryRewritePolicySkipsSimpleFocusedLegalQuery(): void {
@@ -307,6 +474,7 @@ function testStructuralCitationMatchCountsNoteSelectors(): void {
   const hitSelectors = getHitCitationSelectors({
     article_number: '45',
     unit_type: 'article',
+    note_number: '2',
     citation_path: 'ст. 45 примітка 2',
     metadata: {},
   });
@@ -315,6 +483,42 @@ function testStructuralCitationMatchCountsNoteSelectors(): void {
     throw new Error(`Expected article + note match, got ${matches}`);
   }
   console.log('[OK] structural citation matching counts note selectors');
+}
+
+function testStructuralCitationMatchCountsMentionedNoteWithoutExplicitNumber(): void {
+  const querySelectors = extractQueryCitationSelectors(
+    'Що визначає примітка до статті 185 КК України щодо значної шкоди?'
+  );
+  const hitSelectors = getHitCitationSelectors({
+    article_number: '185',
+    unit_type: 'paragraph',
+    note_number: '1',
+    citation_path: 'ст. 185 примітка 1',
+    metadata: {},
+  });
+  const matches = countCitationMatches(querySelectors, hitSelectors);
+  if (matches < 2) {
+    throw new Error(`Expected article + note-mentioned match, got ${matches}`);
+  }
+  console.log('[OK] structural citation matching counts note mention without explicit number');
+}
+
+function testHitCitationKeyPreservesNestedFallbackSelectors(): void {
+  const key = buildHitCitationKey({
+    article_number: '40',
+    article_part_number: '3',
+    point_number: '2',
+    subpoint_number: '1',
+    paragraph_number: '4',
+    note_number: null,
+    citation_path: null,
+    unstructured_fallback: false,
+    metadata: {},
+  } as never);
+  if (key !== 'ст. 40 ч. 3 п. 2 пп. 1 абз. 4') {
+    throw new Error(`Expected nested structural fallback key, got ${key}`);
+  }
+  console.log('[OK] structural citation key preserves full nested structural path');
 }
 
 function testArticleBackfillPrefersSingleAliasMatchedAct(): void {
@@ -378,6 +582,25 @@ function testArticleBackfillFilterCarriesStructuralSelectors(): void {
     throw new Error(`Expected article_number should filters, got ${JSON.stringify(filter)}`);
   }
   console.log('[OK] article backfill filter carries structural selectors into Qdrant filter');
+}
+
+function testArticleBackfillFilterCarriesNoteSelectors(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачає примітка 2 до ст. 45 ККУ?');
+  const filter = buildArticleBackfillFilter({
+    ref: {
+      raw_ref: '45',
+      normalized_forms: ['45'],
+      signal_strength: 'strong',
+      evidence: 'legal_prefix',
+    },
+    selectors,
+    preferredRadaNreg: '2341-14',
+  });
+  const noteFilter = (filter.must ?? []).find((item) => item.key === 'note_number');
+  if (noteFilter?.match?.value !== '2') {
+    throw new Error(`Expected note_number filter to equal 2, got ${JSON.stringify(filter)}`);
+  }
+  console.log('[OK] article backfill filter carries note selector into Qdrant filter');
 }
 
 function testArticleBackfillDoesNotTreatWrongPointAsSatisfied(): void {
@@ -538,6 +761,50 @@ function testSelectedActsFinalizerDoesNotInflateConfidenceWithoutEvidence(): voi
     throw new Error('Expected routing-hints recovery flag to stay false without retrieval evidence');
   }
   console.log('[OK] selected acts finalizer does not inflate confidence when routing hints add unsupported act');
+}
+
+function testSelectedActsFinalizerRemovesUnsupportedRoutingHintActs(): void {
+  const result = finalizeSelectedActsAfterRouting({
+    selected_acts_before_routing: [
+      {
+        rada_nreg: '4651-17',
+        act_title: 'КПК України',
+        document_type: 'Кодекс',
+        act_kind: 'PRIMARY_LAW',
+      },
+    ],
+    selected_acts_final: [
+      {
+        rada_nreg: '4651-17',
+        act_title: 'КПК України',
+        document_type: 'Кодекс',
+        act_kind: 'PRIMARY_LAW',
+      },
+      {
+        rada_nreg: '580-19',
+        act_title: 'Про Національну поліцію',
+        document_type: 'Закон',
+        act_kind: 'PRIMARY_LAW',
+      },
+    ],
+    base_confidence: 0.66,
+    base_decision: {
+      policy_version: 3.1,
+      included_from_chunks_evidence: true,
+      reason_codes: ['SELECTED_ACTS_FROM_CHUNKS_EVIDENCE'],
+    },
+    routing_hints_added_count: 1,
+    routing_hints_added_primary_law: true,
+    routing_hints_added_nregs: ['580-19'],
+    retrieval_evidence_nregs: ['4651-17'],
+  });
+  if (result.selected_acts_final.some((act) => act.rada_nreg === '580-19')) {
+    throw new Error(`Expected unsupported routing-hint act to be removed, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.selected_acts_decision_final.reason_codes?.includes('ROUTING_HINTS_UNSUPPORTED_REMOVED')) {
+    throw new Error(`Expected removal reason code, got ${JSON.stringify(result.selected_acts_decision_final.reason_codes)}`);
+  }
+  console.log('[OK] selected acts finalizer removes unsupported routing-hint additions');
 }
 
 function testSummarizeSelectedActsCountsKindsAndDocTypes(): void {
@@ -949,6 +1216,22 @@ function testGoalSplitAddsErdrProceduralSignal(): void {
   console.log('[OK] heuristicGoalSplit adds ЄРДР procedural concept signal');
 }
 
+function testGoalSplitCompactsErdrComplaintBundle(): void {
+  const q =
+    'Після заяви про злочин слідчий каже, що спочатку перевірить обставини, а вже потім внесе відомості до реєстру. На що посилатися і як це оскаржується?';
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected ЄРДР complaint bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected compacted ЄРДР goal to be procedural, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('procedural_bundle_compaction')) {
+    throw new Error(`Expected procedural_bundle_compaction for ЄРДР complaint bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts ЄРДР complaint bundle into one procedural goal');
+}
+
 function testSingleGoalSelectedActsTailTrim(): void {
   const result = buildSelectedActs({
     finalHits: [],
@@ -1080,17 +1363,17 @@ function testSelectedActsTrimWeakMultiGoalTail(): void {
     chunks_evidence_top_acts: [
       { rada_nreg: '322-08', count_in_top30: 12, avg_score_in_top30: 0.58, max_score: 0.61 },
       { rada_nreg: '100-95-п', count_in_top30: 5, avg_score_in_top30: 0.38, max_score: 0.4 },
-      { rada_nreg: '4651-17', count_in_top30: 2, avg_score_in_top30: 0.33, max_score: 0.34 },
+      { rada_nreg: '4651-17', count_in_top30: 1, avg_score_in_top30: 0.33, max_score: 0.34 },
       { rada_nreg: '580-19', count_in_top30: 1, avg_score_in_top30: 0.31, max_score: 0.31 },
     ],
   });
   if (result.selected_acts.some((act) => act.rada_nreg === '580-19')) {
     throw new Error(`Expected weak multi-goal tail act to be trimmed, got ${JSON.stringify(result.selected_acts)}`);
   }
-  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_TAIL_TRIMMED')) {
-    throw new Error(`Expected MULTI_GOAL_TAIL_TRIMMED reason code, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  if (result.selected_acts.some((act) => act.rada_nreg === '4651-17')) {
+    throw new Error(`Expected weak ACTS_1 support without material evidence to stay out entirely, got ${JSON.stringify(result.selected_acts)}`);
   }
-  console.log('[OK] selected_acts trims weak multi-goal tail noise');
+  console.log('[OK] selected_acts blocks weak multi-goal ACTS_1 tail before it reaches final trim');
 }
 
 function testSelectedActsBlockCrossFamilySupportWithoutEvidence(): void {
@@ -1671,6 +1954,138 @@ function testSelectedActsFallbackDoesNotReAddBlockedNoiseAct(): void {
   console.log('[OK] selected_acts fallback does not re-add blocked noise act');
 }
 
+function testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal(): void {
+  const result = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        score: 3.2,
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 2.4,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['1618-15', '4651-17']),
+    actsSearchNregs: ['1618-15', '4651-17'],
+    documentTypeHints: ['кодекс'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '1618-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.7,
+        max_score: 0.76,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.81,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.41,
+        max_score: 0.47,
+        best_rank_in_top30: 14,
+        rank_mass_top30: 0.25,
+        max_ordering_score: 0.45,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'civil_procedure',
+      family_confidence: 0.82,
+      family_conflict: false,
+      top2: [
+        { family_key: 'civil_procedure', support_score: 0.95 },
+        { family_key: 'criminal_procedure', support_score: 0.22 },
+      ],
+    },
+  });
+  const selectedNregs = result.selected_acts.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['1618-15'])) {
+    throw new Error(`Expected dominant-family primary law only, got ${JSON.stringify(selectedNregs)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('SINGLE_GOAL_OFF_FAMILY_PRIMARY_TRIMMED')) {
+    throw new Error(`Expected SINGLE_GOAL_OFF_FAMILY_PRIMARY_TRIMMED, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts trims weak off-family primary-law tail in dominant single-goal runs');
+}
+
+function testSelectedActsRequireEvidenceForPrimaryLawSupportTail(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        r2_key: 'legislation/cpc/4651-17.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.71,
+        ordering_score: 0.79,
+        source: 'lldbi_chunks',
+        rada_nreg: '4651-17',
+        article_number: '214',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.93,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '1700-18',
+        title: 'Про запобігання корупції',
+        score: 0.86,
+        category: 'anti_corruption',
+        document_type: 'Закон',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.82,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['4651-17', '1700-18', '80731-10']),
+    actsSearchNregs: ['4651-17', '1700-18', '80731-10'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.68,
+        max_score: 0.71,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.84,
+        max_ordering_score: 0.79,
+      },
+    ],
+    familyEvidence: {
+      dominant_family_key: 'criminal_procedure',
+      family_confidence: 0.92,
+      family_conflict: false,
+      top2: [{ family_key: 'criminal_procedure', support_score: 0.92 }],
+    },
+  });
+  const selectedNregs = result.selected_acts.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['4651-17'])) {
+    throw new Error(`Expected support tail without evidence to stay out of selected_acts, got ${JSON.stringify(selectedNregs)}`);
+  }
+  console.log('[OK] selected_acts requires retrieval evidence before adding extra primary-law tail acts');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -1678,12 +2093,17 @@ async function main(): Promise<void> {
   testGoalSplitSingleQueryNoSplit();
   testNoTopicBasedMultiGoal();
   testContrastiveLiabilityGoalSplit();
+  testFamilyGuardDoesNotInjectUnsupportedPrimaryLaw();
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
+  testGoalSplitCarriesSubjectIntoYesNoFollowUp();
+  testGoalSplitAddsSpecificTaxAppealSignals();
   testGoalSplitMarksProceduralSingleGoal();
+  testGoalSplitCompactsProceduralBundleWithAnaphora();
   testGoalSplitAddsErdrProceduralSignal();
+  testGoalSplitCompactsErdrComplaintBundle();
   testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
@@ -1691,18 +2111,26 @@ async function main(): Promise<void> {
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
   testBuildWithinActPoolPromotesPlannerPreferredActs();
   testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
+  testQueryRewritePolicySkipsGroundedCitationWithActCue();
   testQueryRewritePolicySkipsSimpleFocusedLegalQuery();
   testQueryRewritePolicyAllowsBroadNaturalLanguageQuery();
+  testGroundedQueryBuilderDropsGenericSignalsForStructuralQuery();
+  testGroundedQueryBuilderKeepsSignalsForNaturalLanguageQuery();
+  testWithinActExpansionPrefersProceduralAndStructuralQueries();
   testStructuralCitationSelectorsCaptureNoteAndSubpoint();
   testStructuralCitationMatchCountsNoteSelectors();
+  testStructuralCitationMatchCountsMentionedNoteWithoutExplicitNumber();
+  testHitCitationKeyPreservesNestedFallbackSelectors();
   testArticleBackfillPrefersSingleAliasMatchedAct();
   testArticleBackfillPrefersDominantAliasMatchedAct();
   testArticleBackfillFilterCarriesStructuralSelectors();
+  testArticleBackfillFilterCarriesNoteSelectors();
   testArticleBackfillDoesNotTreatWrongPointAsSatisfied();
   testStructuralOnlyBackfillFilterCarriesPointSelectors();
   testStructuralOnlyBackfillRequiresPointMatch();
   testSelectedActsFinalizerRaisesConfidenceAfterRoutingPrimaryLaw();
   testSelectedActsFinalizerDoesNotInflateConfidenceWithoutEvidence();
+  testSelectedActsFinalizerRemovesUnsupportedRoutingHintActs();
   testSummarizeSelectedActsCountsKindsAndDocTypes();
   testClassifyActKindPrimaryLaw();
   testClassifyActKindSecondaryOrder();
@@ -1734,6 +2162,8 @@ async function main(): Promise<void> {
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
   testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
+  testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal();
+  testSelectedActsRequireEvidenceForPrimaryLawSupportTail();
   console.log('\nAll RAG unit tests passed.');
 }
 

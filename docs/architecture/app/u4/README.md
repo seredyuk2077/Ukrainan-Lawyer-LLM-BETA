@@ -39,6 +39,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap
 - `scripts/lexery-legal-agent/retrieval/chunk-rerank.ts` — structural chunk scoring (`ordering_score`, title/article relevance)
 - `scripts/lexery-legal-agent/retrieval/structural-citation.ts` — normalized Ukrainian structural citation parsing (`ст./ч./п./пп./абз./примітка`) for query/hit matching
+- `scripts/lexery-legal-agent/retrieval/grounded-query-builder.ts` — selector-aware retrieval query shaping that keeps narrow legal signals but strips broad generic widening on already-grounded citation queries
 - `scripts/lexery-legal-agent/retrieval/consumer.ts` — handleU4Event: load run, runCacheRag, persist trace, emit metrics, enqueue U5
 - `scripts/lexery-legal-agent/retrieval/qdrant-client.ts` — Qdrant search, timeout + 1 retry
 - `scripts/lexery-legal-agent/retrieval/embedding.ts` — embedQuery (OpenRouter OPENROUTER_API_KEY_ONLINE, 1536d)
@@ -50,6 +51,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/query-rewrite-policy.ts` — cheap guardrail for when rewrite must be skipped on already-anchored structural legal queries
 - `scripts/lexery-legal-agent/retrieval/rrf-merge.ts` — RRF merge для multi-query
 - `scripts/lexery-legal-agent/retrieval/reference-expander.ts` — reference expansion (згадані акти/статті → додаткові hits)
+- `scripts/lexery-legal-agent/retrieval/within-act-expansion-policy.ts` — policy module for when strong/structural/procedural single-goal queries still deserve wider per-act fanout
 - `scripts/lexery-legal-agent/retrieval/lldbi-vocabulary.ts` — vocabulary helper (categories/document_types)
 - `scripts/lexery-legal-agent/retrieval/memory-store.ts` — fetchRecentMemory (Supabase mm_memory_items, Phase 1)
 - `scripts/lexery-legal-agent/retrieval/r2-fragment.ts` — R2 fragment fetcher (for within-act retrieval)
@@ -68,16 +70,25 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - Будь-який новий ranking signal має проходити через окремий модуль і regression verify (`rag-units`, `rag-golden`, `retrieval-real-dev`), а не додаватися inline в orchestration flow.
 - Для простих двоклаузних legal queries (`X та Y`) U4 тепер покладається на дешевий structural multi-goal split із shared-tail carry-over, а не на обов'язковий LLM planner override; це зменшує latency/cost і прибирає planner-induced шум у procedural queries.
 - Для procedural follow-up queries U4 тепер робить дешеве semantic shaping без нових LLM calls: переносить shared subject у follow-up clause (`цю статтю` → предмет першого питання) і додає must-have procedural concept signals на кшталт `підслідність` або `початок досудового розслідування`, коли вони випливають зі змісту питання.
+- Для already-grounded citation queries (`КПК ст. 214`, `п. 21 Правил...`, `пп. 14.1.175 ПКУ`) grounded-query builder більше не додає broad procedural widening на кшталт `строк`, `порядок`, `подання`; лишаються тільки вузькі signals, які реально допомагають article competition.
 - Для explicit structural citation queries (`ч./п./пп./абз./примітка` + act/title cue) U4 тепер не пускає LLM query rewrite в default path: такі запити вже достатньо заякорені, а rewrite тільки роздував latency/cost і міг породити fake multi-goal retrieval.
+- Query rewrite variants тепер не можуть тихо потрапити в multi-query retrieval, якщо rewrite офіційно `used=false`; runtime і trace мають збігатися, інакше verifier втрачає чесний cost/behavior audit.
 - Structural citation parsing у runtime тепер Cyrillic-safe: `пунктом 12`, `підпункт 6`, `примітка до статті`, `частина 1` мають витягуватись так само стабільно, як `ст. 115`, без ASCII-only boundary bugs.
 - `goal-splitter` більше не розриває anchored citation queries лише через сполучник `і/та`, якщо в запиті вже є явні structural selectors; це прибирає false multi-goal fanout для point/title queries по підзаконних актах.
+- Contrastive liability queries більше не розщеплюються на зайвий broad prefix-goal поверх `адміністративна vs кримінальна`; heuristic split тепер віддає компактні aspect-goals, щоб не множити Qdrant work і coverage noise.
 - `ActTaxonomyStore` тепер використовує не лише alias/token matching, а й phrase-level LLDBI metadata (`title`, `summary`, `keywords`, `topics`, `aliases`, `validity_status`) для дешевшого й точнішого act candidate generation без hardcoded act lists.
 - Для document-type hints runtime тепер падає назад з `document_type` на `document_type_slug`, якщо human-readable type не збігається з U2 hint normalization.
 - `selected_acts` тепер жорсткіше відсікає weak cross-family acts: окремо для support candidates і для chunks-evidence tail, щоб multi-act retrieval не засмічував writer випадковими актами лише через vector overlap.
+- Generic document-type hints більше не можуть самі по собі проштовхнути support act у звичайний `selected_acts` tail; hint-only fallback лишається лише для мінімального recovery path.
 - `selected_acts` оцінює не лише `count_in_top30`, а й ранню силу evidence (`best_rank_in_top30`, `rank_mass_top30`, `max_ordering_score`), тому сильна релевантна норма з невеликою кількістю hits не губиться за шумним хвостом.
+- Family coverage guard тепер evidence-driven: він не має права додати PRIMARY_LAW акт лише за family/category fit, якщо у final retrieval head немає material chunk evidence. У таких випадках trace має показати `FAMILY_GUARD_NO_EVIDENCE`, а не вдавати complete legal coverage.
 - Для multi-goal policy `selected_acts` більше не згортає все до одного акта, якщо другий ранній `PRIMARY_LAW` із іншої legal family уже має матеріальний chunk evidence; це важливо для substantive+procedure кейсів на кшталт `ККУ + КПК`.
 - Коли multi-goal query уже покритий двома сильними `PRIMARY_LAW` актами, weak `KSU_DECISION` / `CASELAW_OPINION` / `BILL_DRAFT` хвіст більше не повинен повертатися в `selected_acts` через diversity guard; writer має бачити юридично корисні primary acts, а не випадковий caselaw noise.
 - У ранньому head retrieval діє article-level diversity cap: top portion видачі не повинна забиватися кількома chunks з одного й того ж `rada_nreg + article_number`, щоб same-act multi-article retrieval був ширшим і кориснішим для writer.
+- Single-goal within-act retrieval більше не виконується за замовчуванням на кожному strong run. U4 тепер вмикає per-act fanout для weak first-pass або explicit structural / act-anchored queries, що помітно зменшує latency та Qdrant call budget на generic high-signal питаннях.
+- Within-act fanout policy тепер окремо тримає structural/procedural hard cases: навіть на strong first pass такі query можуть отримати ширший per-act pool, якщо same-act article competition інакше надто вузький.
+- У single-goal procedural path taxonomy act pool тепер теж пріоритизує procedure-family акти, щоб КПК/ЦПК/ПКУ статті не губилися за substantive-code noise лише через загальні слова в запиті.
+- Після routing hints існує окремий final selected-acts gate: late-added acts без retrieval evidence можуть бути видалені ще до writer handoff, а confidence піднімається тільки коли recovery реально підтверджений trace.
 - У golden evaluation dataset тепер більше кейсів з same-act multi-article, substantive+procedure та large-code procedural competition, щоб regression ловив не лише прості `ККУ/КУпАП` запити, а й цивільно-процесуальні, податкові, сімейні та банкрутні сценарії.
 - У single-goal режимі `selected_acts` тепер може зберегти один сильний secondary supporting act, якщо він має повторний chunk-evidence у top-30; це прибирає false negative для practical-order cases на кшталт повернення товару.
 - У multi-clause запитах, де один кодекс явно покриває обидві частини питання, `selected_acts` більше не зобов'язаний добирати другий акт лише через `goals_count >= 2`; це прибирає procedural noise у same-act cases на кшталт банкрутства.

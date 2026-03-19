@@ -548,6 +548,12 @@ async function runQuery(
   return { retrievalTrace: null, latencyMs: Date.now() - start, run_id: runId };
 }
 
+async function warmVerifierServer(baseUrl: string, tenantId: string, userId: string): Promise<void> {
+  await runQuery(baseUrl, 'ККУ ст. 115 умисне вбивство', tenantId, userId, !RETRIEVAL_ONLY_MODE).catch(
+    () => undefined
+  );
+}
+
 export function checkActFamilyHit(rt: RunResult['retrievalTrace'], expectedFamilies: Array<{ family_id: string }>): boolean {
   if (!rt || expectedFamilies.length === 0) return true;
   const normalizeFamilyId = (familyId: string | undefined): string | undefined => {
@@ -704,6 +710,7 @@ async function main(): Promise<void> {
     }
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
+    await warmVerifierServer(baseUrl, tenantId, userId);
     for (const { index: i, row } of devToRun) {
       const run = await runQuery(
         baseUrl,
@@ -722,7 +729,6 @@ async function main(): Promise<void> {
       const actFamilyHit = checkActFamilyHit(rt, exp.expected_act_families);
       const multiGoalCorrect = checkMultiGoalCorrect(rt, exp.must_have_multi_goal);
       const multiActCorrect = checkMultiActCorrect(rt, exp.must_have_multi_act);
-      const pass = actFamilyHit && multiGoalCorrect && multiActCorrect;
       const articleEval =
         articleOverlay && !articleTraceHydration.ready
           ? {
@@ -732,6 +738,11 @@ async function main(): Promise<void> {
               expected_hit_ranks: {},
             }
           : evaluateArticleExpectations(rt, articleOverlay);
+      const pass =
+        actFamilyHit &&
+        multiGoalCorrect &&
+        multiActCorrect &&
+        (!ARTICLE_RANK_MODE || !articleEval.applied || articleEval.pass);
       const expectedConf = exp.heuristic_confidence ?? 0.5;
       const softFail =
         !pass && !actFamilyHit && (multiGoalCorrect && multiActCorrect) && expectedConf < EXPECTED_CONFIDENCE_HARD_THRESHOLD;

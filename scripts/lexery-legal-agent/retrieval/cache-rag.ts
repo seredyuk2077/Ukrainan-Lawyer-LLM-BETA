@@ -7,7 +7,7 @@ import type { SearchPlan, SearchStep } from '../plan/types.js';
 import type { RawHit, RetrievalTrace, DegradedSources } from './types.js';
 import type { RoutingFlags } from '../classify/types.js';
 import type { EvidenceGoal } from './goals.js';
-import { embedQuery } from './embedding.js';
+import { embedMany, embedQuery } from './embedding.js';
 import { qdrantSearch, getQdrantCollections } from './qdrant-client.js';
 import { config } from '../lib/config.js';
 import { shapeQueryForRetrieval } from './query-shaping.js';
@@ -56,6 +56,7 @@ import { runQueryRewritePhase } from './query-rewrite-phase.js';
 import { runArticleBackfill } from './article-backfill.js';
 import { fetchRecentMemory } from './memory-store.js';
 import { rrfMerge } from './rrf-merge.js';
+import { buildGroundedRetrievalQuery } from './grounded-query-builder.js';
 import {
   incrementU4RoutingHintsNotUsed,
   incrementU4RoutingHintsUsed,
@@ -73,8 +74,10 @@ import {
   NOISE_PENALTY_POLICY_VERSION,
 } from './hit-ranking.js';
 import { buildWithinActPool, extractActSearchNregsFromHits } from './within-act-pool.js';
+import { decideWithinActExpansion } from './within-act-expansion-policy.js';
 import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
 import { finalizeSelectedActsAfterRouting } from './selected-acts-finalizer.js';
+import { extractQueryCitationSelectors } from './structural-citation.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -472,10 +475,12 @@ async function runOneGoal(
       rada_nreg_candidates: await prioritizeProcedureActs(taxonomyResult.rada_nreg_candidates),
     };
   }
+  const groundedGoalQuery = buildGroundedRetrievalQuery({
+    subquery: goal.subquery,
+    mustHaveSignals: goal.must_have_signals,
+  });
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
-    goal.must_have_signals?.length
-      ? `${goal.subquery} ${goal.must_have_signals.join(' ')}`
-      : goal.subquery,
+    groundedGoalQuery.queryForRetrieval,
     goal.domain_hint,
     taxonomyResult.anchor_tokens
   );
@@ -546,30 +551,44 @@ async function runOneGoal(
     if (bootstrapActNregs.length === 0) stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
   }
   const rawPerStep: RawHit[] = [];
-  for (const { kind, collection } of stepsToRun) {
-    const stepStart = Date.now();
-    try {
-      const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
-      const res = await qdrantSearch({
-        collection,
-        vector,
-        limit,
-        timeoutMs: config.qdrantTimeoutSec * 1000,
-        callCounter,
-      });
-      stepsLatencyMs.push(Date.now() - stepStart);
-      collectionsUsed.push(collection);
-      for (const h of res) {
-        const raw = payloadToRawHit(h, kind);
-        if (raw.r2_key && raw.json_path) {
-          raw.goal_id = goal.id;
-          rawPerStep.push(raw);
-        }
+  const stepResults = await Promise.allSettled(
+    stepsToRun.map(async ({ kind, collection }) => {
+      const stepStart = Date.now();
+      try {
+        const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
+        const res = await qdrantSearch({
+          collection,
+          vector,
+          limit,
+          timeoutMs: config.qdrantTimeoutSec * 1000,
+          callCounter,
+        });
+        const rawHits = res
+          .map((hit) => payloadToRawHit(hit, kind))
+          .filter((raw) => raw.r2_key && raw.json_path)
+          .map((raw) => ({
+            ...raw,
+            goal_id: goal.id,
+          }));
+        return {
+          collection,
+          latencyMs: Date.now() - stepStart,
+          rawHits,
+        };
+      } catch {
+        return {
+          collection,
+          latencyMs: Date.now() - stepStart,
+          rawHits: [] as RawHit[],
+        };
       }
-    } catch {
-      stepsLatencyMs.push(Date.now() - stepStart);
-      collectionsUsed.push(collection);
-    }
+    })
+  );
+  for (const result of stepResults) {
+    if (result.status !== 'fulfilled') continue;
+    stepsLatencyMs.push(result.value.latencyMs);
+    collectionsUsed.push(result.value.collection);
+    rawPerStep.push(...result.value.rawHits);
   }
   const aboveThreshold = rawPerStep.filter((h) => h.score >= minScore);
   const candidateHits = aboveThreshold.length === 0 && rawPerStep.length > 0 ? rawPerStep : aboveThreshold;
@@ -622,7 +641,7 @@ async function runOneGoal(
   if (actNregsForSummary.length === 0) actNregsForSummary.push(...(taxonomyResult.rada_nreg_candidates ?? []));
 
   if (hits.length > 0 && taxonomyResult.debug.source === 'supabase') {
-    applyHybridOrdering(hits, goal.subquery, taxonomyResult, entities);
+    applyHybridOrdering(hits, effective, taxonomyResult, entities);
   }
   return { hits, actNregsForSummary, usedFilteredChunks, stepsLatencyMs, collectionsUsed, taxonomyResult, domainBootstrap };
 }
@@ -770,6 +789,17 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       documentTypeHints: documentTypeHints.length ? documentTypeHints : undefined,
       entities,
     });
+    if (
+      goalSplit.goals[0]?.goal_type === 'procedure' &&
+      taxonomyResultEarly.rada_nreg_candidates.length > 1
+    ) {
+      taxonomyResultEarly = {
+        ...taxonomyResultEarly,
+        rada_nreg_candidates: await prioritizeProcedureActs(
+          taxonomyResultEarly.rada_nreg_candidates
+        ),
+      };
+    }
     const clusterSplit = tryCategoryClusterSplitV2(
       taxonomyResultEarly,
       query,
@@ -943,6 +973,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   queryForEmbed = queryRewritePhase.queryForEmbed;
   const queryRewriteMeta = queryRewritePhase.meta;
   const queryRewriteDurationMs = queryRewritePhase.durationMs;
+  const singleGoalSignals = !isMultiGoal ? goalSplit.goals[0]?.must_have_signals ?? [] : [];
+  const singleGoalGroundedQuery = buildGroundedRetrievalQuery({
+    subquery: queryForEmbed,
+    mustHaveSignals: !isMultiGoal ? singleGoalSignals : undefined,
+  });
+  const singleGoalQueryForEmbed = !isMultiGoal
+    ? singleGoalGroundedQuery.queryForRetrieval
+    : queryForEmbed;
 
   // Multi-goal path: per-goal retrieval → merge → coverage fusion → diversity cap
   if (isMultiGoal) {
@@ -963,8 +1001,27 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const allCollectionsUsed: string[] = [];
     let totalLatencyMulti = 0;
     let domainBootstrapAgg: DomainBootstrapResult | undefined;
-    for (const goal of goalSplit.goals) {
-      const one = await runOneGoal(goal, entities, searchPlan, steps, collections, qdrantCallCounter, lldbiHints);
+    const goalResults = await Promise.allSettled(
+      goalSplit.goals.map((goal) =>
+        runOneGoal(goal, entities, searchPlan, steps, collections, qdrantCallCounter, lldbiHints)
+      )
+    );
+    for (let goalIndex = 0; goalIndex < goalResults.length; goalIndex += 1) {
+      const settledGoal = goalResults[goalIndex];
+      const goal = goalSplit.goals[goalIndex];
+      if (settledGoal.status !== 'fulfilled') {
+        goalsSummary.push({
+          goal_id: goal.id,
+          goal_type: goal.goal_type,
+          subquery_preview: goal.subquery.slice(0, 200),
+          used_llm_planner: goalSplit.used_llm_planner,
+          split_source: goalSplitV2 ? 'TAXONOMY_CLUSTER_SPLIT_V2' : undefined,
+          act_pool_size: 0,
+        });
+        multiReasonCodes.push('GOAL_RETRIEVAL_FAILED');
+        continue;
+      }
+      const one = settledGoal.value;
       for (const h of one.hits) multiHits.push(h);
       allCollectionsUsed.push(...one.collectionsUsed);
       totalLatencyMulti += one.stepsLatencyMs.reduce((a, b) => a + b, 0);
@@ -992,22 +1049,31 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     // ушкодження" surfaces ккУ chunks that goal.subquery embedding misses.
     if (queryRewriteMeta.called && queryRewriteMeta.used && queryRewriteMeta.variants?.length && qdrantCallCounter.count < 20) {
       const varTopK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
-      for (const variant of queryRewriteMeta.variants.slice(0, 2)) {
-        const varEff = effectiveQuery(shapeQueryForRetrieval(variant, domainHint, []).shapedQuery);
+      const variantQueries = queryRewriteMeta.variants
+        .slice(0, 2)
+        .map((variant) => effectiveQuery(shapeQueryForRetrieval(variant, domainHint, []).shapedQuery));
+      if (variantQueries.length > 0) {
         try {
-          const varEmb = await embedQuery(varEff);
-          if (!varEmb.embedding?.length) continue;
-          const varHits = await qdrantSearch({
-            collection: collections.chunks,
-            vector: varEmb.embedding,
-            limit: varTopK,
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
-          });
-          for (const h of varHits) {
-            const raw = payloadToRawHit(h, 'lldbi_chunks');
-            if (raw.r2_key && raw.json_path) {
-              multiHits.push(raw);
+          const variantEmbeddings =
+            variantQueries.length > 1
+              ? await embedMany(variantQueries.map((variant) => variant.slice(0, 12000)))
+              : [await embedQuery(variantQueries[0])];
+          const variantSearchResults = await Promise.allSettled(
+            variantEmbeddings.map((embedding) =>
+              qdrantSearch({
+                collection: collections.chunks,
+                vector: embedding.embedding,
+                limit: varTopK,
+                timeoutMs: config.qdrantTimeoutSec * 1000,
+                callCounter: qdrantCallCounter,
+              })
+            )
+          );
+          for (const result of variantSearchResults) {
+            if (result.status !== 'fulfilled') continue;
+            for (const hit of result.value) {
+              const raw = payloadToRawHit(hit, 'lldbi_chunks');
+              if (raw.r2_key && raw.json_path) multiHits.push(raw);
             }
           }
         } catch {
@@ -1344,11 +1410,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   }
 
   const { shapedQuery, anchorsUsed } = shapeQueryForRetrieval(
-    queryForEmbed,
+    singleGoalQueryForEmbed,
     domainHint,
     taxonomyResult.anchor_tokens
   );
   const effective = effectiveQuery(shapedQuery);
+  const rankingQuery = effective;
   queryVariantsUsed.push(effective.slice(0, 200));
 
   const topK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
@@ -1356,8 +1423,18 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   // Build query list for multi-query retrieval (RRF): main + distinct variants for semantic expansion
   const effectiveNorm = effective.trim().toLowerCase();
+  const singleGoalQuerySelectors = extractQueryCitationSelectors(query);
+  const skipMultiQueryVariants =
+    goalSplit.reason_codes.includes('multi_clause_structure') ||
+    goalSplit.reason_codes.includes('procedural_bundle_compaction') ||
+    singleGoalSignals.length > 0 ||
+    singleGoalQuerySelectors.explicitSelectorCount > 0 ||
+    singleGoalQuerySelectors.noteMentioned;
   const variants =
-    config.u4MultiQueryEnabled && queryRewriteMeta?.variants?.length
+    config.u4MultiQueryEnabled &&
+    queryRewriteMeta.used === true &&
+    !skipMultiQueryVariants &&
+    queryRewriteMeta?.variants?.length
       ? queryRewriteMeta.variants
           .map((v) => (typeof v === 'string' ? v.trim() : ''))
           .filter((v) => v.length > 0 && v.toLowerCase() !== effectiveNorm)
@@ -1370,10 +1447,11 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const vectorsByQuery: number[][] = [];
   const embedStart = Date.now();
   try {
-    for (const q of queriesToSearch) {
-      const emb = await embedQuery(q.slice(0, 12000));
-      vectorsByQuery.push(emb.embedding);
-    }
+    const embeddings =
+      queriesToSearch.length > 1
+        ? await embedMany(queriesToSearch.map((q) => q.slice(0, 12000)))
+        : [await embedQuery(queriesToSearch[0].slice(0, 12000))];
+    vectorsByQuery.push(...embeddings.map((embedding) => embedding.embedding));
     vector = vectorsByQuery[0] ?? null;
     stepsLatencyMs.push(Date.now() - embedStart);
   } catch (err) {
@@ -1441,47 +1519,65 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   const rawPerStep: RawHit[] = [];
   const hitKey = (r: RawHit) => `${r.r2_key ?? ''}:${r.json_path ?? ''}`;
-  for (const { kind, collection } of stepsToRun) {
-    const stepStart = Date.now();
-    const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
-    try {
-      if (useMultiQuery && vectorsByQuery.length > 1) {
-        const lists: RawHit[][] = [];
-        for (const v of vectorsByQuery) {
+  const initialStepResults = await Promise.allSettled(
+    stepsToRun.map(async ({ kind, collection }) => {
+      const stepStart = Date.now();
+      const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
+      try {
+        let rawHits: RawHit[];
+        if (useMultiQuery && vectorsByQuery.length > 1) {
+          const perVectorResults = await Promise.allSettled(
+            vectorsByQuery.map((currentVector) =>
+              qdrantSearch({
+                collection,
+                vector: currentVector,
+                limit,
+                timeoutMs: config.qdrantTimeoutSec * 1000,
+                callCounter: qdrantCallCounter,
+              })
+            )
+          );
+          const lists = perVectorResults
+            .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof qdrantSearch>>> => result.status === 'fulfilled')
+            .map((result) =>
+              result.value
+                .map((hit) => payloadToRawHit(hit, kind))
+                .filter((raw) => raw.r2_key && raw.json_path)
+            );
+          rawHits = rrfMerge(lists, hitKey, (raw) => raw.score ?? 0);
+        } else {
           const hits = await qdrantSearch({
             collection,
-            vector: v,
+            vector: vector!,
             limit,
             timeoutMs: config.qdrantTimeoutSec * 1000,
             callCounter: qdrantCallCounter,
           });
-          const rawList = hits
-            .map((h) => payloadToRawHit(h, kind))
-            .filter((r) => r.r2_key && r.json_path);
-          lists.push(rawList);
+          rawHits = hits
+            .map((hit) => payloadToRawHit(hit, kind))
+            .filter((raw) => raw.r2_key && raw.json_path);
         }
-        const merged = rrfMerge(lists, hitKey, (r) => r.score ?? 0);
-        rawPerStep.push(...merged);
-      } else {
-        const hits = await qdrantSearch({
+        return {
           collection,
-          vector: vector!,
-          limit,
-          timeoutMs: config.qdrantTimeoutSec * 1000,
-          callCounter: qdrantCallCounter,
-        });
-        for (const h of hits) {
-          const raw = payloadToRawHit(h, kind);
-          if (raw.r2_key && raw.json_path) rawPerStep.push(raw);
-        }
+          latencyMs: Date.now() - stepStart,
+          rawHits,
+        };
+      } catch {
+        return {
+          collection,
+          latencyMs: Date.now() - stepStart,
+          rawHits: [] as RawHit[],
+          degraded: true,
+        };
       }
-      stepsLatencyMs.push(Date.now() - stepStart);
-      collectionsUsed.push(collection);
-    } catch (err) {
-      degraded.lldbi = true;
-      stepsLatencyMs.push(Date.now() - stepStart);
-      collectionsUsed.push(collection);
-    }
+    })
+  );
+  for (const result of initialStepResults) {
+    if (result.status !== 'fulfilled') continue;
+    if (result.value.degraded) degraded.lldbi = true;
+    stepsLatencyMs.push(result.value.latencyMs);
+    collectionsUsed.push(result.value.collection);
+    rawPerStep.push(...result.value.rawHits);
   }
 
   const aboveThreshold = rawPerStep.filter((h) => h.score >= minScore);
@@ -1497,10 +1593,22 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     (topScore != null && topScore < GOOD_SCORE_THRESHOLD);
   const hasActCandidates =
     (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 || stepsToRun.some((s) => s.kind === 'lldbi_acts');
+  const querySelectors = singleGoalQuerySelectors;
+  const withinActDecision = decideWithinActExpansion({
+    hasActCandidates,
+    needTwoStage,
+    querySelectors,
+    entities,
+    goalType: goalSplit.goals[0]?.goal_type,
+    goalReasonCodes: goalSplit.reason_codes,
+    mustHaveSignalsCount: singleGoalGroundedQuery.appliedSignals.length,
+    weakLimit: TWO_STAGE_ACTS_TOP,
+  });
+  const withinActLimit = withinActDecision.limit;
 
-  // Always run within-act retrieval when we have act candidates (taxonomy or acts search).
-  // This surfaces articles (e.g. ст.130) that rank lower globally but are relevant within the right act.
-  if (hasActCandidates && !degraded.lldbi) {
+  // Within-act retrieval is expensive. Keep it on weak first-pass runs and explicit structural/act-anchored queries,
+  // but skip it on already-strong generic single-goal runs to trim Qdrant fanout.
+  if (hasActCandidates && !degraded.lldbi && withinActLimit > 0) {
     const topNregs = buildWithinActPool({
       taxonomyNregs: taxonomyResult.rada_nreg_candidates ?? [],
       actSearchNregs: extractActSearchNregsFromHits(rawPerStep),
@@ -1509,7 +1617,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           ?.filter((candidate) => candidate.rada_nreg)
           .map((candidate) => candidate.rada_nreg as string) ?? [],
       categoryHintCount: categoryHints.length,
-      limit: TWO_STAGE_ACTS_TOP,
+      limit: withinActLimit,
     });
     if (topNregs.length > 0) {
       try {
@@ -1539,7 +1647,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   // Hybrid re-score for ordering (no extra LLM); hit.score unchanged for audit
   if (allHits.length > 0 && taxonomyResult.debug.source === 'supabase') {
-    applyHybridOrdering(allHits, query, taxonomyResult, entities);
+    applyHybridOrdering(allHits, rankingQuery, taxonomyResult, entities);
   }
 
   // Anti-noise: demote "Окрема думка" / "порядок торгівлі" etc. for ordering (with guard)
@@ -1617,7 +1725,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         allHits.push(...addedHits);
         const deduped = dedupeHits(allHits);
         if (taxonomyResult.debug.source === 'supabase') {
-          applyHybridOrdering(deduped, query, taxonomyResult, entities);
+          applyHybridOrdering(deduped, rankingQuery, taxonomyResult, entities);
         } else {
           deduped.sort(compareRawHitByScore);
         }
@@ -1658,7 +1766,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     allHits.push(...articleBackfill.addedHits);
     const deduped = dedupeHits(allHits);
     if (taxonomyResult.debug.source === 'supabase') {
-      applyHybridOrdering(deduped, query, taxonomyResult, entities);
+      applyHybridOrdering(deduped, rankingQuery, taxonomyResult, entities);
     } else {
       deduped.sort(compareRawHitByScore);
     }
@@ -1941,7 +2049,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     selected_acts_confidence_below_055: (selectedActsResult.selected_acts_confidence ?? 0) <= 0.55,
     selected_acts_confidence_below_06: (selectedActsResult.selected_acts_confidence ?? 0) < 0.6,
     selected_acts_confidence_below_065: (selectedActsResult.selected_acts_confidence ?? 0) < 0.65,
-    selected_acts_confidence_below_09: (selectedActsResult.selected_acts_confidence ?? 0) < 0.9,
+    selected_acts_confidence_below_075: (selectedActsResult.selected_acts_confidence ?? 0) < 0.75,
     reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
       'COVERAGE_GUARD_FAILED'
     ),
@@ -1976,7 +2084,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     // strongly-evidenced act. Routing hints can suggest alternative search angles or confirm.
     const mediumLowConfTrigger =
       (routingTriggers.goals_count ?? 1) === 1 &&
-      routingTriggers.selected_acts_confidence_below_09 === true;
+      routingTriggers.selected_acts_confidence_below_075 === true;
     if (!strongTrigger && !hasTaxonomyPrimaryForEvidence && !zeroRecallCall && !mediumLowConfTrigger) {
       routingHintsMeta = { ...routingHintsMeta, not_used_reason_codes: ['NOT_CALLED_NO_TAXONOMY_PRIMARY'] };
       incrementU4RoutingHintsNotUsed('NOT_CALLED_NO_TAXONOMY_PRIMARY');
@@ -2276,6 +2384,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     routing_hints_added_nregs: selected_acts_sources_breakdown_final.from_routing_hints,
     retrieval_evidence_nregs: finalHits.slice(0, 30).map((hit) => hit.rada_nreg ?? '').filter(Boolean),
   });
+  selected_acts_final = selectedActsFinalMeta.selected_acts_final;
   if (
     low_confidence_final &&
     routingHintsAddedPrimaryLaw &&
@@ -2350,6 +2459,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       query_variants_used: queryVariantsUsed.length ? queryVariantsUsed : undefined,
       multi_query_variants_count: useMultiQuery ? variants.length : undefined,
       used_filtered_chunks_search: usedFilteredChunksSearch || undefined,
+      within_act_policy: withinActDecision.reason_codes.length
+        ? withinActDecision.reason_codes
+        : undefined,
       anchors_used: anchorsUsed.length ? anchorsUsed : undefined,
       taxonomy_snapshot_version: taxonomySnapshotVersion ?? undefined,
       lldbi_hints_present: lldbiHintsPresent,
@@ -2363,7 +2475,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         used_taxonomy: taxonomyResult.debug.source === 'supabase',
         used_acts_search: usedActsSearch,
         used_filtered_chunks: usedFilteredChunksSearch,
-        used_llm_rewrite: queryForEmbed !== query,
+        used_llm_rewrite: queryRewriteMeta.used === true,
         used_llm_rerank: false,
         used_multi_query: useMultiQuery,
         used_goal_splitter: true,

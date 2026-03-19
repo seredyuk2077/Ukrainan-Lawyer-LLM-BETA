@@ -6,6 +6,7 @@
 import type { EvidenceGoal, EvidenceGoalType, GoalSplitResult } from './goals.js';
 import type { RoutingFlags } from '../classify/types.js';
 import { config } from '../lib/config.js';
+import { extractQueryCitationSelectors } from './structural-citation.js';
 
 const GOALS_MAX = config.u4GoalsMax;
 
@@ -85,6 +86,7 @@ const PROCEDURE_GOAL_PATTERNS = [
   /строк(?:у|и|ів)?/iu,
   /термін(?:у|и|ів)?/iu,
   /оскарж/iu,
+  /оскаржу/iu,
   /апеляц/iu,
   /касац/iu,
   /підслід/iu,
@@ -92,6 +94,8 @@ const PROCEDURE_GOAL_PATTERNS = [
   /розсліду/iu,
   /розгляд(?:ає|у|ом)?/iu,
   /пода(?:ти|ння|ється|вати)/iu,
+  /внес\p{L}*\s+відомост/iu,
+  /єрдр/iu,
   /куди/iu,
   /хто/iu,
   /коли/iu,
@@ -116,6 +120,16 @@ function uniqueSignals(signals: string[]): string[] {
   return [...new Set(signals.map((signal) => signal.trim()).filter(Boolean))];
 }
 
+function rankGoalSignal(signal: string): number {
+  const normalized = signal.normalize('NFC').trim().toLowerCase();
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const genericPenalty =
+    ['оскарження', 'строк', 'порядок', 'подання', 'підслідність', 'підсудність'].includes(normalized)
+      ? 6
+      : 0;
+  return wordCount * 12 + normalized.length - genericPenalty;
+}
+
 /** Cheap semantic goal typing from generic legal-question form; no act/domain hardcoding. */
 function inferGoalType(subquery: string, isComplianceContext: boolean): EvidenceGoalType {
   if (isComplianceContext) return 'compliance_check';
@@ -129,6 +143,9 @@ function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType):
   if (goalType !== 'procedure') return undefined;
   const normalized = normalizeSubqueryForSemantics(subquery);
   const signals: string[] = [];
+  const explicitTaxAppealAnchor =
+    /оскаржен\p{L}*\s+(?:податков\p{L}*\s+)?повідомлення-?рішення/iu.test(normalized) ||
+    /оскаржен\p{L}*\s+ппр/iu.test(normalized);
 
   if (/розсліду/iu.test(normalized)) {
     signals.push('підслідність', 'орган досудового розслідування');
@@ -152,17 +169,39 @@ function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType):
   if (/пода(?:ти|ння|ється|вати)/iu.test(normalized) || /куди/iu.test(normalized)) {
     signals.push('подання');
   }
-  if (/єрдр/iu.test(normalized) || /внести\s+відомост/iu.test(normalized)) {
+  if (/єрдр/iu.test(normalized) || /внес\p{L}*\s+відомост/iu.test(normalized)) {
     signals.push('початок досудового розслідування');
   }
+  if (
+    (/оскарж/iu.test(normalized) || /скарг/iu.test(normalized)) &&
+    (/єрдр/iu.test(normalized) || /внес\p{L}*\s+відомост/iu.test(normalized) || /реєстр/iu.test(normalized))
+  ) {
+    signals.push('скарга на бездіяльність', 'оскарження бездіяльності', 'бездіяльність слідчого');
+  }
+  if (/сплат/iu.test(normalized) && /(податков|повідомлення-?рішення|грошов)/iu.test(normalized)) {
+    signals.push("грошове зобов'язання");
+  }
+  if (
+    /(податков|повідомлення-?рішення|ппр)/iu.test(normalized) &&
+    (/оскарж/iu.test(normalized) || /скарг/iu.test(normalized))
+  ) {
+    signals.push('оскарження податкового повідомлення-рішення');
+    if (!explicitTaxAppealAnchor) {
+      signals.push('адміністративне оскарження');
+    }
+  }
 
-  const deduped = uniqueSignals(signals).filter((signal) => !normalized.includes(signal.toLowerCase()));
+  const deduped = uniqueSignals(signals)
+    .filter((signal) => !normalized.includes(signal.toLowerCase()))
+    .sort((left, right) => rankGoalSignal(right) - rankGoalSignal(left));
   return deduped.length > 0 ? deduped.slice(0, 3) : undefined;
 }
 
 /** Structure-only: query has two segments separated by " і " or " та " (min length each). Used to trigger planner for multi-clause. */
 export function hasMultiClauseStructure(query: string, minSegmentLength = 5): boolean {
   const q = query.normalize('NFC').trim();
+  const selectors = extractQueryCitationSelectors(q);
+  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) return false;
   const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
   if (!andMatch) return false;
   return andMatch[1].trim().length >= minSegmentLength && andMatch[2].trim().length >= minSegmentLength;
@@ -200,10 +239,13 @@ function splitIntoSubqueries(query: string): string[] {
     if (parts.length > 0) return injectSharedSubjectIntoQuestionParts(parts).slice(0, GOALS_MAX);
   }
 
+  const selectors = extractQueryCitationSelectors(q);
+  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) return [q];
+
   const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
   if (andMatch && andMatch[1].length >= 5 && andMatch[2].length >= 5) {
     const [left, right] = injectSharedTailIntoSplit(andMatch[1], andMatch[2]);
-    return [left, right].slice(0, GOALS_MAX);
+    return injectSharedSubjectIntoQuestionParts([left, right]).slice(0, GOALS_MAX);
   }
 
   return [q];
@@ -223,6 +265,12 @@ function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
       [/це\s+правопорушення/iu, sharedSubject],
       [/цей\s+договір/iu, sharedSubject],
       [/це\s+питання/iu, sharedSubject],
+      [/так(?:е|ого|ому)\s+оскаржен(?:ня|ні|ню|ням)/iu, sharedSubject],
+      [/так(?:у|ої|ою)\s+скарг(?:у|и|ою|і)/iu, sharedSubject],
+      [/так(?:у|ої|ою)\s+заяв(?:у|и|ою|і)/iu, sharedSubject],
+      [/так(?:ий|ого|ому)\s+позов(?:у|ом)?/iu, sharedSubject],
+      [/так(?:е|ого|ому)\s+рішенн(?:я|і|ю|ям)/iu, sharedSubject],
+      [/так(?:ій|ої|ою)\s+справ(?:і|и|ою)/iu, sharedSubject],
     ];
     for (const [pattern, replacement] of replacements) {
       updated = updated.replace(pattern, replacement);
@@ -230,9 +278,10 @@ function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
 
     const normalizedUpdated = normalizeSubqueryForSemantics(updated).toLowerCase();
     const normalizedSubject = sharedSubject.toLowerCase();
+    const isYesNoFollowUp = /^(?:і\s+|та\s+)?чи(?:[\s?]|$)/iu.test(updated);
     const isGenericProceduralQuestion =
-      /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|в\s+який\s+строк|який\s+строк|який\s+порядок)\b/iu.test(updated);
-    if (isGenericProceduralQuestion && !normalizedUpdated.includes(normalizedSubject)) {
+      /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|чи|в\s+який\s+строк|який\s+строк|який\s+порядок)(?:[\s?]|$)/iu.test(updated);
+    if ((isGenericProceduralQuestion || isYesNoFollowUp) && !normalizedUpdated.includes(normalizedSubject)) {
       updated = `${updated.replace(/\?+$/g, '').trim()} ${sharedSubject}`.trim();
       if (/\?$/.test(part)) updated = `${updated}?`;
     }
@@ -252,7 +301,7 @@ function extractSharedSubject(prefix: string): string {
 function extractSubjectFocus(subject: string): string {
   const normalized = subject.normalize('NFC').replace(/\?+$/g, '').trim();
   const prepositionMatch = normalized.match(
-    /(?:^|[\s,])(?:від|про|щодо|для|при|після|під\s+час|у|в)\s+(.+)$/iu
+    /(?:^|[\s,])(?:від|про|щодо|для|при|після|під\s+час|за|у|в)\s+(.+)$/iu
   );
   if (prepositionMatch?.[1]?.trim()) return prepositionMatch[1].trim();
   const tokens = normalized
@@ -287,8 +336,61 @@ function buildContrastiveLiabilitySubqueries(query: string): string[] | null {
       subjectFocus && subjectFocus !== sharedSubject ? `${subjectFocus} ` : `${sharedSubject} `;
     return `${compactSubjectPrefix}${aspect}${needsLiabilityTail ? ' відповідальність' : ''}`.trim();
   });
-  const deduped = [...new Set([prefix, ...aspectQueries].map((part) => part.trim()).filter(Boolean))];
-  return deduped.length >= 2 ? deduped.slice(0, GOALS_MAX) : null;
+  const dedupedAspects = [...new Set(aspectQueries.map((part) => part.trim()).filter(Boolean))];
+  if (dedupedAspects.length >= 2) {
+    return dedupedAspects.slice(0, GOALS_MAX);
+  }
+
+  const fallback = [...new Set([prefix, ...dedupedAspects].map((part) => part.trim()).filter(Boolean))];
+  return fallback.length >= 2 ? fallback.slice(0, GOALS_MAX) : null;
+}
+
+function hasProceduralBundleReference(query: string): boolean {
+  const normalized = query.normalize('NFC');
+  return [
+    /так(?:е|ого|ому)\s+оскаржен/iu,
+    /(?:це|таке)\s+оскаржу/iu,
+    /так(?:у|ої|ою)\s+скарг/iu,
+    /так(?:у|ої|ою)\s+заяв/iu,
+    /так(?:ий|ого|ому)\s+позов/iu,
+    /так(?:е|ого|ому)\s+рішенн/iu,
+    /так(?:ій|ої|ою)\s+справ/iu,
+    /цю\s+заяв/iu,
+    /цю\s+скарг/iu,
+    /це\s+рішенн/iu,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function mergeGoalSignals(goals: EvidenceGoal[]): string[] | undefined {
+  const merged = [
+    ...new Set(
+      goals
+        .flatMap((goal) => goal.must_have_signals ?? [])
+        .map((signal) => signal.trim())
+        .filter(Boolean)
+    ),
+  ];
+  return merged.length > 0 ? merged : undefined;
+}
+
+function tryCompactProceduralBundleGoals(
+  query: string,
+  goals: EvidenceGoal[],
+  domainHint: string | undefined,
+  isComplianceContext: boolean
+): EvidenceGoal[] | null {
+  if (goals.length < 2) return null;
+  if (!goals.every((goal) => goal.goal_type === 'procedure')) return null;
+  if (!hasProceduralBundleReference(query)) return null;
+  return [
+    {
+      id: 'goal_0',
+      goal_type: isComplianceContext ? 'compliance_check' : 'procedure',
+      subquery: query.slice(0, 4000),
+      domain_hint: domainHint,
+      must_have_signals: mergeGoalSignals(goals),
+    },
+  ];
 }
 
 /**
@@ -347,6 +449,21 @@ export function heuristicGoalSplit(
       domain_hint: domainForGoal,
       must_have_signals: buildGoalMustHaveSignals(sub, goalType),
     });
+  }
+
+  const compactedProceduralGoals = tryCompactProceduralBundleGoals(
+    query,
+    goals,
+    domainHint,
+    inputLikeContract
+  );
+  if (compactedProceduralGoals) {
+    return {
+      goals: compactedProceduralGoals,
+      used_heuristic: true,
+      used_llm_planner: false,
+      reason_codes: [...reasonCodes, 'procedural_bundle_compaction'],
+    };
   }
 
   return {

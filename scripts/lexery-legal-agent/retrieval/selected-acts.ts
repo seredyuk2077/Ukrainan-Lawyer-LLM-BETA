@@ -297,14 +297,13 @@ const FAMILY_CONFLICT_TOP2_MIN = 0.45;
  */
 const NOISE_KINDS: ActKind[] = ['BILL_DRAFT', 'CASELAW_OPINION', 'KSU_DECISION'];
 
-const SINGLE_GOAL_SUPPORT_RATIO_MIN = 0.65;
-const MULTI_GOAL_SUPPORT_RATIO_MIN = 0.45;
 const CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE = 5;
 const CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE = 0.68;
 const NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN = 5;
 const NON_PRIMARY_STRONG_SUPPORT_BEST_RANK_MAX = 8;
 const MULTI_GOAL_SINGLE_ACT_COUNT_RATIO = 3;
 const MULTI_GOAL_SINGLE_ACT_RANK_MASS_RATIO = 2.5;
+const SINGLE_GOAL_PRIMARY_FAMILY_DOMINANCE_RATIO = 2;
 
 function hasMaterialChunkEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
@@ -335,6 +334,13 @@ function hasStrongNonPrimarySupportEvidence(item: ChunksEvidenceItem | undefined
     (bestRank <= NON_PRIMARY_STRONG_SUPPORT_BEST_RANK_MAX &&
       (item.max_ordering_score ?? item.max_score) >= CHUNKS_EVIDENCE_SCORE_THRESHOLD)
   );
+}
+
+function candidateHasFamilyGuardEvidenceSupport(
+  radaNreg: string,
+  chunksEvidenceByNreg: Map<string, ChunksEvidenceItem>
+): boolean {
+  return hasMaterialChunkEvidence(chunksEvidenceByNreg.get(radaNreg));
 }
 
 function canOverrideNonPrimaryPrimaryLawBlock(
@@ -378,6 +384,68 @@ function isFamilyAlignedSupportAct(
   return true;
 }
 
+function canFallbackSelectAct(input: {
+  candidate: ActCandidateInput;
+  evidence: ChunksEvidenceItem | undefined;
+  documentTypeHints?: string[];
+  familyEvidence?: FamilyEvidenceSummaryInput;
+  isMultiGoal: boolean;
+  hasStrongPrimaryLawEvidence: boolean;
+  actCandidatesTop: ActCandidateInput[];
+}): boolean {
+  const { candidate, evidence } = input;
+  const kind = classifyActKind(candidate.title ?? '', candidate.document_type, candidate.category);
+  const hasEvidence = Boolean(evidence);
+  const strongTopRankEvidence = hasStrongTopRankEvidence(evidence);
+  const allowedByHint = documentTypeHintMatches(candidate.document_type, input.documentTypeHints ?? []);
+  const familyAligned = isFamilyAlignedSupportAct(candidate.category, input.familyEvidence);
+  const crossFamilyEvidenceOverride =
+    (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
+    (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
+
+  if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) return false;
+  if (kind === 'BILL_DRAFT' && !hasEvidence && (!allowedByHint || !hintsAllowDraft(input.documentTypeHints ?? []))) {
+    return false;
+  }
+  if (kind === 'CASELAW_OPINION') {
+    const strongEvidence = evidence && evidence.count_in_top30 >= 3;
+    const hasPrimaryInCandidates = input.actCandidatesTop.some(
+      (candidateItem) =>
+        classifyActKind(candidateItem.title ?? '', candidateItem.document_type, candidateItem.category) === 'PRIMARY_LAW'
+    );
+    if (!strongEvidence && hasPrimaryInCandidates) return false;
+  }
+  if (kind === 'KSU_DECISION') {
+    const hasPrimaryInCandidates = input.actCandidatesTop.some(
+      (candidateItem) =>
+        classifyActKind(candidateItem.title ?? '', candidateItem.document_type, candidateItem.category) === 'PRIMARY_LAW'
+    );
+    if (
+      (hasPrimaryInCandidates && !hasStrongNonPrimarySupportEvidence(evidence)) ||
+      shouldBlockKsuUnderPrimaryLawDominance(input.isMultiGoal, input.hasStrongPrimaryLawEvidence, evidence)
+    ) {
+      return false;
+    }
+  }
+  if (
+    !input.isMultiGoal &&
+    kind !== 'PRIMARY_LAW' &&
+    input.hasStrongPrimaryLawEvidence &&
+    !strongTopRankEvidence &&
+    !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence)
+  ) {
+    return false;
+  }
+  if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride && !strongTopRankEvidence) {
+    return false;
+  }
+
+  return (
+    hasMaterialChunkEvidence(evidence) ||
+    allowedByHint
+  );
+}
+
 function shouldAllowSingleActCoverageForMultiGoal(
   isMultiGoal: boolean,
   chunksEvidenceTopActs: ChunksEvidenceItem[],
@@ -401,6 +469,8 @@ function shouldAllowSingleActCoverageForMultiGoal(
   }
   const second = strongEvidence[1];
   if (!second) return true;
+  const topStrongEvidenceNregs = new Set(strongEvidence.slice(0, 3).map((item) => item.rada_nreg));
+  if (topStrongEvidenceNregs.size === 1) return true;
   const secondCandidate = candidateByNreg.get(second.rada_nreg);
   const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
   const secondFamilyKey = categoryToFamilyKey(secondCandidate?.category);
@@ -417,8 +487,8 @@ function shouldAllowSingleActCoverageForMultiGoal(
     topFamilyKey !== 'unknown' &&
     secondFamilyKey !== 'unknown' &&
     topFamilyKey !== secondFamilyKey &&
-    secondBestRank <= 4 &&
-    hasMaterialChunkEvidence(second)
+    secondBestRank <= 3 &&
+    isStrongChunksEvidence(second)
   ) {
     return false;
   }
@@ -466,7 +536,6 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       : isMultiGoal
         ? Math.max(SELECTED_ACTS_MIN_MULTI, input.goals_summary.length)
         : SELECTED_ACTS_MIN_SINGLE;
-  const topCandidateScore = Math.max(...actCandidatesTop.map((candidate) => candidate.score ?? 0), 0);
   const reasonCodes: string[] = [];
   const selected: SelectedActOutput[] = [];
   const fromTaxonomy: string[] = [];
@@ -553,10 +622,6 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       const crossFamilyEvidenceOverride =
         (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
         (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
-      const supportScoreFloor =
-        topCandidateScore > 0
-          ? topCandidateScore * (isMultiGoal ? MULTI_GOAL_SUPPORT_RATIO_MIN : SINGLE_GOAL_SUPPORT_RATIO_MIN)
-          : 0;
       if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
         if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_NO_EVIDENCE');
         else if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
@@ -604,12 +669,9 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         pushReasonCode(reasonCodes, 'SUPPORT_FAMILY_MISMATCH_BLOCKED');
         continue;
       }
-      const supportEligible =
-        hasMaterialEvidence ||
-        allowedByHint ||
-        (a.source_tier === 'ACTS_1' && (a.score ?? 0) >= supportScoreFloor);
+      const supportEligible = hasMaterialEvidence;
       if (!supportEligible) continue;
-      if (NOISE_KINDS.includes(kind) && allowedByHint && !hasEvidence) docTypeHintAllowedUsed = true;
+      if (allowedByHint && hasMaterialEvidence) docTypeHintAllowedUsed = true;
       selected.push({
         rada_nreg: a.rada_nreg,
         act_title: a.title,
@@ -628,7 +690,18 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
 
   // Enforce minimum: if we have fewer than SELECTED_ACTS_MIN, fill from actCandidatesTop
   while (selected.length < selectedActsMin && selected.length < actCandidatesTop.length) {
-    const next = actCandidatesTop.find((a) => !selected.some((s) => s.rada_nreg === a.rada_nreg));
+    const next = actCandidatesTop.find((a) => {
+      if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
+      return canFallbackSelectAct({
+        candidate: a,
+        evidence: chunksEvidenceByNreg.get(a.rada_nreg),
+        documentTypeHints,
+        familyEvidence,
+        isMultiGoal,
+        hasStrongPrimaryLawEvidence,
+        actCandidatesTop,
+      });
+    });
     if (!next) break;
     const source: string[] = [];
     if (taxonomyNregs.has(next.rada_nreg)) source.push('TAXONOMY');
@@ -838,7 +911,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           if (classifyActKind(a.title ?? '', a.document_type, a.category) !== 'PRIMARY_LAW') return false;
           return categoryToFamilyKey(a.category) === familyEvidence.dominant_family_key;
         });
-        if (candidate) {
+        if (candidate && candidateHasFamilyGuardEvidenceSupport(candidate.rada_nreg, chunksEvidenceByNreg)) {
           selected.push({
             rada_nreg: candidate.rada_nreg,
             act_title: candidate.title,
@@ -852,7 +925,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           familyGuardActions.push({ goal_id: goalId, family: familyEvidence.dominant_family_key, added_rada_nreg: candidate.rada_nreg });
           includedFromFamilyGuard = true;
         } else {
-          reasonCodes.push('COVERAGE_GUARD_FAILED');
+          pushReasonCode(reasonCodes, candidate ? 'FAMILY_GUARD_NO_EVIDENCE' : 'COVERAGE_GUARD_FAILED');
         }
       }
     }
@@ -875,7 +948,11 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
             if (classifyActKind(a.title ?? '', a.document_type, a.category) !== 'PRIMARY_LAW') return false;
             return categoryToFamilyKey(a.category) === fam;
           });
-          if (candidate && selected.length < SELECTED_ACTS_MAX_OUT) {
+          if (
+            candidate &&
+            selected.length < SELECTED_ACTS_MAX_OUT &&
+            candidateHasFamilyGuardEvidenceSupport(candidate.rada_nreg, chunksEvidenceByNreg)
+          ) {
             selected.push({
               rada_nreg: candidate.rada_nreg,
               act_title: candidate.title,
@@ -888,6 +965,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
             if (actsSearchNregs.includes(candidate.rada_nreg)) fromActsSearch.push(candidate.rada_nreg);
             familyGuardActions.push({ goal_id: goalId, family: fam, added_rada_nreg: candidate.rada_nreg });
             includedFromFamilyGuard = true;
+          } else if (candidate) {
+            pushReasonCode(reasonCodes, 'FAMILY_GUARD_NO_EVIDENCE');
           }
         }
       }
@@ -1039,6 +1118,59 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         if (!keep.has(selected[i].rada_nreg)) selected.splice(i, 1);
       }
       reasonCodes.push('SINGLE_GOAL_TAIL_TRIMMED');
+    }
+  }
+
+  if (
+    isSingleGoal &&
+    familyEvidence?.dominant_family_key &&
+    familyEvidence.family_confidence >= FAMILY_GUARD_CONFIDENCE_THRESHOLD &&
+    !familyEvidence.family_conflict
+  ) {
+    const selectedPrimaryActs = selected.filter((act) => {
+      const cand = candidateByNreg.get(act.rada_nreg);
+      return (
+        classifyActKind(cand?.title ?? act.act_title ?? '', cand?.document_type, cand?.category) ===
+        'PRIMARY_LAW'
+      );
+    });
+    if (selectedPrimaryActs.length > 1) {
+      const rankedPrimaryActs = [...selectedPrimaryActs].sort((left, right) => {
+        const leftEvidence = chunksEvidenceByNreg.get(left.rada_nreg);
+        const rightEvidence = chunksEvidenceByNreg.get(right.rada_nreg);
+        if (leftEvidence && rightEvidence) {
+          const diff = compareChunksEvidenceStrength(leftEvidence, rightEvidence);
+          if (diff !== 0) return diff;
+        }
+        return (right.score ?? 0) - (left.score ?? 0);
+      });
+      const dominantAct = rankedPrimaryActs[0];
+      const dominantCandidate = candidateByNreg.get(dominantAct.rada_nreg);
+      const dominantEvidence = chunksEvidenceByNreg.get(dominantAct.rada_nreg);
+      const dominantFamilyKey = categoryToFamilyKey(dominantCandidate?.category);
+      if (
+        dominantEvidence &&
+        isStrongChunksEvidence(dominantEvidence) &&
+        dominantFamilyKey === familyEvidence.dominant_family_key
+      ) {
+        const offFamilyPrimaryActs = rankedPrimaryActs.slice(1).filter((act) => {
+          const candidate = candidateByNreg.get(act.rada_nreg);
+          const familyKey = categoryToFamilyKey(candidate?.category);
+          if (familyKey === familyEvidence.dominant_family_key) return false;
+          const evidence = chunksEvidenceByNreg.get(act.rada_nreg);
+          if (isStrongChunksEvidence(evidence)) return false;
+          const dominantRankMass = dominantEvidence.rank_mass_top30 ?? 0;
+          const candidateRankMass = evidence?.rank_mass_top30 ?? 0;
+          return dominantRankMass >= candidateRankMass * SINGLE_GOAL_PRIMARY_FAMILY_DOMINANCE_RATIO;
+        });
+        if (offFamilyPrimaryActs.length > 0) {
+          const offFamilyNregs = new Set(offFamilyPrimaryActs.map((act) => act.rada_nreg));
+          for (let index = selected.length - 1; index >= 0; index -= 1) {
+            if (offFamilyNregs.has(selected[index].rada_nreg)) selected.splice(index, 1);
+          }
+          reasonCodes.push('SINGLE_GOAL_OFF_FAMILY_PRIMARY_TRIMMED');
+        }
+      }
     }
   }
 
