@@ -19,6 +19,10 @@ import { computeChunksEvidenceTopActs } from './selected-acts.js';
 import type { QueryCitationSelectors } from './structural-citation.js';
 import type { RawHit } from './types.js';
 
+export function deriveTopScoreFromHits(hits: RawHit[]): number | null {
+  return hits.length > 0 ? Math.max(...hits.map((hit) => hit.score)) : null;
+}
+
 export function shouldSkipReferenceExpansionForStrongCoverage(
   finalHits: RawHit[],
   querySelectors: QueryCitationSelectors
@@ -218,7 +222,7 @@ export async function runSingleGoalHitPostprocess(
 
   return {
     finalHits,
-    topScore: input.topScore,
+    topScore: deriveTopScoreFromHits(finalHits),
     hitsTotalBeforeCap,
     hitsCapApplied,
     avgScore,

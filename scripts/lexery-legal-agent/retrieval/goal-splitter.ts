@@ -83,6 +83,8 @@ function getDomainsFromHint(domainHint?: string): { multi: boolean; domains: str
 const PROCEDURE_GOAL_PATTERNS = [
   /поряд(?:ок|ку)/iu,
   /процедур/iu,
+  /реєстрац/iu,
+  /зареєстр/iu,
   /строк(?:у|и|ів)?/iu,
   /термін(?:у|и|ів)?/iu,
   /оскарж/iu,
@@ -93,7 +95,8 @@ const PROCEDURE_GOAL_PATTERNS = [
   /підсуд/iu,
   /розсліду/iu,
   /розгляд(?:ає|у|ом)?/iu,
-  /пода(?:ти|ння|ється|вати)/iu,
+  /(?:^|[\s,])пода(?:ти|ння|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu,
+  /документ\p{L}*\s+пода(?:ти|ння|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu,
   /внес\p{L}*\s+відомост/iu,
   /єрдр/iu,
   /куди/iu,
@@ -159,6 +162,9 @@ function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType):
   if (/строк(?:у|и|ів)?/iu.test(normalized) || /термін(?:у|и|ів)?/iu.test(normalized) || /коли/iu.test(normalized)) {
     signals.push('строк');
   }
+  if (/реєстрац/iu.test(normalized) || /зареєстр/iu.test(normalized)) {
+    signals.push('реєстрація');
+  }
   if (
     /поряд(?:ок|ку)/iu.test(normalized) ||
     /процедур/iu.test(normalized) ||
@@ -166,7 +172,11 @@ function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType):
   ) {
     signals.push('порядок');
   }
-  if (/пода(?:ти|ння|ється|вати)/iu.test(normalized) || /куди/iu.test(normalized)) {
+  if (
+    /(?:^|[\s,])пода(?:ти|ння|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu.test(normalized) ||
+    /куди/iu.test(normalized) ||
+    /документ\p{L}*/iu.test(normalized)
+  ) {
     signals.push('подання');
   }
   if (/єрдр/iu.test(normalized) || /внес\p{L}*\s+відомост/iu.test(normalized)) {
@@ -280,7 +290,7 @@ function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
     const normalizedSubject = sharedSubject.toLowerCase();
     const isYesNoFollowUp = /^(?:і\s+|та\s+)?чи(?:[\s?]|$)/iu.test(updated);
     const isGenericProceduralQuestion =
-      /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|чи|в\s+який\s+строк|який\s+строк|який\s+порядок)(?:[\s?]|$)/iu.test(updated);
+      /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|чи|в\s+який\s+строк|який\s+строк|який\s+порядок|які\s+документ\p{L}*|який\s+перелік\s+документ\p{L}*)(?:[\s?]|$)/iu.test(updated);
     if ((isGenericProceduralQuestion || isYesNoFollowUp) && !normalizedUpdated.includes(normalizedSubject)) {
       updated = `${updated.replace(/\?+$/g, '').trim()} ${sharedSubject}`.trim();
       if (/\?$/.test(part)) updated = `${updated}?`;
@@ -305,7 +315,7 @@ function extractSubjectFocus(subject: string): string {
   );
   if (prepositionMatch?.[1]?.trim()) return prepositionMatch[1].trim();
   const tokens = normalized
-    .split(/[^\p{L}\p{N}-]+/u)
+    .split(/[^\p{L}\p{N}'’ʼ-]+/u)
     .map((token) => token.trim())
     .filter(
       (token) =>
@@ -360,6 +370,9 @@ function hasProceduralBundleReference(query: string): boolean {
     /це\s+рішенн/iu,
     /(?:під|на)\s+час\s+(?:оскаржен|розгляд\p{L}*|подан\p{L}*|розслідуван\p{L}*|виконан\p{L}*)/iu,
     /(?:при|після|у\s+ході)\s+(?:оскаржен|розгляд\p{L}*|подан\p{L}*|розслідуван\p{L}*|виконан\p{L}*)/iu,
+    /які\s+документ\p{L}*\s+пода(?:ти|ння|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu,
+    /який\s+перелік\s+документ\p{L}*/iu,
+    /в\s+який\s+строк/iu,
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -411,6 +424,18 @@ function looksLikeNormLocatorBundle(query: string, goals: EvidenceGoal[]): boole
   return /(?:норм|статт|положенн|вимог|наслідк|підстав|строк)/iu.test(goalText);
 }
 
+export function hasExplicitActScopeCue(query: string): boolean {
+  const normalized = query.normalize('NFC');
+  return [
+    /(?:^|[\s,])за\s+законом\s+про\s+/iu,
+    /(?:^|[\s,])законом?\s+про\s+/iu,
+    /(?:^|[\s,])відповідно\s+до\s+(?:закону|кодексу|порядку|правил|положення)/iu,
+    /(?:^|[\s,])згідно\s+із?\s+(?:законом|кодексом|порядком|правилами|положенням)/iu,
+    /(?:^|[\s,])передбачен\p{L}*\s+(?:законом|кодексом|порядком|правилами|положенням)/iu,
+    /(?:^|[\s,])кодекс(?:ом|у|і)?\s+україни/iu,
+  ].some((pattern) => pattern.test(normalized));
+}
+
 function tryCompactSameActBundleGoals(
   query: string,
   goals: EvidenceGoal[],
@@ -420,10 +445,11 @@ function tryCompactSameActBundleGoals(
 ): EvidenceGoal[] | null {
   if (goals.length < 2) return null;
   if (!reasonCodes.includes('multi_clause_structure')) return null;
+  const explicitActScopeCue = hasExplicitActScopeCue(query);
   const questionMarks = (query.match(/\?/g) || []).length;
-  if (reasonCodes.includes('multi_question') && questionMarks >= 2) return null;
+  if (reasonCodes.includes('multi_question') && questionMarks >= 2 && !explicitActScopeCue) return null;
   if (reasonCodes.includes('contrastive_liability_split')) return null;
-  if (!looksLikeNormLocatorBundle(query, goals)) return null;
+  if (!looksLikeNormLocatorBundle(query, goals) && !explicitActScopeCue) return null;
   if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
   const distinctGoalDomains = new Set(
     goals
@@ -435,7 +461,7 @@ function tryCompactSameActBundleGoals(
   const mergedSignals = mergeGoalSignals(goals);
   const hasProcedure = goals.some((goal) => goal.goal_type === 'procedure');
   const hasLiability = goals.some((goal) => goal.goal_type === 'liability');
-  if (hasProcedure && hasLiability) return null;
+  if (hasProcedure && hasLiability && !explicitActScopeCue) return null;
   const compactedGoalType = hasProcedure && !hasLiability
     ? 'procedure'
     : hasLiability && !hasProcedure

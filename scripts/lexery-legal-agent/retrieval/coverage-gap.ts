@@ -55,11 +55,23 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
     reasonCodes.has('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY') ||
     reasonCodes.has('UNGROUNDED_PRIMARY_FALLBACK') ||
     reasonCodes.has('NON_PRIMARY_ONLY_WEAK_CONFIDENCE') ||
-    reasonCodes.has('GOAL_ACT_POOL_WEAK');
+    reasonCodes.has('GOAL_ACT_POOL_WEAK') ||
+    reasonCodes.has('FRAGMENTED_PRIMARY_FAMILY_SELECTION') ||
+    reasonCodes.has('DOMAIN_HINT_PRIMARY_FAMILY_MISMATCH') ||
+    reasonCodes.has('UNGROUNDED_MULTI_FAMILY_SELECTION');
   const hasMissingActSignal =
     reasonCodes.has('NO_STRONG_ACT_EVIDENCE') ||
     reasonCodes.has('COVERAGE_MISS_SELECTED_ACTS') ||
-    reasonCodes.has('COVERAGE_GUARD_FAILED');
+    reasonCodes.has('COVERAGE_GUARD_FAILED') ||
+    reasonCodes.has('MISSING_TAXONOMY_CONVERGENCE') ||
+    reasonCodes.has('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE') ||
+    reasonCodes.has('FAMILY_GUARD_NO_EVIDENCE') ||
+    reasonCodes.has('FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
+  const hasExplicitMissingTaxonomySignal = reasonCodes.has('MISSING_TAXONOMY_CONVERGENCE');
+  const hasExplicitActScopeNoConvergence = reasonCodes.has('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE');
+  const hasFamilyGuardMissingSignal =
+    reasonCodes.has('FAMILY_GUARD_NO_EVIDENCE') ||
+    reasonCodes.has('FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
   const lowSelectionConfidence = (input.selectedActsConfidence ?? 0) < 0.55;
   const noStableSelectedActs = input.selectedActsCount === 0 || lowSelectionConfidence;
   const hasPrimarySelectedAct = (input.selectedActKinds ?? []).some((kind) => kind === 'PRIMARY_LAW');
@@ -68,6 +80,15 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
   const weakTopScore = (input.topScore ?? 0) < 0.42;
   const sparseOrWeakHits = input.hitsCount <= 5 || weakTopScore;
 
+  if (looksLegallySpecific(input) && lowSelectionConfidence && hasExplicitMissingTaxonomySignal) {
+    return 'likely_missing_act';
+  }
+  if (hasExplicitActScopeNoConvergence) {
+    return 'likely_missing_act';
+  }
+  if (looksLegallySpecific(input) && lowSelectionConfidence && hasFamilyGuardMissingSignal && hasPrimarySelectedAct) {
+    return 'likely_missing_act';
+  }
   if (looksLegallySpecific(input) && hasMissingActSignal && noStableSelectedActs && sparseOrWeakHits) {
     return 'likely_missing_act';
   }

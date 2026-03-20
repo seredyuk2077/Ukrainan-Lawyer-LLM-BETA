@@ -24,7 +24,10 @@ import {
 import {
   buildSingleGoalFirstPassPlan,
 } from '../../retrieval/single-goal-first-pass.js';
-import { shouldSkipReferenceExpansionForStrongCoverage } from '../../retrieval/single-goal-hit-postprocess.js';
+import {
+  deriveTopScoreFromHits,
+  shouldSkipReferenceExpansionForStrongCoverage,
+} from '../../retrieval/single-goal-hit-postprocess.js';
 import {
   buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
@@ -251,6 +254,46 @@ function testGoalSplitAddsSpecificTaxAppealSignals(): void {
     throw new Error(`Expected tax payment follow-up to keep tax-notice appeal signal, got ${JSON.stringify(followUpSignals)}`);
   }
   console.log('[OK] heuristicGoalSplit adds specific tax appeal signals for payment/complaint follow-up');
+}
+
+function testGoalSplitCompactsExplicitActBundleAcrossQuestions(): void {
+  const q =
+    "Чи треба реєструвати авторське право на твір і які права має автор за законом про авторське право?";
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected explicit-act same-bundle query to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts explicit-act same-bundle query across questions');
+}
+
+function testGoalSplitCompactsExplicitActClauseBundle(): void {
+  const q = 'Які права автора передбачені законом про авторське право і суміжні права?';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected explicit-act clause bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts explicit-act clause bundle');
+}
+
+function testGoalSplitCompactsProceduralBundleWithDocumentsFollowUp(): void {
+  const q = "Як зареєструвати авторське право на комп'ютерну програму і які документи подаються?";
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected registration/documents bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected registration/documents bundle to infer procedure goal, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('procedural_bundle_compaction')) {
+    throw new Error(`Expected procedural_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts procedural registration/documents bundle');
 }
 
 function testGoalSplitMarksProceduralSingleGoal(): void {
@@ -1946,6 +1989,97 @@ function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
   console.log('[OK] coverage-gap promotes legally specific weak runs to likely_missing_act');
 }
 
+function testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['MISSING_TAXONOMY_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.49,
+    selectedActKinds: ['PRIMARY_LAW', 'PRIMARY_LAW'],
+    hitsCount: 8,
+    topScore: 0.58,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected missing-taxonomy convergence to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes missing-taxonomy convergence to likely_missing_act');
+}
+
+function testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['FAMILY_GUARD_NO_EVIDENCE', 'ACT_SELECTION_LOW_CONFIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.48,
+    selectedActKinds: ['PRIMARY_LAW', 'PRIMARY_LAW'],
+    hitsCount: 11,
+    topScore: 0.63,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected family-guard no-evidence to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes family-guard no-evidence to likely_missing_act');
+}
+
+function testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['EXPLICIT_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.51,
+    selectedActKinds: ['PRIMARY_LAW'],
+    hitsCount: 14,
+    topScore: 0.61,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected explicit-act-scope no-convergence to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes explicit-act-scope no-convergence to likely_missing_act');
+}
+
+function testDeriveTopScoreFromHitsUsesPostprocessedHits(): void {
+  const topScore = deriveTopScoreFromHits([
+    {
+      rada_nreg: '322-08',
+      r2_key: 'r2://a',
+      json_path: '$.content.chunks[0].text',
+      score: 0.49,
+      ordering_score: 0.52,
+      source: 'lldbi_chunks',
+    },
+    {
+      rada_nreg: '322-08',
+      r2_key: 'r2://b',
+      json_path: '$.content.chunks[1].text',
+      score: 0.67,
+      ordering_score: 0.7,
+      source: 'lldbi_chunks',
+    },
+  ]);
+  if (topScore !== 0.67) {
+    throw new Error(`Expected postprocessed topScore 0.67, got ${topScore}`);
+  }
+  if (deriveTopScoreFromHits([]) !== null) {
+    throw new Error('Expected empty postprocessed hits to produce null topScore');
+  }
+  console.log('[OK] single-goal postprocess recomputes topScore from final hits');
+}
+
 function testNormalizeFinalReasonCodesDropsRecoveredWeakSignals(): void {
   const finalReasonCodes = normalizeFinalReasonCodes(
     [
@@ -3016,6 +3150,9 @@ async function main(): Promise<void> {
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
   testGoalSplitAddsSpecificTaxAppealSignals();
+  testGoalSplitCompactsExplicitActBundleAcrossQuestions();
+  testGoalSplitCompactsExplicitActClauseBundle();
+  testGoalSplitCompactsProceduralBundleWithDocumentsFollowUp();
   testGoalSplitMarksProceduralSingleGoal();
   testGoalSplitCompactsProceduralBundleWithAnaphora();
   testGoalSplitCompactsProceduralBundleWithSharedProcessReference();
@@ -3088,6 +3225,10 @@ async function main(): Promise<void> {
   testSelectedActsTrimNonPrimaryOnlyTailAndLowerConfidence();
   testCoverageGapTreatsNoPrimaryLawAsWeakEvidence();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
+  testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
+  testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
+  testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct();
+  testDeriveTopScoreFromHitsUsesPostprocessedHits();
   testNormalizeFinalReasonCodesDropsRecoveredWeakSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();

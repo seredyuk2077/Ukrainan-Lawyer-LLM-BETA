@@ -6,6 +6,7 @@ import {
 import type { ActMeta } from './act-taxonomy-store.js';
 import { deriveCoverageGap } from './coverage-gap.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary, type FamilyEvidence } from './family-evidence.js';
+import { hasExplicitActScopeCue } from './goal-splitter.js';
 import {
   callRoutingHints,
   shouldCallRoutingHints,
@@ -89,6 +90,8 @@ export interface ResolveSingleGoalSelectedActsInput {
   actsSearchNregs: string[];
   domainHint?: string;
   documentTypeHints?: string[];
+  taxonomyActCount: number;
+  aliasHitCount: number;
   actSelectionLowConfidence: boolean;
   reasonCodes: string[];
   useLowConfidenceFallback: boolean;
@@ -228,6 +231,8 @@ export async function resolveSingleGoalSelectedActs(
     actsSearchNregs,
     domainHint,
     documentTypeHints,
+    taxonomyActCount,
+    aliasHitCount,
     actSelectionLowConfidence,
     useLowConfidenceFallback,
     queryRewriteMeta,
@@ -318,6 +323,9 @@ export async function resolveSingleGoalSelectedActs(
   const recoveredEmptySelected =
     selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE') ||
     selectedActsResult.selected_acts_reason_codes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY');
+  const familyGuardMissingEvidence =
+    selectedActsResult.selected_acts_reason_codes.includes('FAMILY_GUARD_NO_EVIDENCE') ||
+    selectedActsResult.selected_acts_reason_codes.includes('FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
 
   let low_confidence_final =
     useLowConfidenceFallback ||
@@ -325,6 +333,7 @@ export async function resolveSingleGoalSelectedActs(
     (familyWeakOrNoPrimary && !specializedDomainNoPrimary) ||
     (selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') &&
       !coverageGuardFiredButFamilyOk) ||
+    familyGuardMissingEvidence ||
     recoveredEmptySelected;
 
   const oodGuardResult: OodGuardResult = {
@@ -396,7 +405,8 @@ export async function resolveSingleGoalSelectedActs(
     reason_codes_include_coverage_guard_failed: selectedActsResult.selected_acts_reason_codes.includes(
       'COVERAGE_GUARD_FAILED'
     ),
-    reason_codes_include_no_strong_act_evidence: reasonCodes.includes('NO_STRONG_ACT_EVIDENCE'),
+    reason_codes_include_no_strong_act_evidence:
+      reasonCodes.includes('NO_STRONG_ACT_EVIDENCE') || familyGuardMissingEvidence,
     confident_family_mismatch: confidentFamilyMismatch,
     goals_count: 1,
     selected_acts_empty_or_very_low: selected_acts.length === 0,
@@ -490,6 +500,7 @@ export async function resolveSingleGoalSelectedActs(
       const expandAllowed =
         confidentFamilyMismatch ||
         familyWeakOrNoPrimary ||
+        familyGuardMissingEvidence ||
         selectedActsResult.selected_acts_reason_codes.includes('COVERAGE_GUARD_FAILED') ||
         reasonCodes.includes('NO_STRONG_ACT_EVIDENCE');
       if (conf < 0.55 && !expandAllowed && routingResult.output?.routing?.families_ranked?.length) {
@@ -851,6 +862,22 @@ export async function resolveSingleGoalSelectedActs(
     hasDomainAlignedPrimaryFamily &&
     !leadSelectedFamilyAlignedToDomain &&
     (topScore ?? 0) < 0.6;
+  const missingTaxonomyConvergence =
+    taxonomyActCount === 0 &&
+    aliasHitCount === 0 &&
+    (documentTypeHints?.length ?? 0) > 0 &&
+    selectedPrimaryActs.length >= 2 &&
+    distinctPrimaryFamilies.length >= 2 &&
+    !leadSelectedMetadataGrounded &&
+    (topScore ?? 0) < 0.66;
+  const diffuseTaxonomyConvergence =
+    aliasHitCount === 0 &&
+    (taxonomyActCount === 0 || taxonomyActCount >= 8);
+  const explicitActScopeNoConvergence =
+    hasExplicitActScopeCue(query) &&
+    diffuseTaxonomyConvergence &&
+    selectedPrimaryActs.length >= 1 &&
+    (topScore ?? 0) < 0.68;
 
   if (fragmentedPrimaryFamilySelection) {
     low_confidence_final = true;
@@ -866,6 +893,16 @@ export async function resolveSingleGoalSelectedActs(
     low_confidence_final = true;
     pushUnique(reasonCodes, 'UNGROUNDED_MULTI_FAMILY_SELECTION');
     pushUnique(reasonCodes, 'LOW_EVIDENCE');
+  }
+  if (missingTaxonomyConvergence) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'MISSING_TAXONOMY_CONVERGENCE');
+    pushUnique(reasonCodes, 'NO_STRONG_ACT_EVIDENCE');
+  }
+  if (explicitActScopeNoConvergence) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE');
+    pushUnique(reasonCodes, 'NO_STRONG_ACT_EVIDENCE');
   }
   if (
     hasPrimarySelectedAct &&

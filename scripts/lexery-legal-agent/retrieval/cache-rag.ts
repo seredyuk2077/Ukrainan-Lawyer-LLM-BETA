@@ -1630,7 +1630,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     allHits.length < MIN_HITS_FOR_TWO_STAGE ||
     (topScore != null && topScore < GOOD_SCORE_THRESHOLD);
   const hasActCandidates =
-    (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 || stepsToRun.some((s) => s.kind === 'lldbi_acts');
+    (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 || usedActsSearch;
   const querySelectors = singleGoalQuerySelectors;
   const withinActDecision = decideWithinActExpansion({
     hasActCandidates,
@@ -1805,6 +1805,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     actsSearchNregs: actNregsFromSearch,
     domainHint,
     documentTypeHints,
+    taxonomyActCount: taxonomyResult.rada_nreg_candidates?.length ?? 0,
+    aliasHitCount: taxonomyResult.alias_hits?.length ?? 0,
     actSelectionLowConfidence,
     reasonCodes,
     useLowConfidenceFallback,

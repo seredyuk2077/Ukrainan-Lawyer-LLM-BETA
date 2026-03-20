@@ -96,4 +96,6 @@ U3a → [U4] → heuristicGoalSplit → [if 1 goal: getTaxonomyCandidates → tr
 
 - Embedding failure → degraded_sources.lldbi=true, hits=[], U5 все одно enqueue.
 - Qdrant unreachable → degraded_sources.lldbi=true, hits=[], U5 enqueue.
+- Missing-act honesty path: якщо query виглядає юридично конкретним, але LLDBI/taxonomy не сходяться до стабільного act pool, final hits слабкі/шумні, або explicit-act query не конвергує до grounded act evidence, U4 має ставити `low_confidence=true` і `coverage_gap=likely_missing_act` замість удавано впевненого success.
+- Validation case: `2811-20` (`Про авторське право і суміжні права`) був перевірений у двох станах. До ingest direct copyright-law query чесно переходив у `likely_missing_act`; після ingest через LLDBI CLI той самий query стабільно повертав `2811-20` як primary grounded act.
 - Див. `decisions/degraded-policy.md`.
