@@ -68,7 +68,7 @@ type ProbeRow = {
   category: string | null;
   document_type: string | null;
   validity_status: string | null;
-  probe_kind: 'alias' | 'title_fragment';
+  probe_kind: 'alias' | 'title_fragment' | 'nreg' | 'anchored_title' | 'cued_number';
   query: string;
 };
 
@@ -89,6 +89,120 @@ type AuditResult = {
   low_confidence: boolean;
   coverage_gap: string;
 };
+
+type ProbeMode = 'best' | 'generalized';
+
+type ActSummary = {
+  rada_nreg: string;
+  title: string;
+  category: string | null;
+  document_type: string | null;
+  validity_status: string | null;
+  total_probes: number;
+  pass_probes: number;
+  pass_any: boolean;
+  grounded_probes_total: number;
+  grounded_probes_pass: number;
+  grounded_probe_pass_any: boolean;
+  alias_probes_total: number;
+  alias_probes_pass: number;
+  low_confidence_probes: number;
+  coverage_gaps_seen: string[];
+};
+
+const GROUNDED_PROBE_KINDS = new Set<ProbeRow['probe_kind']>([
+  'nreg',
+  'anchored_title',
+  'title_fragment',
+  'cued_number',
+]);
+
+function normalizeActReferenceCue(value: string | null | undefined): string | null {
+  const firstToken = String(value ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .find(Boolean);
+  if (!firstToken) return null;
+  if (firstToken.startsWith('указ')) return 'указ';
+  if (firstToken.startsWith('постан')) return 'постанова';
+  if (firstToken.startsWith('наказ')) return 'наказ';
+  if (firstToken.startsWith('розпоряджен')) return 'розпорядження';
+  if (firstToken.startsWith('рішен')) return 'рішення';
+  if (firstToken.startsWith('закон')) return 'закон';
+  if (firstToken.startsWith('кодекс')) return 'кодекс';
+  if (firstToken.startsWith('правил')) return 'правила';
+  if (firstToken.startsWith('поряд')) return 'порядок';
+  if (firstToken.startsWith('інструкц')) return 'інструкція';
+  if (firstToken.startsWith('положен')) return 'положення';
+  if (firstToken.startsWith('регламент')) return 'регламент';
+  if (firstToken.startsWith('конвенц')) return 'конвенція';
+  if (firstToken.startsWith('договор') || firstToken.startsWith('договір')) return 'договір';
+  if (firstToken.startsWith('статут')) return 'статут';
+  return null;
+}
+
+function extractLeadingNumericStem(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .trim();
+  const match = normalized.match(/(\d{1,8})/u);
+  const digits = match?.[1]?.replace(/^0+/u, '');
+  return digits || null;
+}
+
+function createActSummary(result: AuditResult): ActSummary {
+  const groundedProbe = GROUNDED_PROBE_KINDS.has(result.probe_kind);
+  return {
+    rada_nreg: result.rada_nreg,
+    title: result.title,
+    category: result.category,
+    document_type: result.document_type,
+    validity_status: result.validity_status,
+    total_probes: 1,
+    pass_probes: result.pass ? 1 : 0,
+    pass_any: result.pass,
+    grounded_probes_total: groundedProbe ? 1 : 0,
+    grounded_probes_pass: groundedProbe && result.pass ? 1 : 0,
+    grounded_probe_pass_any: groundedProbe && result.pass,
+    alias_probes_total: result.probe_kind === 'alias' ? 1 : 0,
+    alias_probes_pass: result.probe_kind === 'alias' && result.pass ? 1 : 0,
+    low_confidence_probes: result.low_confidence ? 1 : 0,
+    coverage_gaps_seen: result.coverage_gap ? [result.coverage_gap] : [],
+  };
+}
+
+function mergeActSummary(summary: ActSummary, result: AuditResult): ActSummary {
+  const groundedProbe = GROUNDED_PROBE_KINDS.has(result.probe_kind);
+  const coverageGaps = new Set(summary.coverage_gaps_seen);
+  if (result.coverage_gap) coverageGaps.add(result.coverage_gap);
+  return {
+    ...summary,
+    total_probes: summary.total_probes + 1,
+    pass_probes: summary.pass_probes + (result.pass ? 1 : 0),
+    pass_any: summary.pass_any || result.pass,
+    grounded_probes_total: summary.grounded_probes_total + (groundedProbe ? 1 : 0),
+    grounded_probes_pass: summary.grounded_probes_pass + (groundedProbe && result.pass ? 1 : 0),
+    grounded_probe_pass_any: summary.grounded_probe_pass_any || (groundedProbe && result.pass),
+    alias_probes_total: summary.alias_probes_total + (result.probe_kind === 'alias' ? 1 : 0),
+    alias_probes_pass: summary.alias_probes_pass + (result.probe_kind === 'alias' && result.pass ? 1 : 0),
+    low_confidence_probes: summary.low_confidence_probes + (result.low_confidence ? 1 : 0),
+    coverage_gaps_seen: [...coverageGaps].sort(),
+  };
+}
+
+function buildActSummary(results: AuditResult[]): ActSummary[] {
+  const byAct = new Map<string, ActSummary>();
+  for (const result of results) {
+    const current = byAct.get(result.rada_nreg);
+    byAct.set(
+      result.rada_nreg,
+      current ? mergeActSummary(current, result) : createActSummary(result)
+    );
+  }
+  return [...byAct.values()].sort((left, right) => left.rada_nreg.localeCompare(right.rada_nreg));
+}
 
 function getArgValue(name: string): string | null {
   const direct = process.argv.find((arg) => arg.startsWith(`${name}=`));
@@ -224,7 +338,44 @@ function buildTitleFragment(title: string): string {
   return tokens.slice(0, 8).join(' ').trim();
 }
 
-function buildProbe(doc: DocRow): ProbeRow {
+function buildAnchoredTitle(doc: DocRow): string | null {
+  const fragment = buildTitleFragment(doc.title);
+  const documentType = doc.document_type?.trim();
+  if (!documentType) return null;
+  const normalizedFragment = normalizeKey(fragment);
+  const normalizedDocumentType = normalizeKey(documentType);
+  if (normalizedFragment.startsWith(normalizedDocumentType)) return fragment;
+  return `${documentType} ${fragment}`.trim();
+}
+
+function buildCuedNumberProbe(doc: DocRow): string | null {
+  const cue =
+    normalizeActReferenceCue(doc.document_type) ??
+    normalizeActReferenceCue(doc.document_type_slug) ??
+    normalizeActReferenceCue(doc.title);
+  const numericStem = extractLeadingNumericStem(doc.rada_nreg);
+  if (!cue || !numericStem || numericStem.length < 3) return null;
+  return `${cue} №${numericStem}`;
+}
+
+function canUseNregProbe(radaNreg: string): boolean {
+  const normalized = radaNreg.normalize('NFC').trim();
+  return normalized.length >= 3 && /\d/.test(normalized);
+}
+
+function dedupeProbes(probes: ProbeRow[]): ProbeRow[] {
+  const seen = new Set<string>();
+  const deduped: ProbeRow[] = [];
+  for (const probe of probes) {
+    const key = `${probe.probe_kind}::${normalizeKey(probe.query)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(probe);
+  }
+  return deduped;
+}
+
+function buildBestProbe(doc: DocRow): ProbeRow {
   const alias = pickBestAlias(doc.title, doc.aliases);
   if (alias) {
     return {
@@ -246,6 +397,74 @@ function buildProbe(doc: DocRow): ProbeRow {
     probe_kind: 'title_fragment',
     query: buildTitleFragment(doc.title),
   };
+}
+
+function buildProbes(doc: DocRow, probeMode: ProbeMode): ProbeRow[] {
+  if (probeMode === 'best') return [buildBestProbe(doc)];
+
+  const probes: ProbeRow[] = [];
+  if (canUseNregProbe(doc.rada_nreg)) {
+    probes.push({
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'nreg',
+      query: doc.rada_nreg,
+    });
+  }
+
+  const alias = pickBestAlias(doc.title, doc.aliases);
+  if (alias) {
+    probes.push({
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'alias',
+      query: alias,
+    });
+  }
+
+  const anchoredTitle = buildAnchoredTitle(doc);
+  if (anchoredTitle) {
+    probes.push({
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'anchored_title',
+      query: anchoredTitle,
+    });
+  }
+
+  const cuedNumber = buildCuedNumberProbe(doc);
+  if (cuedNumber) {
+    probes.push({
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'cued_number',
+      query: cuedNumber,
+    });
+  }
+
+  probes.push({
+    rada_nreg: doc.rada_nreg,
+    title: doc.title,
+    category: doc.category,
+    document_type: doc.document_type,
+    validity_status: doc.validity_status,
+    probe_kind: 'title_fragment',
+    query: buildTitleFragment(doc.title),
+  });
+
+  return dedupeProbes(probes);
 }
 
 function findHitRank(trace: RetrievalTraceLike | null, radaNreg: string): number | null {
@@ -286,16 +505,20 @@ async function main(): Promise<void> {
   const limit = parseInt(getArgValue('--limit') ?? '60', 10);
   const offset = parseInt(getArgValue('--offset') ?? '0', 10);
   const maxRank = parseInt(getArgValue('--max-rank') ?? '12', 10);
+  const probeMode = (getArgValue('--probe-mode') ?? 'best') as ProbeMode;
+  if (!['best', 'generalized'].includes(probeMode)) {
+    throw new Error(`Unsupported --probe-mode=${probeMode}; expected best|generalized`);
+  }
   const reportPath = resolve(
     process.cwd(),
     'scripts/lexery-legal-agent/tools/_reports/lldbi_act_coverage_audit.json'
   );
 
   const docs = await fetchIndexedDocs(limit, offset);
-  const probes = docs.map(buildProbe);
+  const probes = docs.flatMap((doc) => buildProbes(doc, probeMode));
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[audit_lldbi_act_coverage] port', port, 'probes', probes.length);
+  console.log('[audit_lldbi_act_coverage] port', port, 'docs', docs.length, 'probes', probes.length, `mode=${probeMode}`);
 
   const serverEnv = {
     ...process.env,
@@ -330,7 +553,11 @@ async function main(): Promise<void> {
       const trace = await loadTrace(runId, retrievalTrace);
       const rank = findHitRank(trace, probe.rada_nreg);
       const selected = selectedActHit(trace, probe.rada_nreg);
-      const pass = selected || (rank != null && rank <= maxRank);
+      const groundedProbe = GROUNDED_PROBE_KINDS.has(probe.probe_kind);
+      const honestyOk = trace?.meta?.low_confidence !== true && (trace?.meta?.coverage_gap ?? 'none') === 'none';
+      const pass = groundedProbe
+        ? selected && honestyOk
+        : selected || (rank != null && rank <= maxRank);
       results.push({
         rada_nreg: probe.rada_nreg,
         title: probe.title,
@@ -387,17 +614,30 @@ async function main(): Promise<void> {
   const report = {
     generated_at: new Date().toISOString(),
     total: results.length,
+    docs_total: docs.length,
     pass: passCount,
     fail: failCount,
     max_rank: maxRank,
     offset,
     limit,
+    probe_mode: probeMode,
     latency_p50_ms: p50Latency,
     latency_p95_ms: p95Latency,
     qdrant_calls_median: medianQdrant,
+    probe_summary: (['nreg', 'alias', 'anchored_title', 'title_fragment', 'cued_number'] as ProbeRow['probe_kind'][])
+      .map((probeKind) => {
+        const probeResults = results.filter((result) => result.probe_kind === probeKind);
+        return {
+          probe_kind: probeKind,
+          total: probeResults.length,
+          pass: probeResults.filter((result) => result.pass).length,
+        };
+      })
+      .filter((bucket) => bucket.total > 0),
     category_summary: [...byCategory.entries()]
       .sort((left, right) => right[1].total - left[1].total)
       .map(([category, stats]) => ({ category, ...stats })),
+    act_summary: buildActSummary(results),
     failures: results.filter((result) => !result.pass),
     results,
   };
@@ -411,6 +651,13 @@ async function main(): Promise<void> {
   console.log(`latency p50 ms: ${p50Latency}`);
   console.log(`latency p95 ms: ${p95Latency}`);
   console.log(`qdrant_calls median: ${medianQdrant}`);
+  for (const bucket of report.probe_summary) {
+    console.log(`probe ${bucket.probe_kind}: ${bucket.pass}/${bucket.total} PASS`);
+  }
+  const actPassAny = report.act_summary.filter((item) => item.pass_any).length;
+  const groundedActPassAny = report.act_summary.filter((item) => item.grounded_probe_pass_any).length;
+  console.log(`act pass_any: ${actPassAny}/${report.act_summary.length}`);
+  console.log(`act grounded_probe_pass_any: ${groundedActPassAny}/${report.act_summary.length}`);
   if (failCount > 0) {
     console.log('sample failures:');
     for (const failure of results.filter((result) => !result.pass).slice(0, 12)) {

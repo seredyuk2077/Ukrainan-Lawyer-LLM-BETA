@@ -6,14 +6,20 @@
 import {
   heuristicGoalSplit,
   hasMultiClauseStructure,
+  hasExplicitActScopeCue,
   getProcedureCategoryEnvelope,
+  tryCategoryClusterSplitV2,
 } from '../../retrieval/goal-splitter.js';
 import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
 import {
   buildTaxonomyQuerySignals,
+  extractCuedNumericActReferences,
+  extractActReferenceSignals,
+  extractStructuredActIdentifiers,
   scoreActCandidate,
   findActByTitleFragment,
 } from '../../retrieval/act-taxonomy-store.js';
+import { extractEntities } from '../../classify/entity-extractor.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
 import { selectActPlannerTier } from '../../retrieval/act-planner.js';
 import {
@@ -60,6 +66,7 @@ import { deriveCoverageGap } from '../../retrieval/coverage-gap.js';
 import {
   isDomainHintAlignedFamily,
   normalizeFinalReasonCodes,
+  resolveSingleGoalSelectedActs,
 } from '../../retrieval/single-goal-selected-acts.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 
@@ -206,6 +213,19 @@ function testGoalSplitCarriesSharedTailAcrossClauses(): void {
   console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
 }
 
+function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
+  if (!hasExplicitActScopeCue('Які документи подаються за постановою № 1178?')) {
+    throw new Error('Expected subordinate act number cue to count as explicit act scope');
+  }
+  if (!hasExplicitActScopeCue('2811-20 які документи подаються для реєстрації?')) {
+    throw new Error('Expected structured act identifier to count as explicit act scope');
+  }
+  if (hasExplicitActScopeCue('Який порядок реєстрації і які документи подаються?')) {
+    throw new Error('Expected generic procedural query without grounded act cue to remain non-grounded');
+  }
+  console.log('[OK] hasExplicitActScopeCue handles structured ids and subordinate act anchors');
+}
+
 function testGoalSplitCarriesSubjectIntoProceduralQuestion(): void {
   const q = 'Що таке шахрайство? Хто розслідує цю статтю?';
   const r = heuristicGoalSplit(q, 'criminal', undefined);
@@ -294,6 +314,28 @@ function testGoalSplitCompactsProceduralBundleWithDocumentsFollowUp(): void {
     throw new Error(`Expected procedural_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
   }
   console.log('[OK] heuristicGoalSplit compacts procedural registration/documents bundle');
+}
+
+function testCategoryClusterSplitSkipsGroundedSingleAct(): void {
+  const split = tryCategoryClusterSplitV2(
+    {
+      alias_hits: [
+        { rada_nreg: '66/2026', category: 'other' },
+        { rada_nreg: '45/2026', category: 'administrative' },
+        { rada_nreg: '46/2026', category: 'national_security' },
+      ],
+      category_hints: ['other'],
+      grounded_act_hit_count: 1,
+      exact_act_hit_count: 0,
+    },
+    'Що регулює Указ про призначення Кубраков?',
+    'general',
+    undefined
+  );
+  if (split != null) {
+    throw new Error(`Expected taxonomy cluster split to skip grounded single-act query, got ${JSON.stringify(split)}`);
+  }
+  console.log('[OK] taxonomy cluster split skips grounded single-act convergence');
 }
 
 function testGoalSplitMarksProceduralSingleGoal(): void {
@@ -432,6 +474,57 @@ function testStrongTaxonomySignalHelperMatchesSingleGoalPolicy(): void {
   console.log('[OK] taxonomy-strength helper stays aligned with single-goal strong-signal policy');
 }
 
+function testStrongTaxonomySignalTreatsExactActHitAsStrong(): void {
+  const strong = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 0,
+      exact_act_hit_count: 1,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (!strong) {
+    throw new Error('Expected exact structured act hit to count as strong single-goal taxonomy signal');
+  }
+  console.log('[OK] taxonomy-strength helper treats exact act identifier matches as strong support');
+}
+
+function testStrongTaxonomySignalTreatsGroundedAliasAsStrong(): void {
+  const strong = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 4,
+      grounded_act_hit_count: 1,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (!strong) {
+    throw new Error('Expected grounded exact alias/title match to count as strong taxonomy support');
+  }
+  console.log('[OK] taxonomy-strength helper treats grounded exact alias/title matches as strong support');
+}
+
+function testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly(): void {
+  const strong = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 5,
+      grounded_act_hit_count: 0,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (strong) {
+    throw new Error('Expected fuzzy alias-hit volume alone not to count as strong taxonomy support');
+  }
+  console.log('[OK] taxonomy-strength helper ignores fuzzy alias-hit volume without grounded act support');
+}
+
 function testDomainHintAlignedFamilyHelper(): void {
   if (!isDomainHintAlignedFamily('civil', 'civil_procedure')) {
     throw new Error('Expected civil domain hint to align with civil_procedure family');
@@ -503,6 +596,28 @@ function testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak(): void {
     throw new Error(`Expected ACTS_SEARCH_ENABLED reason code, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
   }
   console.log('[OK] single-goal first-pass plan keeps acts search when taxonomy signal is weak');
+}
+
+function testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: undefined,
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 5,
+      grounded_act_hit_count: 0,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (!result.usedActsSearch) {
+    throw new Error(`Expected fuzzy alias-hit volume not to suppress acts search, got ${JSON.stringify(result)}`);
+  }
+  console.log('[OK] single-goal first-pass plan keeps acts search when only fuzzy alias volume is present');
 }
 
 function testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest(): void {
@@ -656,6 +771,19 @@ function testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns(): void {
   console.log('[OK] within-act pool can prefer first-pass chunk evidence on strong runs');
 }
 
+function testBuildWithinActPoolPrioritizesGroundedSingleAct(): void {
+  const pool = buildWithinActPool({
+    groundedNregs: ['66/2026'],
+    taxonomyNregs: ['66/2026', '45/2026', '46/2026'],
+    chunkEvidenceNregs: ['1861-17', '254к/96-вр'],
+    limit: 4,
+  });
+  if (pool[0] !== '66/2026') {
+    throw new Error(`Expected grounded single act to stay first in within-act pool, got ${JSON.stringify(pool)}`);
+  }
+  console.log('[OK] within-act pool prioritizes grounded single-act convergence');
+}
+
 function testQueryRewritePolicySkipsAnchoredStructuralTitleQuery(): void {
   const decision = decideQueryRewritePolicy({
     query: 'Який обов\'язок продавця щодо інформації про товар передбачений пунктом 12 Правил роздрібної торгівлі непродовольчими товарами?',
@@ -703,6 +831,49 @@ function testQueryRewritePolicySkipsWhenStrongTaxonomySignalExists(): void {
     throw new Error(`Expected STRONG_TAXONOMY_SIGNAL, got ${JSON.stringify(decision.reason_codes)}`);
   }
   console.log('[OK] query rewrite policy skips when single-goal taxonomy signal is already strong');
+}
+
+function testQueryRewritePolicySkipsWhenExactActIdentifierConverges(): void {
+  const decision = decideQueryRewritePolicy({
+    query: '1150-98-п',
+    entities: [],
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 0,
+      exact_act_hit_count: 1,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (decision.shouldCall) {
+    throw new Error(`Expected exact act identifier convergence to skip rewrite, got ${JSON.stringify(decision)}`);
+  }
+  if (!decision.reason_codes.includes('STRONG_TAXONOMY_SIGNAL')) {
+    throw new Error(`Expected STRONG_TAXONOMY_SIGNAL for exact act id convergence, got ${JSON.stringify(decision.reason_codes)}`);
+  }
+  console.log('[OK] query rewrite policy skips when exact act identifier already converges in taxonomy');
+}
+
+function testQueryRewritePolicyAllowsFuzzyAliasVolumeOnly(): void {
+  const decision = decideQueryRewritePolicy({
+    query: 'Постанова 1178',
+    entities: [],
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 1,
+      alias_hit_count: 5,
+      grounded_act_hit_count: 0,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (decision.reason_codes.includes('STRONG_TAXONOMY_SIGNAL')) {
+    throw new Error(
+      `Expected fuzzy alias volume alone not to look like grounded taxonomy support, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] query rewrite policy does not mistake fuzzy alias volume for grounded taxonomy support');
 }
 
 function testQueryRewritePolicyAllowsBroadNaturalLanguageQuery(): void {
@@ -1968,6 +2139,168 @@ function testCoverageGapTreatsNoPrimaryLawAsWeakEvidence(): void {
   console.log('[OK] coverage-gap treats no-primary-law low-confidence runs as weak evidence');
 }
 
+async function testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'За постановою № 1178 які документи подаються для участі в закупівлі?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '1178-2022-п',
+        r2_key: 'r2://1178',
+        json_path: '$.chunks[0]',
+        score: 0.548,
+        ordering_score: 0.482,
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників',
+        unit_type: 'point',
+        unit_number: '47',
+      },
+      {
+        rada_nreg: 'z1257-07',
+        r2_key: 'r2://z1257',
+        json_path: '$.chunks[1]',
+        score: 0.478,
+        ordering_score: 0.292,
+        title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+        unit_type: 'point',
+        unit_number: '9',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1178-2022-п',
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників',
+        score: 0.92,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'postanova-kmu',
+      },
+      {
+        rada_nreg: 'z1257-07',
+        title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+        score: 0.71,
+        category: 'administrative',
+        document_type: 'Наказ',
+        document_type_slug: 'nakaz',
+      },
+      {
+        rada_nreg: 'z0270-10',
+        title: 'Про затвердження Типових правил роботи оптових ринків сільськогосподарської продукції',
+        score: 0.63,
+        category: 'administrative',
+        document_type: 'Наказ',
+        document_type_slug: 'nakaz',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['1178-2022-п']),
+    actsSearchNregs: ['1178-2022-п', 'z1257-07', 'z0270-10'],
+    domainHint: 'administrative',
+    documentTypeHints: ['Постанова КМУ'],
+    taxonomyActCount: 1,
+    aliasHitCount: 1,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.548,
+    avgScore: 0.52,
+    categoryHintsCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '1178-2022-п',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.53,
+        max_score: 0.61,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.63,
+      },
+      {
+        rada_nreg: 'z1257-07',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.47,
+        max_score: 0.52,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.81,
+        max_ordering_score: 0.29,
+      },
+      {
+        rada_nreg: 'z0270-10',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.44,
+        max_score: 0.49,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.42,
+        max_ordering_score: 0.24,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '1178-2022-п': {
+          title:
+            'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'postanova-kmu',
+          storage_category: null,
+        },
+        'z1257-07': {
+          title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+          category: 'administrative',
+          document_type: 'Наказ',
+          document_type_slug: 'nakaz',
+          storage_category: null,
+        },
+        'z0270-10': {
+          title: 'Про затвердження Типових правил роботи оптових ринків сільськогосподарської продукції',
+          category: 'administrative',
+          document_type: 'Наказ',
+          document_type_slug: 'nakaz',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'active',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected explicit subordinate-act scope to stay confident, got low_confidence=true with ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected explicit subordinate-act scope to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '1178-2022-п') {
+    throw new Error(`Expected subordinate-act scope trim to keep only 1178-2022-п, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (result.reasonCodes.includes('NO_PRIMARY_LAW_EVIDENCE') || result.reasonCodes.includes('LOW_EVIDENCE')) {
+    throw new Error(`Expected authoritative subordinate-act scope to clear primary-law weak-evidence codes, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer keeps grounded subordinate-act scope without false weak_evidence');
+}
+
 function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -2050,6 +2383,70 @@ function testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct(): 
     throw new Error(`Expected explicit-act-scope no-convergence to map to likely_missing_act, got ${coverageGap}`);
   }
   console.log('[OK] coverage-gap promotes explicit-act-scope no-convergence to likely_missing_act');
+}
+
+function testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['COVERAGE_MISS_SELECTED_ACTS', 'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED', 'LOW_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: true,
+    proceduralOnlySelection: true,
+    hitsCount: 24,
+    topScore: 0.66,
+    domainHint: 'general',
+    categoryHintCount: 1,
+    documentTypeHintCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected mixed-goal procedural fallback to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes mixed-goal procedural fallback to likely_missing_act');
+}
+
+function testCoverageGapUsesGroundedActScopeNoConvergenceForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['GROUNDED_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 0,
+    selectedActsConfidence: 0.4,
+    hitsCount: 20,
+    topScore: 0.58,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected grounded-act-scope no-convergence to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes grounded-act-scope no-convergence to likely_missing_act');
+}
+
+function testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['NO_ACT_GROUNDING_PROCEDURAL_PRIMARY_ONLY', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.84,
+    selectedActKinds: ['PRIMARY_LAW'],
+    hitsCount: 12,
+    topScore: 0.61,
+    domainHint: 'administrative',
+    categoryHintCount: 1,
+    documentTypeHintCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected procedural-primary-only ungrounded path to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes procedural-primary-only ungrounded path to likely_missing_act');
 }
 
 function testDeriveTopScoreFromHitsUsesPostprocessedHits(): void {
@@ -2143,6 +2540,58 @@ function testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases(): void {
     throw new Error(`Expected phrase-level signal for tax notice, got ${JSON.stringify(signals.phrases)}`);
   }
   console.log('[OK] buildTaxonomyQuerySignals keeps multi-word legal phrases for metadata matching');
+}
+
+function testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers(): void {
+  const signals = buildTaxonomyQuerySignals('Які вимоги встановлює акт 1150-98-п і що змінює v0003359-26?');
+  if (!signals.tokens.includes('1150-98-п')) {
+    throw new Error(`Expected structured nreg token to survive query-signal build, got ${JSON.stringify(signals.tokens)}`);
+  }
+  if (!signals.phrases.includes('v0003359-26')) {
+    throw new Error(`Expected structured act id phrase to survive query-signal build, got ${JSON.stringify(signals.phrases)}`);
+  }
+  console.log('[OK] buildTaxonomyQuerySignals preserves structured act identifiers');
+}
+
+function testExtractActReferenceSignalsCapturesExplicitDocumentTitles(): void {
+  const signals = extractActReferenceSignals('Що регулює Указ про призначення Кубраков?');
+  if (!signals.some((signal) => signal.toLowerCase().includes('указ про призначення кубраков'))) {
+    throw new Error(`Expected explicit document-title signal for decree query, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] act-reference signal extraction captures explicit title-heavy act references');
+}
+
+function testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle(): void {
+  const { entities } = extractEntities('Що регулює Указ про призначення Кубраков?');
+  const lawTitles = entities.filter((entity) => entity.type === 'law_title').map((entity) => entity.value);
+  if (!lawTitles.some((value) => value.toLowerCase().includes('указ про призначення кубраков'))) {
+    throw new Error(`Expected law_title entity for explicit decree title query, got ${JSON.stringify(entities)}`);
+  }
+  console.log('[OK] entity extractor captures explicit decree titles as law_title');
+}
+
+function testExtractStructuredActIdentifiersIgnoresDates(): void {
+  const ids = extractStructuredActIdentifiers('Чи діяв акт 115/2015 станом на 12/05/2024 і що змінює 2811-20?');
+  if (!ids.includes('115/2015') || !ids.includes('2811-20')) {
+    throw new Error(`Expected structured act identifiers to be extracted, got ${JSON.stringify(ids)}`);
+  }
+  if (ids.includes('12/05/2024')) {
+    throw new Error(`Expected date-like token to be ignored, got ${JSON.stringify(ids)}`);
+  }
+  console.log('[OK] extractStructuredActIdentifiers keeps act ids and ignores date-like strings');
+}
+
+function testExtractCuedNumericActReferencesCapturesBareNumberWithCue(): void {
+  const refs = extractCuedNumericActReferences(
+    'Що за постановою КМУ №1178 подає учасник у складі пропозиції на закупівлю та чи потрібен наказ Мінфіну №45?'
+  );
+  if (!refs.some((ref) => ref.cue === 'постанова' && ref.numericStem === '1178')) {
+    throw new Error(`Expected постанова №1178 to be extracted as a cued numeric act reference, got ${JSON.stringify(refs)}`);
+  }
+  if (!refs.some((ref) => ref.cue === 'наказ' && ref.numericStem === '45')) {
+    throw new Error(`Expected наказ №45 to be extracted as a cued numeric act reference, got ${JSON.stringify(refs)}`);
+  }
+  console.log('[OK] extractCuedNumericActReferences captures bare act numbers with document-type cues');
 }
 
 function testSelectedActsAvoidWeakSingleGoalSupportNoise(): void {
@@ -2883,6 +3332,94 @@ function testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage(): v
   console.log('[OK] partial goal support does not override distinct multi-goal coverage when support map is incomplete');
 }
 
+function testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoals(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2747-15',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.66,
+        ordering_score: 0.69,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '2747-15',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.64,
+        ordering_score: 0.67,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_1',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.94,
+        category: 'administrative',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 0.62,
+        category: 'civil',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goal_support_by_act: {
+      '2747-15': ['goal_0', 'goal_1'],
+    },
+    taxonomyNregs: new Set(['2747-15', '435-15']),
+    actsSearchNregs: ['2747-15', '435-15'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 15,
+        avg_score_in_top30: 0.61,
+        max_score: 0.66,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.8,
+        max_ordering_score: 0.71,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.43,
+        max_score: 0.43,
+        best_rank_in_top30: 12,
+        rank_mass_top30: 0.08,
+        max_ordering_score: 0.34,
+      },
+    ],
+  });
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED for mixed-goal procedural fallback, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')) {
+    throw new Error(
+      `Expected MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if ((result.selected_acts_confidence ?? 0) > 0.75) {
+    throw new Error(
+      `Did not expect high confidence after blocking mixed-goal procedural fallback, got ${result.selected_acts_confidence}`
+    );
+  }
+  console.log('[OK] mixed-goal procedural fallback does not count as full act coverage');
+}
+
 function testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft(): void {
   const treatyResult = buildSelectedActs({
     finalHits: [
@@ -3147,12 +3684,14 @@ async function main(): Promise<void> {
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
+  testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs();
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
   testGoalSplitAddsSpecificTaxAppealSignals();
   testGoalSplitCompactsExplicitActBundleAcrossQuestions();
   testGoalSplitCompactsExplicitActClauseBundle();
   testGoalSplitCompactsProceduralBundleWithDocumentsFollowUp();
+  testCategoryClusterSplitSkipsGroundedSingleAct();
   testGoalSplitMarksProceduralSingleGoal();
   testGoalSplitCompactsProceduralBundleWithAnaphora();
   testGoalSplitCompactsProceduralBundleWithSharedProcessReference();
@@ -3163,9 +3702,13 @@ async function main(): Promise<void> {
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
   testStrongTaxonomySignalHelperMatchesSingleGoalPolicy();
+  testStrongTaxonomySignalTreatsExactActHitAsStrong();
+  testStrongTaxonomySignalTreatsGroundedAliasAsStrong();
+  testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly();
   testDomainHintAlignedFamilyHelper();
   testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal();
   testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak();
+  testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly();
   testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest();
   testSingleGoalFirstPassPlanPreservesExplicitActsOnlyRequest();
   testReferenceExpansionSkipForStrongHeadCoverage();
@@ -3174,10 +3717,13 @@ async function main(): Promise<void> {
   testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
   testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns();
+  testBuildWithinActPoolPrioritizesGroundedSingleAct();
   testBuildWithinActPoolPromotesPlannerPreferredActs();
   testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
   testQueryRewritePolicySkipsGroundedCitationWithActCue();
   testQueryRewritePolicySkipsWhenStrongTaxonomySignalExists();
+  testQueryRewritePolicySkipsWhenExactActIdentifierConverges();
+  testQueryRewritePolicyAllowsFuzzyAliasVolumeOnly();
   testQueryRewritePolicySkipsSimpleFocusedLegalQuery();
   testQueryRewritePolicyAllowsBroadNaturalLanguageQuery();
   testGroundedQueryBuilderDropsGenericSignalsForStructuralQuery();
@@ -3224,14 +3770,23 @@ async function main(): Promise<void> {
   testSingleGoalSelectedActsTailTrim();
   testSelectedActsTrimNonPrimaryOnlyTailAndLowerConfidence();
   testCoverageGapTreatsNoPrimaryLawAsWeakEvidence();
+  await testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
   testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct();
+  testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct();
+  testCoverageGapUsesGroundedActScopeNoConvergenceForLikelyMissingAct();
+  testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct();
   testDeriveTopScoreFromHitsUsesPostprocessedHits();
   testNormalizeFinalReasonCodesDropsRecoveredWeakSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
+  testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
+  testExtractActReferenceSignalsCapturesExplicitDocumentTitles();
+  testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle();
+  testExtractStructuredActIdentifiersIgnoresDates();
+  testExtractCuedNumericActReferencesCapturesBareNumberWithCue();
   testSelectedActsAvoidWeakSingleGoalSupportNoise();
   testSelectedActsTrimWeakMultiGoalTail();
   testSelectedActsBlockCrossFamilySupportWithoutEvidence();
@@ -3246,6 +3801,7 @@ async function main(): Promise<void> {
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
   testSelectedActsMarksCoverageMissWhenGoalSupportIsIncomplete();
   testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage();
+  testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoals();
   testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft();
   testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
   testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal();

@@ -25,9 +25,13 @@ const SUMMARY_MATCH_BOOST = 0.45;
 const KEYWORD_PHRASE_BOOST = 1.6;
 const TOPIC_PHRASE_BOOST = 1.3;
 const ALIAS_PHRASE_BOOST = 3;
+const EXACT_IDENTIFIER_MATCH_BOOST = 8;
 const VALIDITY_IN_FORCE_BOOST = 0.1;
 const VALIDITY_STALE_PENALTY = 0.35;
 const CATEGORY_HINT_SCORE_BOOST = 0.25;
+const APPROX_REFERENCE_GROUNDING_BOOST = 2.6;
+const APPROX_REFERENCE_MIN_SCORE = 3;
+const APPROX_REFERENCE_MIN_MARGIN = 1;
 
 const QUERY_STOPWORDS = new Set([
   'а',
@@ -60,9 +64,33 @@ const QUERY_STOPWORDS = new Set([
   'як',
 ]);
 
+const ACT_REFERENCE_CUE_PATTERNS = [
+  'указ(?:у|ом|і|а)?',
+  'постанова|постанови|постановою|постанову',
+  'наказ(?:у|ом|і|а)?',
+  'розпорядження',
+  'рішення|рішенню|рішенням|рішенні',
+  'закон(?:у|ом|і|а)?',
+  'кодекс(?:у|ом|і|а)?',
+  'правила|правил',
+  'порядок|порядку',
+  'інструкція|інструкції',
+  'положення',
+  'регламент(?:у|ом|і)?',
+  'конвенція|конвенції',
+  'договір|договору',
+  'статут(?:у|ом|і)?',
+];
+
+const ACT_REFERENCE_SIGNAL_REGEX = new RegExp(
+  `(?:^|[\\s\\W])((?:${ACT_REFERENCE_CUE_PATTERNS.join('|')})\\s+[^\\n,.?!;:]{4,160})(?=$|[\\s\\W])`,
+  'giu'
+);
+
 interface ActEntry {
   rada_nreg: string;
   title: string;
+  aliases: string[];
   summary: string | null;
   category: string | null;
   storage_category: string | null;
@@ -72,10 +100,14 @@ interface ActEntry {
 }
 
 interface TaxonomySnapshot {
+  byStructuredId: Map<string, ActEntry[]>;
+  byNumericStem: Map<string, ActEntry[]>;
   byAlias: Map<string, ActEntry[]>;
+  byAliasExact: Map<string, ActEntry[]>;
   byKeyword: Map<string, ActEntry[]>;
   byTopic: Map<string, ActEntry[]>;
   byTitle: Map<string, ActEntry[]>;
+  byTitleExact: Map<string, ActEntry[]>;
   bySummary: Map<string, ActEntry[]>;
   byCategory: Map<string, ActEntry[]>;
   byStorageCategory: Map<string, ActEntry[]>;
@@ -105,6 +137,70 @@ function tokenizeQuery(q: string): string[] {
   return [...new Set(tokens)];
 }
 
+function normalizeActIdentifier(value: string): string {
+  return value
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[‐‑–—−]/gu, '-')
+    .replace(/\s*([/_-])\s*/gu, '$1')
+    .trim();
+}
+
+function normalizeNumericStem(value: string | null | undefined): string | null {
+  const digits = String(value ?? '').replace(/[^\d]+/gu, '').replace(/^0+/u, '');
+  if (!digits) return null;
+  return digits;
+}
+
+function extractPrimaryNumericStem(value: string | null | undefined): string | null {
+  const normalized = normalizeActIdentifier(String(value ?? ''));
+  const match = normalized.match(/(\d{1,8})/u);
+  return normalizeNumericStem(match?.[1] ?? null);
+}
+
+export function looksLikeStructuredActIdentifier(value: string): boolean {
+  const normalized = normalizeActIdentifier(value);
+  if (!normalized || normalized.length < 4 || normalized.length > 32) return false;
+  if (!/\d/u.test(normalized)) return false;
+  if (!/[-_/]/u.test(normalized)) return false;
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/u.test(normalized)) return false;
+  return /^[\p{L}\p{N}_/-]+$/u.test(normalized);
+}
+
+export function extractStructuredActIdentifiers(query: string): string[] {
+  const matches = query
+    .normalize('NFC')
+    .match(/[\p{L}\p{N}_/‐‑–—−-]{4,32}/gu) ?? [];
+  const out = new Set<string>();
+  for (const match of matches) {
+    if (!looksLikeStructuredActIdentifier(match)) continue;
+    out.add(normalizeActIdentifier(match));
+  }
+  return [...out];
+}
+
+export function extractCuedNumericActReferences(
+  query: string
+): Array<{ cue: string; numericStem: string; rawReference: string }> {
+  const out: Array<{ cue: string; numericStem: string; rawReference: string }> = [];
+  const seen = new Set<string>();
+  const pattern = new RegExp(
+    `((?:${ACT_REFERENCE_CUE_PATTERNS.join('|')})(?:\\s+[\\p{L}][\\p{L}.\\-"]{1,24}){0,3}\\s*(?:№|N|No\\.?|#)\\s*(\\d{1,8}))`,
+    'giu'
+  );
+  for (const match of query.normalize('NFC').matchAll(pattern)) {
+    const rawReference = match[1]?.trim();
+    const numericStem = normalizeNumericStem(match[2]?.trim());
+    const cue = normalizeActReferenceCue(rawReference);
+    if (!rawReference || !numericStem || !cue) continue;
+    const key = `${cue}::${numericStem}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ cue, numericStem, rawReference });
+  }
+  return out;
+}
+
 function tokenizeWords(value: string): string[] {
   return value
     .normalize('NFC')
@@ -114,6 +210,75 @@ function tokenizeWords(value: string): string[] {
     .filter(
       (part) => part.length >= MIN_TOKEN_LEN && !QUERY_STOPWORDS.has(part)
     );
+}
+
+function normalizeActReferenceCue(value: string | null | undefined): string | null {
+  const firstToken = String(value ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .find(Boolean);
+  if (!firstToken) return null;
+  if (firstToken.startsWith('указ')) return 'указ';
+  if (firstToken.startsWith('ukaz')) return 'указ';
+  if (firstToken.startsWith('постан')) return 'постанова';
+  if (firstToken.startsWith('postanov')) return 'постанова';
+  if (firstToken.startsWith('наказ')) return 'наказ';
+  if (firstToken.startsWith('nakaz')) return 'наказ';
+  if (firstToken.startsWith('розпоряджен')) return 'розпорядження';
+  if (firstToken.startsWith('rozporiad') || firstToken.startsWith('rozporyad')) return 'розпорядження';
+  if (firstToken.startsWith('рішен')) return 'рішення';
+  if (firstToken.startsWith('rishenn')) return 'рішення';
+  if (firstToken.startsWith('закон')) return 'закон';
+  if (firstToken.startsWith('zakon')) return 'закон';
+  if (firstToken.startsWith('кодекс')) return 'кодекс';
+  if (firstToken.startsWith('kodeks')) return 'кодекс';
+  if (firstToken.startsWith('правил') || firstToken.startsWith('правила')) return 'правила';
+  if (firstToken.startsWith('поряд')) return 'порядок';
+  if (firstToken.startsWith('poriad') || firstToken.startsWith('poryad')) return 'порядок';
+  if (firstToken.startsWith('інструкц')) return 'інструкція';
+  if (firstToken.startsWith('instruk')) return 'інструкція';
+  if (firstToken.startsWith('положен')) return 'положення';
+  if (firstToken.startsWith('polozh')) return 'положення';
+  if (firstToken.startsWith('регламент')) return 'регламент';
+  if (firstToken.startsWith('reglament')) return 'регламент';
+  if (firstToken.startsWith('конвенц')) return 'конвенція';
+  if (firstToken.startsWith('konvent')) return 'конвенція';
+  if (firstToken.startsWith('договор') || firstToken.startsWith('договір')) return 'договір';
+  if (firstToken.startsWith('dogov') || firstToken.startsWith('dohov')) return 'договір';
+  if (firstToken.startsWith('статут')) return 'статут';
+  if (firstToken.startsWith('statut')) return 'статут';
+  return null;
+}
+
+function buildReferenceTokens(value: string | null | undefined): string[] {
+  return [...new Set(tokenizeWords(String(value ?? '')).filter((token) => token.length >= 4))];
+}
+
+function compactKey(value: string | null | undefined): string {
+  return String(value ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function tokensSoftMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length < 6 || b.length < 6) return false;
+  return a.startsWith(b.slice(0, 5)) || b.startsWith(a.slice(0, 5));
+}
+
+export function extractActReferenceSignals(query: string): string[] {
+  const out = new Set<string>();
+  for (const match of query.normalize('NFC').matchAll(ACT_REFERENCE_SIGNAL_REGEX)) {
+    const signal = match[1]?.trim();
+    if (signal) out.add(signal);
+  }
+  return [...out];
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 function addToMap(map: Map<string, ActEntry[]>, key: string, entry: ActEntry): void {
@@ -167,10 +332,89 @@ export function buildTaxonomyQuerySignals(query: string): { tokens: string[]; ph
   const rawTokens = tokenizeQuery(query);
   const informativeTokens = tokenizeWords(query);
   const phrases = buildPhraseSignals(informativeTokens, MAX_QUERY_PHRASE_WORDS);
+  const structuredIdentifiers = extractStructuredActIdentifiers(query);
   return {
-    tokens: [...new Set(rawTokens)],
-    phrases: [...new Set(phrases)],
+    tokens: [...new Set([...rawTokens, ...structuredIdentifiers])],
+    phrases: [...new Set([...phrases, ...structuredIdentifiers])],
   };
+}
+
+function getActReferenceTexts(entry: ActEntry): string[] {
+  const texts = new Set<string>();
+  for (const alias of entry.aliases) texts.add(alias);
+  if (entry.title) texts.add(entry.title);
+  if (entry.document_type && entry.title) texts.add(`${entry.document_type} ${entry.title}`);
+  return [...texts];
+}
+
+function entryMatchesActCue(entry: ActEntry, cue: string): boolean {
+  const texts = [entry.document_type, entry.document_type_slug, entry.title, ...entry.aliases];
+  return texts.some((text) => normalizeActReferenceCue(text) === cue);
+}
+
+function resolveApproximateActReference(
+  snap: TaxonomySnapshot,
+  signal: string
+): { entry: ActEntry; score: number } | null {
+  const cue = normalizeActReferenceCue(signal);
+  if (!cue) return null;
+
+  const signalTokens = buildReferenceTokens(signal).filter((token) => normalizeActReferenceCue(token) !== cue);
+  if (signalTokens.length === 0) return null;
+  const signalCompact = compactKey(signal);
+
+  let best: { entry: ActEntry; score: number } | null = null;
+  let secondScore = 0;
+
+  for (const entry of snap.acts.values()) {
+    let entryBestScore = 0;
+    for (const text of getActReferenceTexts(entry)) {
+      const textCue =
+        normalizeActReferenceCue(text) ??
+        normalizeActReferenceCue(entry.document_type) ??
+        normalizeActReferenceCue(entry.document_type_slug);
+      if (textCue !== cue) continue;
+
+      const candidateTokens = buildReferenceTokens(text).filter((token) => normalizeActReferenceCue(token) !== cue);
+      if (candidateTokens.length === 0) continue;
+
+      let exactMatches = 0;
+      let softMatches = 0;
+      for (const token of signalTokens) {
+        if (candidateTokens.includes(token)) {
+          exactMatches += 1;
+          continue;
+        }
+        if (candidateTokens.some((candidate) => tokensSoftMatch(token, candidate))) {
+          softMatches += 1;
+        }
+      }
+      if (exactMatches + softMatches < 2) continue;
+
+      const candidateCompact = compactKey(text);
+      const compactContainment =
+        signalCompact &&
+        candidateCompact &&
+        (candidateCompact.includes(signalCompact) || signalCompact.includes(candidateCompact))
+          ? 0.6
+          : 0;
+      const score = 1.4 + exactMatches * 1.1 + softMatches * 0.65 + compactContainment;
+      if (score > entryBestScore) entryBestScore = score;
+    }
+
+    if (entryBestScore <= 0) continue;
+    if (!best || entryBestScore > best.score) {
+      secondScore = best?.score ?? secondScore;
+      best = { entry, score: entryBestScore };
+    } else if (entryBestScore > secondScore) {
+      secondScore = entryBestScore;
+    }
+  }
+
+  if (!best) return null;
+  if (best.score < APPROX_REFERENCE_MIN_SCORE) return null;
+  if (best.score - secondScore < APPROX_REFERENCE_MIN_MARGIN) return null;
+  return best;
 }
 
 let legislationClient: SupabaseClient | null = null;
@@ -204,10 +448,14 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   }
 
   const rows = Array.isArray(data) ? data : [];
+  const byStructuredId = new Map<string, ActEntry[]>();
+  const byNumericStem = new Map<string, ActEntry[]>();
   const byAlias = new Map<string, ActEntry[]>();
+  const byAliasExact = new Map<string, ActEntry[]>();
   const byKeyword = new Map<string, ActEntry[]>();
   const byTopic = new Map<string, ActEntry[]>();
   const byTitle = new Map<string, ActEntry[]>();
+  const byTitleExact = new Map<string, ActEntry[]>();
   const bySummary = new Map<string, ActEntry[]>();
   const byCategory = new Map<string, ActEntry[]>();
   const byStorageCategory = new Map<string, ActEntry[]>();
@@ -224,6 +472,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   for (const row of rows) {
     const rada_nreg = typeof row?.rada_nreg === 'string' ? row.rada_nreg.trim() : '';
     const title = typeof row?.title === 'string' ? row.title.trim() : '';
+    const aliases = tolerantNormalizeToStrings(row?.aliases);
     const summary = typeof row?.summary === 'string' ? row.summary.trim() : null;
     const category = row?.category != null ? String(row.category).trim() : null;
     const storage_category =
@@ -238,6 +487,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     const entry: ActEntry = {
       rada_nreg,
       title,
+      aliases,
       summary,
       category,
       storage_category,
@@ -246,8 +496,17 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
       validity_status,
     };
     acts.set(rada_nreg, entry);
+    addToMap(byStructuredId, normalizeActIdentifier(rada_nreg), entry);
+    const numericStem = extractPrimaryNumericStem(rada_nreg);
+    if (numericStem) addToMap(byNumericStem, numericStem, entry);
 
-    for (const a of aliasSignals(row?.aliases)) addToMap(byAlias, a, entry);
+    for (const a of aliasSignals(aliases)) addToMap(byAlias, a, entry);
+    for (const alias of aliases) {
+      addToMap(byAliasExact, alias, entry);
+      if (looksLikeStructuredActIdentifier(alias)) {
+        addToMap(byStructuredId, normalizeActIdentifier(alias), entry);
+      }
+    }
     for (const keyword of metadataSignals(row?.keywords, { includePhrases: true })) {
       addToMap(byKeyword, keyword, entry);
     }
@@ -257,6 +516,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     for (const titleSignal of metadataSignals(title, { includePhrases: true })) {
       addToMap(byTitle, titleSignal, entry);
     }
+    if (title) addToMap(byTitleExact, title, entry);
     for (const summarySignal of metadataSignals(summary, { includePhrases: false })) {
       addToMap(bySummary, summarySignal, entry);
     }
@@ -271,10 +531,14 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   setTaxonomySnapshotAgeSeconds(0);
 
   return {
+    byStructuredId,
+    byNumericStem,
     byAlias,
+    byAliasExact,
     byKeyword,
     byTopic,
     byTitle,
+    byTitleExact,
     bySummary,
     byCategory,
     byStorageCategory,
@@ -311,8 +575,8 @@ export interface TaxonomyCandidatesInput {
   categoryHints?: string[];
   /** U2 lldbi: document_types_ranked_top3 — inject acts from byDocumentType for each. */
   documentTypeHints?: string[];
-  /** U2 entities: act_abbrev, article_ref for scoring. */
-  entities?: { act_abbrev?: string; article_ref?: string }[];
+  /** U2 entities: act_abbrev, law_title, article_ref for scoring. */
+  entities?: { act_abbrev?: string; law_title?: string; article_ref?: string }[];
 }
 
 export interface AliasHit {
@@ -332,6 +596,10 @@ export interface TaxonomyCandidatesResult {
   rada_nreg_candidates: string[];
   category_hints: string[];
   alias_hits: AliasHit[];
+  exact_act_hit_count: number;
+  exact_act_nregs: string[];
+  grounded_act_hit_count: number;
+  grounded_act_nregs: string[];
   anchor_tokens: string[];
   taxonomy_hints_used?: TaxonomyHintsUsed;
   debug: {
@@ -360,6 +628,10 @@ export async function getTaxonomyCandidates(
     rada_nreg_candidates: [],
     category_hints: domainHint ? [domainHint] : [],
     alias_hits: [],
+    exact_act_hit_count: 0,
+    exact_act_nregs: [],
+    grounded_act_hit_count: 0,
+    grounded_act_nregs: [],
     anchor_tokens: [],
     debug: { taxonomy_snapshot_version: null, taxonomy_snapshot_age_seconds: null, source: 'none' },
   };
@@ -376,11 +648,104 @@ export async function getTaxonomyCandidates(
 
   const radaNregScores = new Map<string, number>();
   const aliasHits: AliasHit[] = [];
+  const exactActHitNregs = new Set<string>();
+  const groundedActHitNregs = new Set<string>();
   const categoryHintsSet = new Set<string>();
   if (domainHint) categoryHintsSet.add(domainHint);
 
   const { tokens, phrases } = buildTaxonomyQuerySignals(query);
   const phraseSet = new Set(phrases);
+  const seenAliasHits = new Set<string>();
+
+  const pushAliasHit = (entry: ActEntry, alias: string): void => {
+    const key = `${entry.rada_nreg}::${toKey(alias)}`;
+    if (seenAliasHits.has(key)) return;
+    seenAliasHits.add(key);
+    aliasHits.push({
+      rada_nreg: entry.rada_nreg,
+      title: entry.title,
+      alias,
+      category: entry.category,
+    });
+  };
+
+  const exactStructuredSignals = uniqueStrings([
+    ...extractStructuredActIdentifiers(query),
+    ...entities
+      .map((entity) => entity?.act_abbrev?.trim())
+      .filter((value): value is string => !!value && looksLikeStructuredActIdentifier(value))
+      .map((value) => normalizeActIdentifier(value)),
+  ]);
+
+  for (const signal of exactStructuredSignals) {
+    const key = normalizeActIdentifier(signal);
+    for (const entry of snap.byStructuredId.get(key) ?? []) {
+      exactActHitNregs.add(entry.rada_nreg);
+      groundedActHitNregs.add(entry.rada_nreg);
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + EXACT_IDENTIFIER_MATCH_BOOST
+      );
+      pushAliasHit(entry, signal);
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
+  }
+
+  const cuedNumericReferences = extractCuedNumericActReferences(query);
+  for (const reference of cuedNumericReferences) {
+    if (reference.numericStem.length < 3) continue;
+    const candidates = (snap.byNumericStem.get(reference.numericStem) ?? []).filter((entry) =>
+      entryMatchesActCue(entry, reference.cue)
+    );
+    if (candidates.length !== 1) continue;
+    const [entry] = candidates;
+    groundedActHitNregs.add(entry.rada_nreg);
+    radaNregScores.set(
+      entry.rada_nreg,
+      (radaNregScores.get(entry.rada_nreg) ?? 0) + EXACT_IDENTIFIER_MATCH_BOOST * 0.85
+    );
+    pushAliasHit(entry, reference.rawReference);
+    if (entry.category) categoryHintsSet.add(entry.category);
+  }
+
+  const exactTextSignals = uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...entities.map((entity) => entity?.act_abbrev),
+    ...entities.map((entity) => entity?.law_title),
+  ]);
+  for (const signal of exactTextSignals) {
+    const key = toKey(signal);
+    if (!key) continue;
+    const groundedEntries = [
+      ...new Map(
+        [...(snap.byAliasExact.get(key) ?? []), ...(snap.byTitleExact.get(key) ?? [])].map((entry) => [
+          entry.rada_nreg,
+          entry,
+        ] as const)
+      ).values(),
+    ];
+    if (groundedEntries.length !== 1) continue;
+    const [entry] = groundedEntries;
+    groundedActHitNregs.add(entry.rada_nreg);
+    radaNregScores.set(entry.rada_nreg, (radaNregScores.get(entry.rada_nreg) ?? 0) + ALIAS_PHRASE_BOOST);
+    pushAliasHit(entry, signal);
+    if (entry.category) categoryHintsSet.add(entry.category);
+  }
+
+  if (groundedActHitNregs.size === 0) {
+    for (const signal of exactTextSignals) {
+      const resolved = resolveApproximateActReference(snap, signal);
+      if (!resolved) continue;
+      groundedActHitNregs.add(resolved.entry.rada_nreg);
+      radaNregScores.set(
+        resolved.entry.rada_nreg,
+        (radaNregScores.get(resolved.entry.rada_nreg) ?? 0) + APPROX_REFERENCE_GROUNDING_BOOST
+      );
+      pushAliasHit(resolved.entry, signal);
+      if (resolved.entry.category) categoryHintsSet.add(resolved.entry.category);
+    }
+  }
 
   const applyMetadataMatches = (
     signal: string,
@@ -399,12 +764,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.aliasBoost
       );
-      aliasHits.push({
-        rada_nreg: entry.rada_nreg,
-        title: entry.title,
-        alias: signal,
-        category: entry.category,
-      });
+      pushAliasHit(entry, signal);
     }
     for (const entry of snap.byKeyword.get(key) ?? []) {
       radaNregScores.set(
@@ -463,12 +823,7 @@ export async function getTaxonomyCandidates(
       const key = toKey(abbrev);
       for (const entry of snap.byAlias.get(key) ?? []) {
         radaNregScores.set(entry.rada_nreg, (radaNregScores.get(entry.rada_nreg) ?? 0) + 3);
-        aliasHits.push({
-          rada_nreg: entry.rada_nreg,
-          title: entry.title,
-          alias: abbrev,
-          category: entry.category,
-        });
+        pushAliasHit(entry, abbrev);
       }
     }
   }
@@ -551,12 +906,24 @@ export async function getTaxonomyCandidates(
   // prior that can bias semantic retrieval toward the act name rather than the article content.
   const anchorTokens: string[] = [];
   const seenNreg = new Set<string>();
+  const addAnchor = (value: string | null | undefined): void => {
+    const short = typeof value === 'string' ? value.trim() : '';
+    if (!short) return;
+    const compact = short.length <= 90 ? short : short.slice(0, 87) + '...';
+    if (!compact || anchorTokens.includes(compact)) return;
+    anchorTokens.push(compact);
+  };
   for (const hit of aliasHits) {
     if (anchorTokens.length >= MAX_ANCHOR_TOKENS) break;
+    if (!groundedActHitNregs.has(hit.rada_nreg)) continue;
+    addAnchor(hit.title);
+  }
+  for (const hit of aliasHits) {
+    if (anchorTokens.length >= MAX_ANCHOR_TOKENS) break;
+    if (groundedActHitNregs.size > 0 && !groundedActHitNregs.has(hit.rada_nreg)) continue;
     if (seenNreg.has(hit.rada_nreg)) continue;
     seenNreg.add(hit.rada_nreg);
-    const short = hit.alias.length <= 50 ? hit.alias : hit.alias.slice(0, 47) + '...';
-    if (short && !anchorTokens.includes(short)) anchorTokens.push(short);
+    addAnchor(hit.alias.length <= 50 ? hit.alias : hit.alias.slice(0, 47) + '...');
   }
 
   const taxonomy_hints_used: TaxonomyHintsUsed = {
@@ -573,6 +940,10 @@ export async function getTaxonomyCandidates(
     rada_nreg_candidates,
     category_hints: categoryHintsOut,
     alias_hits: aliasHits.slice(0, 20),
+    exact_act_hit_count: exactActHitNregs.size,
+    exact_act_nregs: [...exactActHitNregs],
+    grounded_act_hit_count: groundedActHitNregs.size,
+    grounded_act_nregs: [...groundedActHitNregs],
     anchor_tokens: anchorTokens.slice(0, MAX_ANCHOR_TOKENS),
     taxonomy_hints_used,
     debug: {
@@ -616,9 +987,14 @@ export async function getActMeta(rada_nreg: string): Promise<ActMeta | null> {
 export async function findActByAlias(alias: string): Promise<string[]> {
   const snap = await ensureSnapshot();
   if (!snap) return [];
+  const structuredKey = normalizeActIdentifier(alias);
+  const exactEntries =
+    looksLikeStructuredActIdentifier(alias) && structuredKey
+      ? snap.byStructuredId.get(structuredKey) ?? []
+      : [];
   const key = toKey(alias);
-  if (!key) return [];
-  const entries = snap.byAlias.get(key) ?? [];
+  if (!key && exactEntries.length === 0) return [];
+  const entries = [...exactEntries, ...(snap.byAlias.get(key) ?? [])];
   return [...new Set(entries.map((e) => e.rada_nreg))].sort((a, b) => a.localeCompare(b));
 }
 
@@ -681,6 +1057,24 @@ export async function scoreActCandidate(
   for (const key of signals) {
     if (!key) continue;
     const isPhrase = key.includes(' ');
+    for (const e of snap.byStructuredId.get(normalizeActIdentifier(key)) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += EXACT_IDENTIFIER_MATCH_BOOST;
+        if (!reasons.includes('exact_identifier_match')) reasons.push('exact_identifier_match');
+      }
+    }
+    for (const e of snap.byAliasExact.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += ALIAS_PHRASE_BOOST;
+        if (!reasons.includes('exact_alias_match')) reasons.push('exact_alias_match');
+      }
+    }
+    for (const e of snap.byTitleExact.get(key) ?? []) {
+      if (e.rada_nreg === entry.rada_nreg) {
+        score += TITLE_MATCH_BOOST;
+        if (!reasons.includes('exact_title_match')) reasons.push('exact_title_match');
+      }
+    }
     for (const e of snap.byAlias.get(key) ?? []) {
       if (e.rada_nreg === entry.rada_nreg) {
         score += isPhrase ? ALIAS_PHRASE_BOOST : 2;
