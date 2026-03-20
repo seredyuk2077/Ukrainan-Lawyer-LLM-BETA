@@ -76,6 +76,7 @@ import { extractQueryCitationSelectors } from './structural-citation.js';
 import { deriveCoverageGap } from './coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
 import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
+import { buildGoalSupportByActFromGoalsSummary, serializeGoalSupportMap } from './goal-support.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -179,7 +180,12 @@ async function hydrateSelectedActsMeta(
         if (!category) category = m.category ?? null;
         if (storage_category == null) storage_category = m.storage_category ?? null;
         if (!act_kind || act_kind === 'UNKNOWN') {
-          act_kind = classifyActKind(m.title ?? a.act_title ?? '', m.document_type, m.category);
+          act_kind = classifyActKind(
+            m.title ?? a.act_title ?? '',
+            m.document_type,
+            m.category,
+            (meta as { document_type_slug?: string | null }).document_type_slug
+          );
         }
       } else {
         if (storage_category == null) storage_category = null;
@@ -211,12 +217,13 @@ type CandidateMetaHydratable = {
   title?: string;
   category?: string;
   document_type?: string;
+  document_type_slug?: string;
 };
 
 async function hydrateActCandidatesMeta<T extends CandidateMetaHydratable>(candidates: T[]): Promise<T[]> {
   return Promise.all(
     candidates.map(async (candidate) => {
-      if (candidate.title && candidate.category && candidate.document_type) return candidate;
+      if (candidate.title && candidate.category && candidate.document_type && candidate.document_type_slug) return candidate;
       const meta = await getActMeta(candidate.rada_nreg);
       if (!meta) return candidate;
       return {
@@ -224,6 +231,7 @@ async function hydrateActCandidatesMeta<T extends CandidateMetaHydratable>(candi
         title: candidate.title ?? meta.title ?? undefined,
         category: candidate.category ?? meta.category ?? undefined,
         document_type: candidate.document_type ?? meta.document_type ?? undefined,
+        document_type_slug: candidate.document_type_slug ?? meta.document_type_slug ?? undefined,
       } satisfies T;
     })
   );
@@ -251,6 +259,7 @@ async function backfillChunkEvidenceCandidates<
         title: meta?.title ?? undefined,
         category: meta?.category ?? undefined,
         document_type: meta?.document_type ?? undefined,
+        document_type_slug: meta?.document_type_slug ?? undefined,
         score: 0,
         reasons: ['chunks_evidence_meta'],
         why_tag: 'CHUNKS_EVIDENCE_META',
@@ -1077,6 +1086,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     // QR variants for multi-goal: additional chunk searches for substantive acts missed by per-goal
     // subquery embeddings. E.g. procedural query → КПК dominates; variant "ст.121 КК тяжке тілесне
     // ушкодження" surfaces ккУ chunks that goal.subquery embedding misses.
+    const goalSupportByAct = buildGoalSupportByActFromGoalsSummary(goalsSummary);
     if (queryRewriteMeta.called && queryRewriteMeta.used && queryRewriteMeta.variants?.length && qdrantCallCounter.count < 20) {
       const varTopK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
       const variantQueries = queryRewriteMeta.variants
@@ -1104,7 +1114,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
             if (result.status !== 'fulfilled') continue;
             for (const hit of result.value) {
               const raw = payloadToRawHit(hit, 'lldbi_chunks');
-              if (raw.r2_key && raw.json_path) multiHits.push(raw);
+              if (!raw.r2_key || !raw.json_path) continue;
+              multiHits.push(raw);
             }
           }
         } catch {
@@ -1172,6 +1183,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           source_tier: evidence != null ? ('ACTS_1' as const) : ('ACTS_2' as const),
           category: meta?.category ?? undefined,
           document_type: meta?.document_type ?? undefined,
+          document_type_slug: meta?.document_type_slug ?? undefined,
         };
       })
     );
@@ -1188,6 +1200,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       finalHits: finalMulti,
       actCandidatesTop: multiActCandidatesTopHydrated,
       goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
+      goal_support_by_act: serializeGoalSupportMap(goalSupportByAct),
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
       documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,

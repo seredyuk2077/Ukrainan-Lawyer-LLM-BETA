@@ -17,6 +17,8 @@ export type ActMetaInput = {
   rada_nreg: string;
   title: string;
   category: string | null;
+  document_type?: string | null;
+  document_type_slug?: string | null;
 };
 
 const W_COUNT = 0.55;
@@ -76,7 +78,12 @@ export async function computeFamilyEvidence(input: ComputeFamilyEvidenceInput): 
   for (const e of chunks_evidence_top_acts) {
     const meta = await getActMeta(e.rada_nreg);
     if (!meta) continue;
-    const kind = classifyActKind(meta.title, meta.document_type ?? undefined, meta.category ?? undefined);
+    const kind = classifyActKind(
+      meta.title,
+      meta.document_type ?? undefined,
+      meta.category ?? undefined,
+      meta.document_type_slug ?? undefined
+    );
     if (kind !== 'PRIMARY_LAW') continue;
 
     const family_key = toKey(meta.category ?? 'unknown');

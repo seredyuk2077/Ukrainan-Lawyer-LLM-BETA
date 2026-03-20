@@ -1245,6 +1245,18 @@ function testClassifyActKindBillDraftNeedsMetadata(): void {
   console.log('[OK] classifyActKind(bill-draft) → UNKNOWN without metadata, BILL_DRAFT with document_type');
 }
 
+function testClassifyActKindUsesDocumentTypeSlug(): void {
+  const treatyKind = classifyActKind('Convention text', undefined, undefined, 'convention');
+  if (treatyKind !== 'INTERNATIONAL_TREATY') {
+    throw new Error(`Expected INTERNATIONAL_TREATY via document_type_slug, got ${treatyKind}`);
+  }
+  const ksuKind = classifyActKind('Decision', undefined, undefined, 'ccu_decision');
+  if (ksuKind !== 'KSU_DECISION') {
+    throw new Error(`Expected KSU_DECISION via document_type_slug, got ${ksuKind}`);
+  }
+  console.log('[OK] classifyActKind(document_type_slug) → stable act kind without human document_type');
+}
+
 async function testTaxonomyKeywordTopicNotInScore(): Promise<void> {
   // Even if a token matches a keyword/topic in taxonomy, it must NOT add to score.
   // Only alias_match and category_hint may contribute to scoreActCandidate score.
@@ -2304,6 +2316,9 @@ function testSelectedActsAllowSingleActCoverageForDominantMultiGoal(): void {
       },
     ],
     goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '2597-19': ['goal_0', 'goal_1'],
+    },
     taxonomyNregs: new Set(['2597-19', 'z0841-01', '2747-15']),
     actsSearchNregs: ['2597-19', 'z0841-01', '2747-15'],
     chunks_evidence_top_acts: [
@@ -2377,6 +2392,10 @@ function testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal(): void {
       },
     ],
     goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '2341-14': ['goal_0'],
+      '4651-17': ['goal_1'],
+    },
     taxonomyNregs: new Set(['2341-14', '4651-17']),
     actsSearchNregs: ['2341-14', '4651-17'],
     chunks_evidence_top_acts: [
@@ -2409,6 +2428,202 @@ function testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal(): void {
     );
   }
   console.log('[OK] selected_acts keeps early procedural primary-law evidence in multi-goal retrieval');
+}
+
+function testSelectedActsMarksCoverageMissWhenGoalSupportIsIncomplete(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2341-14',
+        r2_key: 'legislation/criminal/2341-14.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.71,
+        ordering_score: 0.76,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.92,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.74,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '2341-14': ['goal_0'],
+      '4651-17': ['goal_1'],
+    },
+    taxonomyNregs: new Set(['2341-14', '4651-17']),
+    actsSearchNregs: ['2341-14', '4651-17'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.58,
+        max_score: 0.62,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.1,
+        max_ordering_score: 0.66,
+      },
+    ],
+  });
+  if (!result.selected_acts_reason_codes.includes('COVERAGE_MISS_SELECTED_ACTS')) {
+    throw new Error(`Expected COVERAGE_MISS_SELECTED_ACTS for incomplete goal coverage, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(`Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED with incomplete goal support, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] selected_acts marks multi-goal coverage miss when selected acts do not cover all goals');
+}
+
+function testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2341-14',
+        r2_key: 'legislation/criminal/2341-14.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.71,
+        ordering_score: 0.76,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'legislation/criminal_procedure/4651-17.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.68,
+        ordering_score: 0.73,
+        source: 'lldbi_chunks',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.92,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.89,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '2341-14': ['goal_0'],
+    },
+    taxonomyNregs: new Set(['2341-14', '4651-17']),
+    actsSearchNregs: ['2341-14', '4651-17'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.58,
+        max_score: 0.62,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.1,
+        max_ordering_score: 0.66,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.56,
+        max_score: 0.61,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 2.4,
+        max_ordering_score: 0.64,
+      },
+    ],
+  });
+  if (result.selected_acts_reason_codes.includes('COVERAGE_MISS_SELECTED_ACTS')) {
+    throw new Error(`Did not expect coverage miss with distinct selected acts and partial goal support, got ${JSON.stringify(result.selected_acts_reason_codes)}`);
+  }
+  console.log('[OK] partial goal support does not override distinct multi-goal coverage when support map is incomplete');
+}
+
+function testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft(): void {
+  const treatyResult = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '995_004',
+        r2_key: 'legislation/treaty/995_004.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.72,
+        ordering_score: 0.78,
+        source: 'lldbi_chunks',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '995_004',
+        title: 'Конвенція про захист прав людини і основоположних свобод',
+        score: 0.91,
+        category: 'international',
+        document_type_slug: 'convention',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['995_004']),
+    actsSearchNregs: ['995_004'],
+    documentTypeHints: ['Конвенція'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '995_004',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.6,
+        max_score: 0.64,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.8,
+        max_ordering_score: 0.69,
+      },
+    ],
+  });
+  if (treatyResult.selected_acts_reason_codes.includes('NON_PRIMARY_ONLY_WEAK_CONFIDENCE')) {
+    throw new Error(`Did not expect weak non-primary confidence for slug-only treaty with explicit convention hint, got ${JSON.stringify(treatyResult.selected_acts_reason_codes)}`);
+  }
+
+  const draftResult = buildSelectedActs({
+    finalHits: [],
+    actCandidatesTop: [
+      {
+        rada_nreg: 'draft-1',
+        title: 'Проєкт Закону про тестовий режим',
+        score: 0.91,
+        category: 'general',
+        document_type_slug: 'bill_draft',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }],
+    taxonomyNregs: new Set(['draft-1']),
+    actsSearchNregs: ['draft-1'],
+    documentTypeHints: ['Проєкт Закону'],
+  });
+  if (!draftResult.selected_acts.some((act) => act.rada_nreg === 'draft-1')) {
+    throw new Error(`Expected slug-only bill draft to be selectable with explicit draft hint, got ${JSON.stringify(draftResult.selected_acts)}`);
+  }
+  console.log('[OK] document_type_slug participates in treaty and bill-draft hint matching');
 }
 
 function testSelectedActsFallbackDoesNotReAddBlockedNoiseAct(): void {
@@ -2661,6 +2876,7 @@ async function main(): Promise<void> {
   testClassifyActKindSecondaryOrder();
   testClassifyActKindUnknown();
   testClassifyActKindBillDraftNeedsMetadata();
+  testClassifyActKindUsesDocumentTypeSlug();
   await testTaxonomyKeywordTopicNotInScore();
   await testFindActByTitleFragmentExport();
   await testDocsOnlyNoSemanticPlanIsNotMarkedDegraded();
@@ -2691,6 +2907,9 @@ async function main(): Promise<void> {
   testSelectedActsKeepStrongSupportingOrderWithRepeatedEvidence();
   testSelectedActsAllowSingleActCoverageForDominantMultiGoal();
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
+  testSelectedActsMarksCoverageMissWhenGoalSupportIsIncomplete();
+  testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage();
+  testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft();
   testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
   testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal();
   testSelectedActsRequireEvidenceForPrimaryLawSupportTail();

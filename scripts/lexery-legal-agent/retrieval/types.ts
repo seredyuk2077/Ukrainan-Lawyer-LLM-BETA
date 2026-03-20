@@ -110,6 +110,7 @@ export const RetrievalTraceSchema = z.object({
             source_tier: z.string().optional(),
             category: z.string().optional(),
             document_type: z.string().optional(),
+            document_type_slug: z.string().optional(),
           })
         )
         .optional(),

@@ -379,7 +379,12 @@ export async function resolveSingleGoalSelectedActs(
       actCandidatesTopHydrated.some(
         (candidate) =>
           toFamilyKey(candidate.category) === familyKey &&
-          classifyActKind(candidate.title ?? '', candidate.document_type, candidate.category) === 'PRIMARY_LAW'
+          classifyActKind(
+            candidate.title ?? '',
+            candidate.document_type,
+            candidate.category,
+            candidate.document_type_slug
+          ) === 'PRIMARY_LAW'
       )
     );
     const zeroRecallCall = routingTriggers.selected_acts_empty_or_very_low === true;
@@ -483,7 +488,12 @@ export async function resolveSingleGoalSelectedActs(
             if (!candidate) continue;
             const meta = await getActMeta(act.rada_nreg);
             if (
-              classifyActKind(candidate.title ?? '', candidate.document_type, candidate.category) === 'PRIMARY_LAW' &&
+              classifyActKind(
+                candidate.title ?? '',
+                candidate.document_type,
+                candidate.category,
+                candidate.document_type_slug
+              ) === 'PRIMARY_LAW' &&
               toFamilyKey(meta?.category) === familyKey
             ) {
               return true;
@@ -495,7 +505,12 @@ export async function resolveSingleGoalSelectedActs(
           actCandidatesTopHydrated.some(
             (candidate) =>
               toFamilyKey(candidate.category) === familyKey &&
-              classifyActKind(candidate.title ?? '', candidate.document_type, candidate.category) === 'PRIMARY_LAW' &&
+              classifyActKind(
+                candidate.title ?? '',
+                candidate.document_type,
+                candidate.category,
+                candidate.document_type_slug
+              ) === 'PRIMARY_LAW' &&
               !existingNregs.has(candidate.rada_nreg)
           );
 
@@ -541,7 +556,12 @@ export async function resolveSingleGoalSelectedActs(
               .filter((candidate) => {
                 if (existingNregs.has(candidate.rada_nreg)) return false;
                 if (toFamilyKey(candidate.category) !== familyKeyTarget) return false;
-                return classifyActKind(candidate.title ?? '', candidate.document_type, candidate.category) === 'PRIMARY_LAW';
+                return classifyActKind(
+                  candidate.title ?? '',
+                  candidate.document_type,
+                  candidate.category,
+                  candidate.document_type_slug
+                ) === 'PRIMARY_LAW';
               })
               .sort((a, b) => {
                 const scoreDiff = (b.score ?? 0) - (a.score ?? 0);
@@ -570,7 +590,12 @@ export async function resolveSingleGoalSelectedActs(
                   source_tags: ['ROUTING_HINTS'],
                   document_type: best.document_type ?? undefined,
                   category: best.category ?? undefined,
-                  act_kind: classifyActKind(best.title ?? '', best.document_type, best.category),
+                  act_kind: classifyActKind(
+                    best.title ?? '',
+                    best.document_type,
+                    best.category,
+                    best.document_type_slug
+                  ),
                   flags: {},
                 },
               ];
@@ -599,7 +624,14 @@ export async function resolveSingleGoalSelectedActs(
                     if (!meta || existingNregs.has(extra.rada_nreg)) continue;
                     const familyKey = toFamilyKey(meta.category);
                     if (familyKey !== familyKeyTarget) continue;
-                    if (classifyActKind(meta.title, meta.document_type, meta.category) !== 'PRIMARY_LAW') continue;
+                    if (
+                      classifyActKind(
+                        meta.title,
+                        meta.document_type,
+                        meta.category,
+                        meta.document_type_slug
+                      ) !== 'PRIMARY_LAW'
+                    ) continue;
                     selected_acts_final = [
                       ...selected_acts_final,
                       {
@@ -612,7 +644,12 @@ export async function resolveSingleGoalSelectedActs(
                         document_type: meta.document_type ?? undefined,
                         category: meta.category ?? undefined,
                         storage_category: meta.storage_category ?? undefined,
-                        act_kind: classifyActKind(meta.title, meta.document_type, meta.category),
+                        act_kind: classifyActKind(
+                          meta.title,
+                          meta.document_type,
+                          meta.category,
+                          meta.document_type_slug
+                        ),
                         flags: {},
                       },
                     ];
