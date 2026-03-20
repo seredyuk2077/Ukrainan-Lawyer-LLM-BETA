@@ -98,6 +98,7 @@
     "brain:verify:rag-golden": "tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts",
     "brain:verify:rag-golden:smoke": "tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts --only=smoke",
     "brain:verify:rag-secondary-acts": "tsx scripts/lexery-legal-agent/tools/u4/verify_rag_secondary_acts.ts",
+    "brain:audit:lldbi-act-coverage": "tsx scripts/lexery-legal-agent/tools/u4/audit_lldbi_act_coverage.ts",
     "brain:audit:runs-retrieval-quality": "tsx scripts/lexery-legal-agent/tools/u4/audit_runs_retrieval_quality.ts",
     "brain:manual:query": "tsx scripts/lexery-legal-agent/tools/u4/manual_query_run.ts",
     "brain:inspect:run": "tsx scripts/lexery-legal-agent/tools/u4/manual_run_inspect.ts",

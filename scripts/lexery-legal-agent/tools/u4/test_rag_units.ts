@@ -24,6 +24,7 @@ import {
 import {
   buildSingleGoalFirstPassPlan,
 } from '../../retrieval/single-goal-first-pass.js';
+import { shouldSkipReferenceExpansionForStrongCoverage } from '../../retrieval/single-goal-hit-postprocess.js';
 import {
   buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
@@ -53,7 +54,10 @@ import {
   summarizeSelectedActs,
 } from '../../retrieval/selected-acts-finalizer.js';
 import { deriveCoverageGap } from '../../retrieval/coverage-gap.js';
-import { normalizeFinalReasonCodes } from '../../retrieval/single-goal-selected-acts.js';
+import {
+  isDomainHintAlignedFamily,
+  normalizeFinalReasonCodes,
+} from '../../retrieval/single-goal-selected-acts.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 
 function testGoalSplitEmptyQuery(): void {
@@ -385,6 +389,25 @@ function testStrongTaxonomySignalHelperMatchesSingleGoalPolicy(): void {
   console.log('[OK] taxonomy-strength helper stays aligned with single-goal strong-signal policy');
 }
 
+function testDomainHintAlignedFamilyHelper(): void {
+  if (!isDomainHintAlignedFamily('civil', 'civil_procedure')) {
+    throw new Error('Expected civil domain hint to align with civil_procedure family');
+  }
+  if (!isDomainHintAlignedFamily('criminal', 'criminal_procedure')) {
+    throw new Error('Expected criminal domain hint to align with criminal_procedure family');
+  }
+  if (!isDomainHintAlignedFamily('tax_customs', 'tax_customs')) {
+    throw new Error('Expected tax_customs domain hint to align with same family');
+  }
+  if (isDomainHintAlignedFamily('general', 'civil')) {
+    throw new Error('Expected general domain hint to avoid family alignment');
+  }
+  if (isDomainHintAlignedFamily('civil', 'administrative')) {
+    throw new Error('Expected civil domain hint not to align with administrative family');
+  }
+  console.log('[OK] domain-hint family alignment helper keeps generic family envelopes only');
+}
+
 function testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal(): void {
   const result = buildSingleGoalFirstPassPlan({
     steps: undefined,
@@ -461,6 +484,61 @@ function testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest(): void {
     throw new Error(`Expected NOT_REQUESTED acts-search policy reason, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
   }
   console.log('[OK] single-goal first-pass plan respects explicit chunks-only request');
+}
+
+function testSingleGoalFirstPassPlanPreservesExplicitActsOnlyRequest(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: [{ kind: 'lldbi_acts', collection: 'lexery_legislation_acts', top_k: 8 } as never],
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 2,
+      alias_hit_count: 3,
+      category_hint_count: 1,
+      document_type_hint_count: 1,
+    },
+  });
+
+  if (!result.usedActsSearch || result.stepsToRun.length !== 1 || result.stepsToRun[0]?.kind !== 'lldbi_acts') {
+    throw new Error(`Expected explicit acts-only request to preserve acts search, got ${JSON.stringify(result)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('EXPLICIT_ACTS_ONLY_REQUEST')) {
+    throw new Error(
+      `Expected EXPLICIT_ACTS_ONLY_REQUEST policy reason code, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`
+    );
+  }
+  console.log('[OK] single-goal first-pass plan preserves explicit acts-only request');
+}
+
+function testReferenceExpansionSkipForStrongHeadCoverage(): void {
+  const selectors = extractQueryCitationSelectors('Як оскаржити податкове повідомлення-рішення?');
+  const hits = [
+    { rada_nreg: '2755-17', score: 0.9, ordering_score: 0.9 } as never,
+    { rada_nreg: '2755-17', score: 0.85, ordering_score: 0.85 } as never,
+    { rada_nreg: '2755-17', score: 0.82, ordering_score: 0.82 } as never,
+    { rada_nreg: '2747-15', score: 0.8, ordering_score: 0.8 } as never,
+    { rada_nreg: '2747-15', score: 0.78, ordering_score: 0.78 } as never,
+  ];
+  if (!shouldSkipReferenceExpansionForStrongCoverage(hits, selectors)) {
+    throw new Error('Expected strong two-act head coverage to skip reference expansion');
+  }
+  console.log('[OK] strong two-act head coverage skips reference expansion');
+}
+
+function testReferenceExpansionDoesNotSkipOnExplicitSelectors(): void {
+  const selectors = extractQueryCitationSelectors('Що передбачено п. 56.18 ст. 56 ПКУ?');
+  const hits = [
+    { rada_nreg: '2755-17', score: 0.9, ordering_score: 0.9 } as never,
+    { rada_nreg: '2755-17', score: 0.85, ordering_score: 0.85 } as never,
+    { rada_nreg: '2747-15', score: 0.8, ordering_score: 0.8 } as never,
+  ];
+  if (shouldSkipReferenceExpansionForStrongCoverage(hits, selectors)) {
+    throw new Error('Expected explicit selectors to keep reference expansion eligible');
+  }
+  console.log('[OK] explicit selectors keep reference expansion eligible');
 }
 
 function testExtractActSearchNregsFromHitsUsesOnlyActSearchHits(): void {
@@ -2948,9 +3026,13 @@ async function main(): Promise<void> {
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
   testStrongTaxonomySignalHelperMatchesSingleGoalPolicy();
+  testDomainHintAlignedFamilyHelper();
   testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal();
   testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak();
   testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest();
+  testSingleGoalFirstPassPlanPreservesExplicitActsOnlyRequest();
+  testReferenceExpansionSkipForStrongHeadCoverage();
+  testReferenceExpansionDoesNotSkipOnExplicitSelectors();
   testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
   testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();

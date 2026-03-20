@@ -49,6 +49,8 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - `scripts/lexery-legal-agent/retrieval/act-planner.ts` — LLM retrieval planner (tier 0/1/2)
 - `scripts/lexery-legal-agent/retrieval/query-rewriter-llm.ts` — LLM query rewrite + multi-aspect variants
 - `scripts/lexery-legal-agent/retrieval/query-rewrite-policy.ts` — cheap guardrail for when rewrite must be skipped on already-anchored structural legal queries
+- `scripts/lexery-legal-agent/retrieval/single-goal-first-pass.ts` — single-goal initial step planning + first-pass chunks/acts search with shared strong-taxonomy policy
+- `scripts/lexery-legal-agent/retrieval/single-goal-hit-postprocess.ts` — single-goal postprocess pipeline (ordering, noise/diversity, reference expansion, article backfill, final cap)
 - `scripts/lexery-legal-agent/retrieval/rrf-merge.ts` — RRF merge для multi-query
 - `scripts/lexery-legal-agent/retrieval/reference-expander.ts` — reference expansion (згадані акти/статті → додаткові hits)
 - `scripts/lexery-legal-agent/retrieval/within-act-expansion-policy.ts` — policy module for when strong/structural/procedural single-goal queries still deserve wider per-act fanout
@@ -60,10 +62,13 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 
 **Tools (не входять в runtime):** → `scripts/lexery-legal-agent/tools/u4/`
 - `query_retrieval_debug.ts` — ad hoc retrieval debugger для довільного юридичного запиту (`selected_acts`, top hits, reason_codes, qdrant_calls) у retrieval-focused harness
+- `audit_lldbi_act_coverage.ts` — broad LLDBI act-surface audit: бере багато indexed актів із `legislation_documents`, будує cheap act-centric probes і перевіряє, чи U4 взагалі стабільно піднімає target act поза curated golden cases
 
 ## Поточний refactor напрямок
 
 - `cache-rag.ts` лишається orchestration layer, а не місцем для всіх scoring/policy деталей.
+- Single-goal first-pass уже винесений окремо: `cache-rag.ts` не повинен сам збирати initial chunks/acts plan, policy skip для eager `lldbi_acts`, або перший Qdrant fanout inline.
+- Single-goal hit postprocess теж окремий: ordering/noise/diversity, reference expansion, article backfill і final cap більше не мають жити inline у `cache-rag.ts`.
 - Ranking/pipeline post-processing виноситься в окремі retrieval-модулі, щоб безпечніше тюнити quality/latency без ризику змішати orchestration, data access і ranking policy в одному файлі.
 - Within-act act-pool assembly винесений в окремий retrieval-модуль, щоб single-goal і multi-goal paths збирали один і той самий ranked pool актів без дублювання `lldbi_acts` search у середині `cache-rag.ts`.
 - Act ranking тепер окремо поєднує LLDBI metadata signals і retrieval evidence з фінальних hits: сильні ранні article hits можуть підняти правильний акт навіть коли U2 domain hint помиляється.
@@ -85,6 +90,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - Generic document-type hints більше не можуть самі по собі проштовхнути support act у звичайний `selected_acts` tail; hint-only fallback лишається лише для мінімального recovery path.
 - `selected_acts` оцінює не лише `count_in_top30`, а й ранню силу evidence (`best_rank_in_top30`, `rank_mass_top30`, `max_ordering_score`), тому сильна релевантна норма з невеликою кількістю hits не губиться за шумним хвостом.
 - Для single-goal first pass `lldbi_acts` більше не є обов'язковим default call: якщо taxonomy already дає сильний grounded signal (`taxonomy_act_count`, `alias_hits`, category/doc-type hints), runtime може пропустити eager acts-search і покластися на taxonomy + chunk evidence.
+- Якщо step-plan явно просить `lldbi_acts` без `lldbi_chunks`, такий acts-only path вважається авторитетним і не може бути тихо прибраний strong-taxonomy gate-ом.
 - Strong taxonomy support тепер нормалізований спільним helper-правилом і використовується консистентно в різних policy точках U4, а не дублюється локальними умовами в rewrite/search flow.
 - Для procedural-dominant traces secondary-order support потребує не лише repeated chunk evidence, а й family/hint alignment; це прибирає чужі постанови/накази з кримінально-процесуальних trace без втрати корисних support-order cases.
 - Family coverage guard тепер evidence-driven: він не має права додати PRIMARY_LAW акт лише за family/category fit, якщо у final retrieval head немає material chunk evidence. У таких випадках trace має показати `FAMILY_GUARD_NO_EVIDENCE`, а не вдавати complete legal coverage.
@@ -100,6 +106,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 - У golden evaluation dataset тепер більше кейсів з same-act multi-article, substantive+procedure та large-code procedural competition, щоб regression ловив не лише прості `ККУ/КУпАП` запити, а й цивільно-процесуальні, податкові, сімейні та банкрутні сценарії.
 - У single-goal режимі `selected_acts` тепер може зберегти один сильний secondary supporting act, якщо він має повторний chunk-evidence у top-30; це прибирає false negative для practical-order cases на кшталт повернення товару.
 - У multi-clause запитах, де один кодекс явно покриває обидві частини питання, `selected_acts` більше не зобов'язаний добирати другий акт лише через `goals_count >= 2`; це прибирає procedural noise у same-act cases на кшталт банкрутства.
+- Для single-goal runs honesty guard тепер має ловити ще й fragmented `PRIMARY_LAW` selection: коли видача розвалюється на кілька різних family без metadata grounding, або head family суперечить конкретному `domainHint`, trace має переходити в low-confidence замість удавано впевненого `none`.
 - Corpus hygiene теж є частиною retrieval quality: якщо в LLDBI/Qdrant payload відсутні `chunk_title`, `unit_type`, `article_number` або висять старі `content_hash` версії, structural rerank у U4 втрачає точність навіть коли правильний акт уже є в корпусі.
 - Для structural legal retrieval runtime тепер очікує не лише `article_number`, а й глибші payload selectors (`article_part_number`, `point_number`, `subpoint_number`, `paragraph_number`, `citation_path`, `unstructured_fallback`); без цього українські `п./пп./ч.` запити неминуче деградують у noisy semantic search.
 - `article-backfill` тепер має two-step recovery path: спершу пробує exact structural Qdrant filter, а коли cluster не має індексу на кшталт `point_number`, падає назад до вузького within-act search + local structural post-filter. Це робить runtime стійкішим до LLDBI/Qdrant index drift без окремого hotfix per act.

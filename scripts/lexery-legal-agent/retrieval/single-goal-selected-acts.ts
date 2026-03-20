@@ -156,6 +156,54 @@ function toFamilyKey(category: string | undefined | null): string {
     .trim() || 'unknown';
 }
 
+function normalizeDomainHintKey(domainHint: string | undefined | null): string {
+  const normalized = (domainHint ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .trim();
+  if (normalized === 'admin') return 'administrative';
+  return normalized;
+}
+
+function isSpecificDomainHint(domainHint: string | undefined | null): boolean {
+  const normalized = normalizeDomainHintKey(domainHint);
+  return normalized.length > 0 && normalized !== 'general' && normalized !== 'unknown';
+}
+
+export function isDomainHintAlignedFamily(
+  domainHint: string | undefined | null,
+  familyKey: string | undefined | null
+): boolean {
+  const normalizedDomain = normalizeDomainHintKey(domainHint);
+  const normalizedFamily = toFamilyKey(familyKey);
+  if (!isSpecificDomainHint(normalizedDomain) || !normalizedFamily || normalizedFamily === 'unknown') return false;
+  if (normalizedFamily === normalizedDomain) return true;
+  if (normalizedFamily.startsWith(`${normalizedDomain}_`) || normalizedDomain.startsWith(`${normalizedFamily}_`)) {
+    return true;
+  }
+  if (normalizedDomain === 'tax_customs' && normalizedFamily.startsWith('tax')) return true;
+  if (normalizedDomain === 'tax' && normalizedFamily.startsWith('tax')) return true;
+  if (normalizedDomain === 'labor_social' && normalizedFamily.startsWith('labor')) return true;
+  if (normalizedDomain === 'labor' && normalizedFamily.startsWith('labor')) return true;
+  if (normalizedDomain === 'civil' && (normalizedFamily === 'civil' || normalizedFamily === 'civil_procedure')) {
+    return true;
+  }
+  if (
+    normalizedDomain === 'criminal' &&
+    (normalizedFamily === 'criminal' || normalizedFamily === 'criminal_procedure')
+  ) {
+    return true;
+  }
+  if (
+    normalizedDomain === 'administrative' &&
+    (normalizedFamily === 'administrative' || normalizedFamily === 'administrative_offenses')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const METADATA_GROUNDING_REASON_CODES = new Set([
   'alias_match',
   'keyword_match',
@@ -774,6 +822,51 @@ export async function resolveSingleGoalSelectedActs(
     (documentTypeHints?.length ?? 0) > 0 ||
     entitiesCount > 0 ||
     anchorsCount > 0;
+  const selectedPrimaryActs = selected_acts_final.filter((act) => act.act_kind === 'PRIMARY_LAW');
+  const selectedPrimaryFamilies = selectedPrimaryActs.map((act) =>
+    toFamilyKey(
+      actCandidatesTopHydrated.find((candidate) => candidate.rada_nreg === act.rada_nreg)?.category ?? act.category
+    )
+  );
+  const distinctPrimaryFamilies = [...new Set(selectedPrimaryFamilies.filter(Boolean))];
+  const metadataGroundedPrimaryActsCount = selectedPrimaryActs.filter((act) => {
+    const candidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === act.rada_nreg);
+    return candidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+  }).length;
+  const leadSelectedFamilyKey = toFamilyKey(leadSelectedCandidate?.category ?? leadSelectedAct?.category);
+  const hasDomainAlignedPrimaryFamily = selectedPrimaryFamilies.some((familyKey) =>
+    isDomainHintAlignedFamily(domainHint, familyKey)
+  );
+  const leadSelectedFamilyAlignedToDomain = isDomainHintAlignedFamily(domainHint, leadSelectedFamilyKey);
+  const fragmentedPrimaryFamilySelection =
+    distinctPrimaryFamilies.length >= 3 && (topScore ?? 0) < 0.6;
+  const multiFamilyUngroundedSelection =
+    !isSpecificDomainHint(domainHint) &&
+    distinctPrimaryFamilies.length >= 2 &&
+    metadataGroundedPrimaryActsCount === 0 &&
+    (topScore ?? 0) < 0.55;
+  const domainHintPrimaryFamilyMismatch =
+    isSpecificDomainHint(domainHint) &&
+    distinctPrimaryFamilies.length >= 2 &&
+    hasDomainAlignedPrimaryFamily &&
+    !leadSelectedFamilyAlignedToDomain &&
+    (topScore ?? 0) < 0.6;
+
+  if (fragmentedPrimaryFamilySelection) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'FRAGMENTED_PRIMARY_FAMILY_SELECTION');
+    pushUnique(reasonCodes, 'LOW_EVIDENCE');
+  }
+  if (domainHintPrimaryFamilyMismatch) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'DOMAIN_HINT_PRIMARY_FAMILY_MISMATCH');
+    pushUnique(reasonCodes, 'LOW_EVIDENCE');
+  }
+  if (multiFamilyUngroundedSelection) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'UNGROUNDED_MULTI_FAMILY_SELECTION');
+    pushUnique(reasonCodes, 'LOW_EVIDENCE');
+  }
   if (
     hasPrimarySelectedAct &&
     !hasStructuredGroundingSignals &&
@@ -803,6 +896,19 @@ export async function resolveSingleGoalSelectedActs(
     const evidenceByNreg = new Map(chunksEvidenceTopActs.map((item) => [item.rada_nreg, item] as const));
     selected_acts_final = [...selected_acts_final]
       .sort((left, right) => {
+        const leftDomainAligned =
+          left.act_kind === 'PRIMARY_LAW' &&
+          isDomainHintAlignedFamily(
+            domainHint,
+            actCandidatesTopHydrated.find((candidate) => candidate.rada_nreg === left.rada_nreg)?.category ?? left.category
+          );
+        const rightDomainAligned =
+          right.act_kind === 'PRIMARY_LAW' &&
+          isDomainHintAlignedFamily(
+            domainHint,
+            actCandidatesTopHydrated.find((candidate) => candidate.rada_nreg === right.rada_nreg)?.category ?? right.category
+          );
+        if (leftDomainAligned !== rightDomainAligned) return rightDomainAligned ? 1 : -1;
         const leftEvidence = evidenceByNreg.get(left.rada_nreg ?? '');
         const rightEvidence = evidenceByNreg.get(right.rada_nreg ?? '');
         const rankMassDiff = (rightEvidence?.rank_mass_top30 ?? 0) - (leftEvidence?.rank_mass_top30 ?? 0);

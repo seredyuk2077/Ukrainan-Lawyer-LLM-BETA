@@ -41,6 +41,9 @@ export function buildSingleGoalFirstPassPlan(input: {
   taxonomyStrength?: SingleGoalTaxonomyStrength;
 }): BuildSingleGoalFirstPassPlanResult {
   const requestedStepKinds = normalizeRequestedStepKinds(input.steps);
+  const explicitActsOnlyRequest =
+    (input.steps?.some((step) => step.kind === 'lldbi_acts') ?? false) &&
+    !(input.steps?.some((step) => step.kind === 'lldbi_chunks') ?? false);
   const strongTaxonomySignal = hasStrongSingleGoalTaxonomySignal({
     goals_count: input.goalsCount,
     taxonomy_strength: input.taxonomyStrength,
@@ -50,12 +53,13 @@ export function buildSingleGoalFirstPassPlan(input: {
     if (kind === 'lldbi_chunks') {
       return [{ kind, collection: input.collections.chunks } satisfies SingleGoalFirstPassStep];
     }
-    if (strongTaxonomySignal) return [];
+    if (strongTaxonomySignal && !explicitActsOnlyRequest) return [];
     return [{ kind, collection: input.collections.acts } satisfies SingleGoalFirstPassStep];
   });
 
   const actsSearchPolicyReasonCodes: string[] = [];
   if (!requestedStepKinds.includes('lldbi_acts')) actsSearchPolicyReasonCodes.push('NOT_REQUESTED');
+  else if (explicitActsOnlyRequest) actsSearchPolicyReasonCodes.push('EXPLICIT_ACTS_ONLY_REQUEST');
   else if (strongTaxonomySignal) actsSearchPolicyReasonCodes.push('STRONG_TAXONOMY_SIGNAL');
   else actsSearchPolicyReasonCodes.push('ACTS_SEARCH_ENABLED');
 

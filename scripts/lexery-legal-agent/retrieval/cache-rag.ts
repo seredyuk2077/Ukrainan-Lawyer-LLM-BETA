@@ -37,7 +37,6 @@ import {
 } from './act-taxonomy-store.js';
 import { rankActCandidates } from './act-candidate-ranking.js';
 import { getFragmentFromR2 } from './r2-fragment.js';
-import { expandReferences, type ReferenceExpansionMeta } from './reference-expander.js';
 import {
   buildSelectedActs,
   computeChunksEvidenceTopActs,
@@ -47,7 +46,6 @@ import {
 } from './selected-acts.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidence.js';
 import { runQueryRewritePhase } from './query-rewrite-phase.js';
-import { runArticleBackfill } from './article-backfill.js';
 import { fetchRecentMemory } from './memory-store.js';
 import { buildGroundedRetrievalQuery } from './grounded-query-builder.js';
 import {
@@ -80,6 +78,7 @@ import {
   buildSingleGoalFirstPassPlan,
   runSingleGoalFirstPassSearch,
 } from './single-goal-first-pass.js';
+import { runSingleGoalHitPostprocess } from './single-goal-hit-postprocess.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -98,25 +97,6 @@ function toLldbiHintsUsed(
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
-
-function shouldSkipReferenceExpansionForStrongCoverage(
-  finalHits: RawHit[],
-  querySelectors: ReturnType<typeof extractQueryCitationSelectors>
-): boolean {
-  if (querySelectors.explicitSelectorCount > 0 || querySelectors.noteMentioned) return false;
-  const headHits = finalHits.filter((hit) => hit.rada_nreg).slice(0, 12);
-  if (headHits.length === 0) return false;
-  const uniqueActs = new Set(headHits.map((hit) => hit.rada_nreg as string));
-  if (uniqueActs.size <= 2) return true;
-  const evidence = computeChunksEvidenceTopActs(headHits);
-  if (evidence.length < 2) return false;
-  const totalRankMass = evidence.reduce((sum, item) => sum + (item.rank_mass_top30 ?? 0), 0);
-  if (totalRankMass <= 0) return false;
-  const top2RankMass = evidence
-    .slice(0, 2)
-    .reduce((sum, item) => sum + (item.rank_mass_top30 ?? 0), 0);
-  return top2RankMass / totalRankMass >= 0.88 && (evidence[1]?.count_in_top30 ?? 0) >= 2;
 }
 
 async function prioritizeProcedureActs(nregs: string[]): Promise<string[]> {
@@ -1705,150 +1685,40 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     }
   }
 
-  // Hybrid re-score for ordering (no extra LLM); hit.score unchanged for audit
-  if (allHits.length > 0 && taxonomyResult.debug.source === 'supabase') {
-    applyHybridOrdering(allHits, rankingQuery, taxonomyResult, entities);
-  }
-
-  // Anti-noise: demote "Окрема думка" / "порядок торгівлі" etc. for ordering (with guard)
-  const noiseResultSingle = applyNoisePenalty(allHits, config.u4FusionTopN);
-  allHits.length = 0;
-  allHits.push(...noiseResultSingle.hits);
-
-  // Diversity cap: limit same-act dominance in top N
-  const capped = applyDiversityCap(allHits);
-  allHits.length = 0;
-  allHits.push(...capped);
-
-  // Reference expansion (U4): extract refs from top chunks, resolve via taxonomy, add hits (before cap)
-  let referenceExpansionMeta: ReferenceExpansionMeta = {
-    enabled: config.u4ReferenceExpansionEnabled,
-    attempted: false,
-    added_count: 0,
-    referenced_acts: [],
-    parse_hits_used: 0,
-    skipped_reason_codes: [],
-  };
-  const skipReferenceExpansionForStrongCoverage = shouldSkipReferenceExpansionForStrongCoverage(
-    allHits,
-    singleGoalQuerySelectors
-  );
-  if (
-    config.u4ReferenceExpansionEnabled &&
-    vector &&
-    allHits.length > 0 &&
-    !skipReferenceExpansionForStrongCoverage
-  ) {
-    const initialQdrantCount = qdrantCallCounter.count;
-    const maxExtraCalls = config.u4ReferenceExpansionMaxQdrantCalls ?? 4;
-    const existingKeys = new Set(allHits.map((h) => `${h.r2_key}:${h.json_path}`));
-    const retrieveChunksForAct = async (params: {
-      rada_nreg: string;
-      articleRef?: string;
-      queryVariant?: string;
-      limit: number;
-    }): Promise<RawHit[]> => {
-      if (qdrantCallCounter.count >= initialQdrantCount + maxExtraCalls) return [];
-      const searchQuery = params.queryVariant ?? params.articleRef ?? query;
-      let searchVector = vector!;
-      if (searchQuery !== query) {
-        try {
-          const emb = await embedQuery(searchQuery);
-          searchVector = emb.embedding;
-        } catch {
-          // fallback to main query vector
-        }
-      }
-      const hits = await qdrantSearch({
-        collection: collections.chunks,
-        vector: searchVector,
-        limit: params.limit,
-        filter: { must: [{ key: 'rada_nreg', match: { value: params.rada_nreg } }] },
-        timeoutMs: config.qdrantTimeoutSec * 1000,
-        retry: false,
-        callCounter: qdrantCallCounter,
-      });
-      return hits.map((h) => payloadToRawHit(h, 'lldbi_chunks'));
-    };
-    try {
-      const { addedHits, meta } = await expandReferences({
-        finalHitsBeforeCap: allHits.slice(0, 12),
-        fetchChunkText: getFragmentFromR2,
-        resolveActByTitleFragment: findActByTitleFragment,
-        resolveActByAlias: findActByAlias,
-        retrieveChunksForAct,
-        getActMeta,
-        config: {
-          maxParseHits: 10,
-          maxReferencedActs: config.u4ReferenceExpansionMaxReferencedActs ?? 2,
-          maxAddedHits: config.u4ReferenceExpansionMaxAddedHits ?? 10,
-        },
-        lowConfidence: false,
-        existingKeys,
-      });
-      referenceExpansionMeta = meta;
-      if (addedHits.length > 0) {
-        allHits.push(...addedHits);
-        const deduped = dedupeHits(allHits);
-        if (taxonomyResult.debug.source === 'supabase') {
-          applyHybridOrdering(deduped, rankingQuery, taxonomyResult, entities);
-        } else {
-          deduped.sort(compareRawHitByScore);
-        }
-        allHits.length = 0;
-        allHits.push(...deduped);
-      }
-    } catch {
-      referenceExpansionMeta.skipped_reason_codes.push('EXPANSION_ERROR');
-    }
-  } else if (skipReferenceExpansionForStrongCoverage) {
-    referenceExpansionMeta.skipped_reason_codes.push('STRONG_HEAD_COVERAGE');
-  }
-
-  // Re-apply noise penalty + diversity cap after reference expansion so that
-  // ref-expanded hits from known noise acts (e.g. 2790-12) are also penalized and capped.
-  if (referenceExpansionMeta.added_count > 0) {
-    const noiseAfterExp = applyNoisePenalty(allHits, config.u4FusionTopN);
-    allHits.length = 0;
-    allHits.push(...noiseAfterExp.hits);
-    const cappedAfterExp = applyDiversityCap(allHits);
-    allHits.length = 0;
-    allHits.push(...cappedAfterExp);
-  }
-
-  // U4 Article-reference backfill: strong refs only; now structural-aware for ч./п./пп./абз.
-  const articleBackfill = await runArticleBackfill({
-    enabled: config.u4ArticleBackfillEnabled,
+  const postprocessResult = await runSingleGoalHitPostprocess({
     query,
+    rankingQuery,
     vector,
-    collection: collections.chunks,
-    timeoutMs: config.qdrantTimeoutSec * 1000,
-    maxCalls: config.u4ArticleBackfillMaxCalls,
-    maxAddedHits: config.u4ArticleBackfillMaxAddedHits,
-    existingHits: allHits,
+    topScore,
+    allHits,
     taxonomyResult,
-    callCounter: qdrantCallCounter,
+    entities,
+    querySelectors: singleGoalQuerySelectors,
+    collections: { chunks: collections.chunks },
+    qdrantCallCounter,
+    timeoutMs: config.qdrantTimeoutSec * 1000,
+    hitsCap: config.u4HitsCap,
+    fusionTopN: config.u4FusionTopN,
+    queryRewriteMeta,
+    referenceExpansionEnabled: config.u4ReferenceExpansionEnabled,
+    referenceExpansionMaxQdrantCalls: config.u4ReferenceExpansionMaxQdrantCalls,
+    referenceExpansionMaxReferencedActs: config.u4ReferenceExpansionMaxReferencedActs,
+    referenceExpansionMaxAddedHits: config.u4ReferenceExpansionMaxAddedHits,
+    articleBackfillEnabled: config.u4ArticleBackfillEnabled,
+    articleBackfillMaxCalls: config.u4ArticleBackfillMaxCalls,
+    articleBackfillMaxAddedHits: config.u4ArticleBackfillMaxAddedHits,
+    fetchChunkText: getFragmentFromR2,
+    resolveActByTitleFragment: findActByTitleFragment,
+    resolveActByAlias: findActByAlias,
+    getActMeta,
   });
-  const articleBackfillMeta = articleBackfill.meta;
-  if (articleBackfill.addedHits.length > 0) {
-    allHits.push(...articleBackfill.addedHits);
-    const deduped = dedupeHits(allHits);
-    if (taxonomyResult.debug.source === 'supabase') {
-      applyHybridOrdering(deduped, rankingQuery, taxonomyResult, entities);
-    } else {
-      deduped.sort(compareRawHitByScore);
-    }
-    const noiseAfterBackfill = applyNoisePenalty(deduped, config.u4FusionTopN);
-    const cappedAfterBackfill = applyDiversityCap(noiseAfterBackfill.hits);
-    allHits.length = 0;
-    allHits.push(...cappedAfterBackfill);
-  }
-
-  const hitsTotalBeforeCapSingle = allHits.length;
-  const finalHits = config.u4HitsCap > 0 ? allHits.slice(0, config.u4HitsCap) : allHits;
-  const hitsCapAppliedSingle = config.u4HitsCap > 0 && hitsTotalBeforeCapSingle > config.u4HitsCap;
-  const avgScore =
-    finalHits.length > 0 ? finalHits.reduce((s, h) => s + h.score, 0) / finalHits.length : undefined;
+  const finalHits = postprocessResult.finalHits;
+  topScore = postprocessResult.topScore;
+  const hitsTotalBeforeCapSingle = postprocessResult.hitsTotalBeforeCap;
+  const hitsCapAppliedSingle = postprocessResult.hitsCapApplied;
+  const avgScore = postprocessResult.avgScore;
+  const referenceExpansionMeta = postprocessResult.referenceExpansionMeta;
+  const articleBackfillMeta = postprocessResult.articleBackfillMeta;
 
   // Act candidates (ACTS-1 pool + score + diversity): taxonomy + act search, then policy cap (Act selection 3.1)
   const actNregsFromSearch = extractActSearchNregsFromHits(rawPerStep);
@@ -2048,9 +1918,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     goalType: goalSplit.goals[0].goal_type,
     hitsByActTop3,
     avgScoreByActTop3,
-    noisePenaltyCount: noiseResultSingle.penaltyCount,
-    noisePenaltyGuardBlockedCount: noiseResultSingle.guardBlockedCount,
-    noisePenaltyGuardReasonCodes: noiseResultSingle.guardReasonCodes,
+    noisePenaltyCount: postprocessResult.noisePenaltyCount,
+    noisePenaltyGuardBlockedCount: postprocessResult.noisePenaltyGuardBlockedCount,
+    noisePenaltyGuardReasonCodes: postprocessResult.noisePenaltyGuardReasonCodes,
     selectedActsSourcesBreakdown: selected_acts_sources_breakdown_final,
     chunksEvidenceTopActs: chunks_evidence_top_acts,
     selectedActsFinalMeta,

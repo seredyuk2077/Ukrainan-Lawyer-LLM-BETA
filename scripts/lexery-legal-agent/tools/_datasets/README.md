@@ -49,6 +49,7 @@ pnpm exec tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts
 
 - `rag_golden_cases.json` не має бути smoke-only набором. Це article-level benchmark для українського legal RAG.
 - `rag_golden_cases.json` тепер може містити `shadow=true` кейси не лише для OOD / likely-missing-act, а й для generalized families, які ми ще не готові жорстко gate-ити. `verify_rag_golden` за замовчуванням їх не gate-ить; запускайте окремо через `--only=shadow` або додавайте `--include-shadow`, коли перевіряєте honest corpus-gap path і shadow-first retrieval families.
+- Для нової generalized family не достатньо одного phrasing. Додавайте щонайменше 3 shadow-варианти: canonical lawyer-style, short colloquial, synonymized / latent-semantic phrasing. Це допомагає ловити retrieval policies, які випадково працюють лише на одному wording.
 - Shadow/OOD кейс не повинен залишатися shadow лише “бо ми ще не були впевнені”. Якщо live retrieval стабільно показує, що LLDBI вже покриває цей regime релевантними нормами, кейс треба промоутити назад у normal golden bucket з explicit expectations, а не змушувати RAG симулювати missing-act path.
 - Shadow generalized case не повинен бути “м'якою лазівкою”. Навіть якщо він ще не hard-gate, він має або перевіряти конкретний retrieval shape (`expected_selected_acts`, `expected_primary`, budgets), або чесний low-confidence / coverage-gap contract.
 - Для same-act multi-article сценаріїв використовуйте `expected_hits`, а не лише `expected_primary`, якщо важливо перевірити кілька норм одного кодексу.
