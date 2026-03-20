@@ -49,7 +49,6 @@ import { computeFamilyEvidence, toFamilyEvidenceSummary } from './family-evidenc
 import { runQueryRewritePhase } from './query-rewrite-phase.js';
 import { runArticleBackfill } from './article-backfill.js';
 import { fetchRecentMemory } from './memory-store.js';
-import { rrfMerge } from './rrf-merge.js';
 import { buildGroundedRetrievalQuery } from './grounded-query-builder.js';
 import {
   incrementU4DomainBootstrapAttempted,
@@ -77,6 +76,10 @@ import { deriveCoverageGap } from './coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
 import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
 import { buildGoalSupportByActFromGoalsSummary, serializeGoalSupportMap } from './goal-support.js';
+import {
+  buildSingleGoalFirstPassPlan,
+  runSingleGoalFirstPassSearch,
+} from './single-goal-first-pass.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -1445,6 +1448,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       entities,
     }));
   taxonomySnapshotVersion = taxonomyResult.debug.taxonomy_snapshot_version ?? null;
+  const singleGoalTaxonomyStrength = {
+    taxonomy_act_count: taxonomyResult.rada_nreg_candidates?.length ?? 0,
+    alias_hit_count: taxonomyResult.alias_hits?.length ?? 0,
+    category_hint_count: taxonomyResult.category_hints?.length ?? 0,
+    document_type_hint_count: documentTypeHints.length,
+  };
 
   let actPlannerOutput: ActPlannerOutput | null = null;
   let actPlannerCalledThisRun = false;
@@ -1606,82 +1615,28 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     return { rawHits: [], retrievalTrace: emptyTrace };
   }
 
-  const stepsToRun: Array<{ kind: 'lldbi_chunks' | 'lldbi_acts'; collection: string }> = [];
-  if (steps?.length) {
-    for (const s of steps) {
-      if (s.kind === 'lldbi_chunks') stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-      else if (s.kind === 'lldbi_acts') stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
-    }
-  }
-  if (stepsToRun.length === 0) {
-    stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-    stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
-  }
-  stepsRequested.push(...stepsToRun.map((s) => s.kind));
-  const usedActsSearch = stepsToRun.some((s) => s.kind === 'lldbi_acts');
+  const firstPassPlan = buildSingleGoalFirstPassPlan({
+    steps,
+    collections,
+    goalsCount: goalSplit.goals.length,
+    taxonomyStrength: singleGoalTaxonomyStrength,
+  });
+  stepsRequested.push(...firstPassPlan.requestedStepKinds);
+  const usedActsSearch = firstPassPlan.usedActsSearch;
 
-  const rawPerStep: RawHit[] = [];
-  const hitKey = (r: RawHit) => `${r.r2_key ?? ''}:${r.json_path ?? ''}`;
-  const initialStepResults = await Promise.allSettled(
-    stepsToRun.map(async ({ kind, collection }) => {
-      const stepStart = Date.now();
-      const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
-      try {
-        let rawHits: RawHit[];
-        if (useMultiQuery && vectorsByQuery.length > 1) {
-          const perVectorResults = await Promise.allSettled(
-            vectorsByQuery.map((currentVector) =>
-              qdrantSearch({
-                collection,
-                vector: currentVector,
-                limit,
-                timeoutMs: config.qdrantTimeoutSec * 1000,
-                callCounter: qdrantCallCounter,
-              })
-            )
-          );
-          const lists = perVectorResults
-            .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof qdrantSearch>>> => result.status === 'fulfilled')
-            .map((result) =>
-              result.value
-                .map((hit) => payloadToRawHit(hit, kind))
-                .filter((raw) => raw.r2_key && raw.json_path)
-            );
-          rawHits = rrfMerge(lists, hitKey, (raw) => raw.score ?? 0);
-        } else {
-          const hits = await qdrantSearch({
-            collection,
-            vector: vector!,
-            limit,
-            timeoutMs: config.qdrantTimeoutSec * 1000,
-            callCounter: qdrantCallCounter,
-          });
-          rawHits = hits
-            .map((hit) => payloadToRawHit(hit, kind))
-            .filter((raw) => raw.r2_key && raw.json_path);
-        }
-        return {
-          collection,
-          latencyMs: Date.now() - stepStart,
-          rawHits,
-        };
-      } catch {
-        return {
-          collection,
-          latencyMs: Date.now() - stepStart,
-          rawHits: [] as RawHit[],
-          degraded: true,
-        };
-      }
-    })
-  );
-  for (const result of initialStepResults) {
-    if (result.status !== 'fulfilled') continue;
-    if (result.value.degraded) degraded.lldbi = true;
-    stepsLatencyMs.push(result.value.latencyMs);
-    collectionsUsed.push(result.value.collection);
-    rawPerStep.push(...result.value.rawHits);
-  }
+  const firstPassSearch = await runSingleGoalFirstPassSearch({
+    stepsToRun: firstPassPlan.stepsToRun,
+    vectorsByQuery,
+    primaryVector: vector!,
+    topKChunks: topK,
+    topKActs: searchPlan.thresholds?.top_k_acts ?? 10,
+    timeoutMs: config.qdrantTimeoutSec * 1000,
+    callCounter: qdrantCallCounter,
+  });
+  if (firstPassSearch.degraded) degraded.lldbi = true;
+  stepsLatencyMs.push(...firstPassSearch.stepsLatencyMs);
+  collectionsUsed.push(...firstPassSearch.collectionsUsed);
+  const rawPerStep: RawHit[] = [...firstPassSearch.rawPerStep];
 
   const aboveThreshold = rawPerStep.filter((h) => h.score >= minScore);
   const useLowConfidenceFallback = aboveThreshold.length === 0 && rawPerStep.length > 0;
@@ -2077,6 +2032,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     useMultiQuery,
     usedFilteredChunksSearch,
     withinActPolicyReasonCodes: withinActDecision.reason_codes,
+    actsSearchPolicyReasonCodes: firstPassPlan.actsSearchPolicyReasonCodes,
     anchorsUsed,
     taxonomySnapshotVersion,
     lldbiHintsPresent,

@@ -94,6 +94,7 @@ export const RetrievalTraceSchema = z.object({
       multi_query_variants_count: z.number().int().min(0).optional(),
       used_filtered_chunks_search: z.boolean().optional(),
       within_act_policy: z.array(z.string()).optional(),
+      acts_search_policy: z.array(z.string()).optional(),
       anchors_used: z.array(z.string()).optional(),
       taxonomy_snapshot_version: z.number().nullable().optional(),
       hybrid_rescore_used: z.boolean().optional(),

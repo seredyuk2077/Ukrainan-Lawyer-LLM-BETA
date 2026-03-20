@@ -54,6 +54,7 @@ export interface BuildSingleGoalRetrievalTraceInput {
   useMultiQuery: boolean;
   usedFilteredChunksSearch: boolean;
   withinActPolicyReasonCodes: string[];
+  actsSearchPolicyReasonCodes: string[];
   anchorsUsed: string[];
   taxonomySnapshotVersion?: number | null;
   lldbiHintsPresent: boolean;
@@ -190,6 +191,7 @@ export function buildSingleGoalRetrievalTrace(input: BuildSingleGoalRetrievalTra
       multi_query_variants_count: input.useMultiQuery ? input.queryVariantsUsed.length : undefined,
       used_filtered_chunks_search: input.usedFilteredChunksSearch || undefined,
       within_act_policy: input.withinActPolicyReasonCodes.length ? input.withinActPolicyReasonCodes : undefined,
+      acts_search_policy: input.actsSearchPolicyReasonCodes.length ? input.actsSearchPolicyReasonCodes : undefined,
       anchors_used: input.anchorsUsed.length ? input.anchorsUsed : undefined,
       taxonomy_snapshot_version: input.taxonomySnapshotVersion ?? undefined,
       lldbi_hints_present: input.lldbiHintsPresent,

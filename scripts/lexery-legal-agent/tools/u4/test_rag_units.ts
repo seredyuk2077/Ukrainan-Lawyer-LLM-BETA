@@ -22,6 +22,9 @@ import {
   extractChunkEvidenceNregsFromHits,
 } from '../../retrieval/within-act-pool.js';
 import {
+  buildSingleGoalFirstPassPlan,
+} from '../../retrieval/single-goal-first-pass.js';
+import {
   buildDiscriminativeQueryTokenWeights,
   compareHitsByOrderingScore,
   computeChunkStructuralScore,
@@ -51,6 +54,7 @@ import {
 } from '../../retrieval/selected-acts-finalizer.js';
 import { deriveCoverageGap } from '../../retrieval/coverage-gap.js';
 import { normalizeFinalReasonCodes } from '../../retrieval/single-goal-selected-acts.js';
+import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -351,6 +355,112 @@ function testActPlannerTierKeepsTierTwoForMultiGoal(): void {
   });
   if (tier !== 2) throw new Error(`Expected tier 2 for multi-goal query, got ${tier}`);
   console.log('[OK] act planner tier keeps tier 2 for multi-goal queries');
+}
+
+function testStrongTaxonomySignalHelperMatchesSingleGoalPolicy(): void {
+  const strong = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 2,
+      alias_hit_count: 1,
+      category_hint_count: 1,
+      document_type_hint_count: 0,
+    },
+  });
+  if (!strong) {
+    throw new Error('Expected shared taxonomy-strength helper to treat grounded single-goal support as strong');
+  }
+  const weak = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 2,
+    taxonomy_strength: {
+      taxonomy_act_count: 5,
+      alias_hit_count: 2,
+      category_hint_count: 2,
+      document_type_hint_count: 1,
+    },
+  });
+  if (weak) {
+    throw new Error('Expected shared taxonomy-strength helper to stay single-goal only');
+  }
+  console.log('[OK] taxonomy-strength helper stays aligned with single-goal strong-signal policy');
+}
+
+function testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: undefined,
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 4,
+      alias_hit_count: 2,
+      category_hint_count: 1,
+      document_type_hint_count: 1,
+    },
+  });
+  if (result.usedActsSearch) {
+    throw new Error(`Expected strong taxonomy signal to skip eager acts search, got ${JSON.stringify(result)}`);
+  }
+  if (JSON.stringify(result.requestedStepKinds) !== JSON.stringify(['lldbi_chunks', 'lldbi_acts'])) {
+    throw new Error(`Expected default requested steps to stay intact for trace/audit, got ${JSON.stringify(result.requestedStepKinds)}`);
+  }
+  if (JSON.stringify(result.stepsToRun.map((step) => step.kind)) !== JSON.stringify(['lldbi_chunks'])) {
+    throw new Error(`Expected only chunks step to execute under strong taxonomy signal, got ${JSON.stringify(result.stepsToRun)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('STRONG_TAXONOMY_SIGNAL')) {
+    throw new Error(`Expected STRONG_TAXONOMY_SIGNAL acts-search policy reason, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
+  }
+  console.log('[OK] single-goal first-pass plan skips eager acts search on strong taxonomy signal');
+}
+
+function testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: undefined,
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 0,
+      alias_hit_count: 0,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (!result.usedActsSearch) {
+    throw new Error(`Expected weak taxonomy signal to keep acts search enabled, got ${JSON.stringify(result)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('ACTS_SEARCH_ENABLED')) {
+    throw new Error(`Expected ACTS_SEARCH_ENABLED reason code, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
+  }
+  console.log('[OK] single-goal first-pass plan keeps acts search when taxonomy signal is weak');
+}
+
+function testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: [{ kind: 'lldbi_chunks' } as never],
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 0,
+      alias_hit_count: 0,
+      category_hint_count: 0,
+      document_type_hint_count: 0,
+    },
+  });
+  if (result.usedActsSearch) {
+    throw new Error(`Expected explicit chunks-only step request to avoid acts search, got ${JSON.stringify(result)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('NOT_REQUESTED')) {
+    throw new Error(`Expected NOT_REQUESTED acts-search policy reason, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
+  }
+  console.log('[OK] single-goal first-pass plan respects explicit chunks-only request');
 }
 
 function testExtractActSearchNregsFromHitsUsesOnlyActSearchHits(): void {
@@ -2837,6 +2947,10 @@ async function main(): Promise<void> {
   testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
+  testStrongTaxonomySignalHelperMatchesSingleGoalPolicy();
+  testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal();
+  testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak();
+  testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest();
   testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
   testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();

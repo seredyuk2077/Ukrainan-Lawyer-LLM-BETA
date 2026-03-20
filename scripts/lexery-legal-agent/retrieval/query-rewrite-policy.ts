@@ -1,17 +1,16 @@
 import type { ExtractedEntity, RoutingFlags } from '../classify/types.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
+import {
+  hasStrongSingleGoalTaxonomySignal,
+  type SingleGoalTaxonomyStrength,
+} from './taxonomy-strength.js';
 
 export interface QueryRewritePolicyDecision {
   shouldCall: boolean;
   reason_codes: string[];
 }
 
-export interface QueryRewriteTaxonomyStrength {
-  taxonomy_act_count: number;
-  alias_hit_count: number;
-  category_hint_count: number;
-  document_type_hint_count: number;
-}
+export type QueryRewriteTaxonomyStrength = SingleGoalTaxonomyStrength;
 
 function countTokens(query: string): number {
   return query
@@ -39,15 +38,10 @@ export function decideQueryRewritePolicy(input: {
   const tokenCount = countTokens(input.query);
   const goalsCount = Math.max(1, input.goals_count ?? 1);
   const taxonomyStrength = input.taxonomy_strength;
-  const strongTaxonomySupport =
-    goalsCount === 1 &&
-    taxonomyStrength != null &&
-    (taxonomyStrength.taxonomy_act_count >= 4 ||
-      taxonomyStrength.alias_hit_count >= 2 ||
-      (taxonomyStrength.taxonomy_act_count >= 2 &&
-        (taxonomyStrength.alias_hit_count >= 1 ||
-          taxonomyStrength.category_hint_count >= 1 ||
-          taxonomyStrength.document_type_hint_count >= 1)));
+  const strongTaxonomySupport = hasStrongSingleGoalTaxonomySignal({
+    goals_count: goalsCount,
+    taxonomy_strength: taxonomyStrength,
+  });
   const titleAnchoredStructure =
     input.entities.some((entity) => entity.type === 'law_title') &&
     selectors.explicitSelectorCount >= 1;
