@@ -5,12 +5,12 @@ import {
 } from '../gateway/observability.js';
 import {
   extractStructuredActIdentifiers,
-  looksLikeStructuredActIdentifier,
   type ActMeta,
 } from './act-taxonomy-store.js';
 import { deriveCoverageGap } from './coverage-gap.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary, type FamilyEvidence } from './family-evidence.js';
 import { hasExplicitActScopeCue } from './goal-splitter.js';
+import { resolveSingleActScopeSelection } from './single-goal-act-scope.js';
 import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
@@ -149,19 +149,6 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
 
 function pushUnique(reasonCodes: string[], code: string): void {
   if (!reasonCodes.includes(code)) reasonCodes.push(code);
-}
-
-function countResidualQueryTokensAfterStructuredIds(query: string): number {
-  const stripped = query
-    .normalize('NFC')
-    .replace(/[\p{L}\p{N}_/‐‑–—−-]{4,32}/gu, (match) =>
-      looksLikeStructuredActIdentifier(match) ? ' ' : match
-    );
-  return stripped.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
-}
-
-function countQueryTokens(query: string): number {
-  return query.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
 }
 
 function removeReasonCodes(reasonCodes: string[], codesToRemove: string[]): string[] {
@@ -837,218 +824,36 @@ export async function resolveSingleGoalSelectedActs(
     retrieval_evidence_nregs: finalHits.slice(0, 30).map((hit) => hit.rada_nreg ?? '').filter(Boolean),
   });
   selected_acts_final = selectedActsFinalMeta.selected_acts_final as SelectedActTraceItem[];
-  const exactActNregSet = new Set(exactActNregs);
-  const exactSingleActConverged = exactActNregSet.size === 1;
-  const groundedActNregSet = new Set(groundedActNregs);
-  const groundedSingleActConverged = groundedActNregSet.size === 1;
-  const explicitActScopeCueQuery =
-    hasExplicitActScopeCue(query) || extractStructuredActIdentifiers(query).length >= 1;
-  const explicitIdentifierScopedQuery =
-    exactSingleActConverged &&
-    extractStructuredActIdentifiers(query).length >= 1 &&
-    countResidualQueryTokensAfterStructuredIds(query) <= 2;
-  const compactGroundedActScopedQuery =
-    !explicitIdentifierScopedQuery &&
-    groundedSingleActConverged &&
-    countQueryTokens(query) <= 6;
-  if (
-    (explicitIdentifierScopedQuery || compactGroundedActScopedQuery) &&
-    selected_acts_final.length > 1 &&
-    selected_acts_final.some((act) =>
-      explicitIdentifierScopedQuery
-        ? exactActNregSet.has(act.rada_nreg)
-        : groundedActNregSet.has(act.rada_nreg)
-    )
-  ) {
-    selected_acts_final = selected_acts_final
-      .filter((act) =>
-        explicitIdentifierScopedQuery
-          ? exactActNregSet.has(act.rada_nreg)
-          : groundedActNregSet.has(act.rada_nreg)
-      )
-      .slice(0, 1);
-    pushUnique(reasonCodes, explicitIdentifierScopedQuery ? 'EXACT_ACT_SCOPE_TRIMMED' : 'GROUNDED_ACT_SCOPE_TRIMMED');
-  }
   const chunksEvidenceByNreg = new Map(chunksEvidenceTopActs.map((item) => [item.rada_nreg, item] as const));
-  const leadSelectedActBeforeExplicitScopeTrim = selected_acts_final[0];
-  const secondSelectedActBeforeExplicitScopeTrim = selected_acts_final[1];
-  const leadSelectedEvidenceBeforeExplicitScopeTrim = leadSelectedActBeforeExplicitScopeTrim
-    ? chunksEvidenceByNreg.get(leadSelectedActBeforeExplicitScopeTrim.rada_nreg)
-    : undefined;
-  const secondSelectedEvidenceBeforeExplicitScopeTrim = secondSelectedActBeforeExplicitScopeTrim
-    ? chunksEvidenceByNreg.get(secondSelectedActBeforeExplicitScopeTrim.rada_nreg)
-    : undefined;
-  const dominantExplicitNonPrimaryScope =
-    explicitActScopeCueQuery &&
-    selected_acts_final.length > 1 &&
-    !selected_acts_final.some((act) => act.act_kind === 'PRIMARY_LAW') &&
-    nonPrimaryAuthoritativeKinds.has(leadSelectedActBeforeExplicitScopeTrim?.act_kind ?? '') &&
-    (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.75 &&
-    (leadSelectedEvidenceBeforeExplicitScopeTrim?.count_in_top30 ?? 0) >= 5 &&
-    (leadSelectedEvidenceBeforeExplicitScopeTrim?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
-    (topScore ?? 0) >= 0.5 &&
-    (
-      secondSelectedEvidenceBeforeExplicitScopeTrim == null ||
-      (leadSelectedEvidenceBeforeExplicitScopeTrim?.rank_mass_top30 ?? 0) >=
-        (secondSelectedEvidenceBeforeExplicitScopeTrim.rank_mass_top30 ?? 0) + 0.35 ||
-      (leadSelectedEvidenceBeforeExplicitScopeTrim?.count_in_top30 ?? 0) >=
-        (secondSelectedEvidenceBeforeExplicitScopeTrim.count_in_top30 ?? 0) + 3
-    );
-  if (dominantExplicitNonPrimaryScope && leadSelectedActBeforeExplicitScopeTrim) {
-    selected_acts_final = [leadSelectedActBeforeExplicitScopeTrim];
-    pushUnique(reasonCodes, 'AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED');
-    const summary = summarizeSelectedActs(selected_acts_final as SelectedActOutput[]);
-    selectedActsFinalMeta = {
-      ...selectedActsFinalMeta,
-      selected_acts_final: selected_acts_final as SelectedActOutput[],
-      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.75),
-      selected_acts_decision_final: {
-        ...selectedActsFinalMeta.selected_acts_decision_final,
-        reason_codes: uniqueStrings([
-          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-          'AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED',
-        ]),
-      },
-      selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-      selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-    };
-  }
-  const scopeConstrainedNregSet =
-    exactSingleActConverged && exactActNregSet.size === 1
-      ? exactActNregSet
-      : groundedSingleActConverged && groundedActNregSet.size === 1
-        ? groundedActNregSet
-        : null;
-  const scopeConstraintCode =
-    exactSingleActConverged && exactActNregSet.size === 1
-      ? 'EXACT_ACT_SCOPE_FORCED'
-      : groundedSingleActConverged && groundedActNregSet.size === 1
-        ? 'GROUNDED_ACT_SCOPE_FORCED'
-        : null;
-  const scopeRecoveredCode =
-    exactSingleActConverged && exactActNregSet.size === 1
-      ? 'EXACT_ACT_SCOPE_RECOVERED'
-      : groundedSingleActConverged && groundedActNregSet.size === 1
-        ? 'GROUNDED_ACT_SCOPE_RECOVERED'
-        : null;
-  if (scopeConstrainedNregSet) {
-    const scopedSelectedActs = selected_acts_final.filter((act) => scopeConstrainedNregSet.has(act.rada_nreg));
-    const hadOutOfScopeActs = scopedSelectedActs.length !== selected_acts_final.length;
-    if (hadOutOfScopeActs) {
-      selected_acts_final = scopedSelectedActs;
-      if (scopeConstraintCode) pushUnique(reasonCodes, scopeConstraintCode);
-    }
-    if (selected_acts_final.length === 0) {
-      const scopeNreg = [...scopeConstrainedNregSet][0];
-      const evidence = chunksEvidenceTopActs.find((item) => item.rada_nreg === scopeNreg);
-      const scopeCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === scopeNreg);
-      const runnerUpCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg !== scopeNreg);
-      const metadataGroundedScopeCandidate =
-        scopeCandidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
-      const dominantMetadataGroundedScopeCandidate =
-        metadataGroundedScopeCandidate &&
-        (scopeCandidate?.score ?? 0) >= ((runnerUpCandidate?.score ?? 0) + 2);
-      const recoverableScopedEvidence =
-        evidence != null &&
-        (
-          evidence.best_rank_in_top30 <= 8 ||
-          (
-            explicitIdentifierScopedQuery &&
-            evidence.best_rank_in_top30 <= 30 &&
-            (evidence.max_ordering_score ?? 0) >= 0.25
-          ) ||
-          (
-            groundedSingleActConverged &&
-            dominantMetadataGroundedScopeCandidate &&
-            evidence.best_rank_in_top30 <= 15 &&
-            (evidence.max_ordering_score ?? 0) >= 0.33
-          )
-        );
-      if (recoverableScopedEvidence && evidence) {
-        const candidate = scopeCandidate;
-        const meta = (candidate?.title && candidate.document_type !== undefined && candidate.category !== undefined)
-          ? null
-          : await getActMeta(scopeNreg);
-        const actTitle = candidate?.title ?? meta?.title ?? scopeNreg;
-        selected_acts_final = [
-          {
-            rada_nreg: scopeNreg,
-            act_title: actTitle,
-            score: evidence.max_ordering_score || candidate?.score,
-            why_selected: `scope_recovery best_rank=${evidence.best_rank_in_top30} max_score=${evidence.max_ordering_score.toFixed(2)}`,
-            reason_tag: 'CHUNKS_EVIDENCE',
-            source_tags: uniqueStrings([
-              'CHUNKS_EVIDENCE',
-              ...(scopeRecoveredCode ? [scopeRecoveredCode] : []),
-            ]),
-            document_type: candidate?.document_type ?? meta?.document_type ?? null,
-            category: candidate?.category ?? meta?.category ?? null,
-            storage_category: meta?.storage_category ?? null,
-            act_kind: classifyActKind(actTitle, candidate?.document_type ?? meta?.document_type ?? null, candidate?.category ?? meta?.category ?? null),
-            flags: {
-              recovered: true,
-              keep_one: false,
-              draft: false,
-              opinion: false,
-            },
-            confidence: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.6),
-          },
-        ];
-        if (scopeRecoveredCode) pushUnique(reasonCodes, scopeRecoveredCode);
-        selected_acts_sources_breakdown_final = {
-          from_taxonomy: uniqueStrings([
-            ...selected_acts_sources_breakdown_final.from_taxonomy,
-            scopeNreg,
-          ]),
-          from_acts_search: selected_acts_sources_breakdown_final.from_acts_search.filter(Boolean),
-          from_chunks_evidence: uniqueStrings([
-            ...selected_acts_sources_breakdown_final.from_chunks_evidence,
-            scopeNreg,
-          ]),
-          from_routing_hints: selected_acts_sources_breakdown_final.from_routing_hints?.filter(Boolean),
-        };
-      }
-    }
-    if (hadOutOfScopeActs || selected_acts_final.length > 0) {
-      const summary = summarizeSelectedActs(selected_acts_final as SelectedActOutput[]);
-      selectedActsFinalMeta = {
-        ...selectedActsFinalMeta,
-        selected_acts_final: selected_acts_final as SelectedActOutput[],
-        selected_acts_confidence_final:
-          selected_acts_final.length > 0
-            ? Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.6)
-            : Math.min(selectedActsFinalMeta.selected_acts_confidence_final, 0.5),
-        selected_acts_decision_final: {
-          ...selectedActsFinalMeta.selected_acts_decision_final,
-          reason_codes: uniqueStrings([
-            ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-            ...(scopeConstraintCode ? [scopeConstraintCode] : []),
-            ...(selected_acts_final.length > 0 && scopeRecoveredCode ? [scopeRecoveredCode] : []),
-          ]),
-        },
-        selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-        selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-      };
-    }
-  }
-  const finalSelectedActNregs = new Set(selected_acts_final.map((act) => act.rada_nreg).filter(Boolean));
-  selected_acts_sources_breakdown_final = {
-    from_taxonomy: selected_acts_sources_breakdown_final.from_taxonomy.filter((radaNreg) =>
-      finalSelectedActNregs.has(radaNreg)
-    ),
-    from_acts_search: selected_acts_sources_breakdown_final.from_acts_search.filter((radaNreg) =>
-      finalSelectedActNregs.has(radaNreg)
-    ),
-    from_chunks_evidence: selected_acts_sources_breakdown_final.from_chunks_evidence.filter((radaNreg) =>
-      finalSelectedActNregs.has(radaNreg)
-    ),
-    from_routing_hints: selected_acts_sources_breakdown_final.from_routing_hints?.filter((radaNreg) =>
-      finalSelectedActNregs.has(radaNreg)
-    ),
-  };
+  const singleActScopeSelection = await resolveSingleActScopeSelection({
+    query,
+    selectedActsFinal: selected_acts_final,
+    selectedActsSourcesBreakdownFinal: selected_acts_sources_breakdown_final,
+    selectedActsFinalMeta: selectedActsFinalMeta,
+    reasonCodes,
+    chunksEvidenceTopActs,
+    actCandidatesTopHydrated,
+    exactActNregs,
+    groundedActNregs,
+    topScore,
+    getActMeta,
+    metadataGroundingReasonCodes: METADATA_GROUNDING_REASON_CODES,
+    nonPrimaryAuthoritativeKinds,
+  });
+  selected_acts_final = singleActScopeSelection.selectedActsFinal as SelectedActTraceItem[];
+  selected_acts_sources_breakdown_final = singleActScopeSelection.selectedActsSourcesBreakdownFinal;
+  selectedActsFinalMeta = singleActScopeSelection.selectedActsFinalMeta;
+  reasonCodes.splice(0, reasonCodes.length, ...singleActScopeSelection.reasonCodes);
+  const exactActNregSet = singleActScopeSelection.exactActNregSet;
+  const exactSingleActConverged = singleActScopeSelection.exactSingleActConverged;
+  const groundedActNregSet = singleActScopeSelection.groundedActNregSet;
+  const groundedSingleActConverged = singleActScopeSelection.groundedSingleActConverged;
+  const explicitActScopeCueQuery = singleActScopeSelection.explicitActScopeCueQuery;
+  const metadataSingleActConverged = singleActScopeSelection.metadataSingleActConverged;
+  const topActCandidate = singleActScopeSelection.topActCandidate;
   if (
     routingHintsMeta.used_effect.added_act?.rada_nreg &&
-    !finalSelectedActNregs.has(routingHintsMeta.used_effect.added_act.rada_nreg)
+    !new Set(selected_acts_final.map((act) => act.rada_nreg).filter(Boolean)).has(routingHintsMeta.used_effect.added_act.rada_nreg)
   ) {
     routingHintsMeta = {
       ...routingHintsMeta,
@@ -1071,6 +876,10 @@ export async function resolveSingleGoalSelectedActs(
   const groundedLeadEvidence =
     groundedSingleActConverged && groundedActNregSet.size === 1
       ? chunksEvidenceTopActs.find((item) => groundedActNregSet.has(item.rada_nreg))
+      : undefined;
+  const metadataLeadEvidence =
+    metadataSingleActConverged && topActCandidate?.rada_nreg
+      ? chunksEvidenceTopActs.find((item) => item.rada_nreg === topActCandidate.rada_nreg)
       : undefined;
   const exactActScopeResolved =
     exactSingleActConverged &&
@@ -1096,6 +905,19 @@ export async function resolveSingleGoalSelectedActs(
         (groundedLeadEvidence?.count_in_top30 ?? 0) >= 1
       )
     );
+  const metadataActScopeResolved =
+    metadataSingleActConverged &&
+    !!topActCandidate?.rada_nreg &&
+    selected_acts_final.length > 0 &&
+    selected_acts_final.every((act) => act.rada_nreg === topActCandidate.rada_nreg) &&
+    (
+      (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.55 ||
+      (
+        (topScore ?? 0) >= 0.68 &&
+        (metadataLeadEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 15 &&
+        (metadataLeadEvidence?.count_in_top30 ?? 0) >= 1
+      )
+    );
   const groundedActScopeNoConvergence =
     groundedSingleActConverged &&
     selected_acts_final.length > 0 &&
@@ -1115,12 +937,13 @@ export async function resolveSingleGoalSelectedActs(
     selected_acts_final.length > 0 &&
     !exactActScopeResolved &&
     !groundedActScopeResolved &&
+    !metadataActScopeResolved &&
     !authoritativeNonPrimaryScopeResolved
   ) {
     low_confidence_final = true;
     pushUnique(reasonCodes, 'LOW_EVIDENCE');
   }
-  if (exactActScopeResolved || groundedActScopeResolved || authoritativeNonPrimaryScopeResolved) {
+  if (exactActScopeResolved || groundedActScopeResolved || metadataActScopeResolved || authoritativeNonPrimaryScopeResolved) {
     const recoverableExactScopeCodes = [
       'NON_PRIMARY_ONLY_WEAK_CONFIDENCE',
       'NO_PRIMARY_LAW_EVIDENCE',
@@ -1147,6 +970,8 @@ export async function resolveSingleGoalSelectedActs(
           ? 'EXACT_ACT_SCOPE_CONFIRMED'
           : groundedActScopeResolved
             ? 'GROUNDED_ACT_SCOPE_CONFIRMED'
+            : metadataActScopeResolved
+              ? 'METADATA_ACT_SCOPE_CONFIRMED'
             : 'AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED'
       );
     }
@@ -1159,6 +984,11 @@ export async function resolveSingleGoalSelectedActs(
   if (groundedSingleActConverged && selected_acts_final.length === 0) {
     low_confidence_final = true;
     pushUnique(reasonCodes, 'GROUNDED_ACT_SCOPE_NO_CONVERGENCE');
+    pushUnique(reasonCodes, 'NO_STRONG_ACT_EVIDENCE');
+  }
+  if (metadataSingleActConverged && selected_acts_final.length === 0) {
+    low_confidence_final = true;
+    pushUnique(reasonCodes, 'METADATA_ACT_SCOPE_NO_CONVERGENCE');
     pushUnique(reasonCodes, 'NO_STRONG_ACT_EVIDENCE');
   }
 
@@ -1344,6 +1174,9 @@ export async function resolveSingleGoalSelectedActs(
     selectedActsCount: selected_acts_final.length,
     selectedActsConfidence: selectedActsFinalMeta.selected_acts_confidence_final,
     selectedActKinds: selected_acts_final.map((act) => act.act_kind ?? 'UNKNOWN'),
+    exactActHitCount,
+    groundedActHitCount,
+    metadataGroundedActCount: metadataSingleActConverged ? 1 : 0,
     hitsCount: finalHits.length,
     topScore,
     domainHint,

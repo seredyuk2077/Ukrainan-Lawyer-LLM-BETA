@@ -231,6 +231,9 @@ function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
   if (!hasExplicitActScopeCue('2811-20 які документи подаються для реєстрації?')) {
     throw new Error('Expected structured act identifier to count as explicit act scope');
   }
+  if (!hasExplicitActScopeCue('Що регулює Наказ про скасування Правил торгівлі транспортними засобами?')) {
+    throw new Error('Expected descriptive subordinate-act title to count as explicit act scope');
+  }
   if (hasExplicitActScopeCue('Який порядок реєстрації і які документи подаються?')) {
     throw new Error('Expected generic procedural query without grounded act cue to remain non-grounded');
   }
@@ -240,6 +243,9 @@ function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
 function testStrongActScopeCueCountDistinguishesSingleAndMixedActScope(): void {
   if (countStrongActScopeCues('За постановою №1178 які документи подаються для участі?') !== 1) {
     throw new Error('Expected one strong act-scope cue for single subordinate-act query');
+  }
+  if (countStrongActScopeCues('Що регулює Наказ про скасування Правил торгівлі транспортними засобами?') !== 1) {
+    throw new Error('Expected one strong act-scope cue for descriptive subordinate-act title query');
   }
   if (
     countStrongActScopeCues(
@@ -516,6 +522,48 @@ function testStrongTaxonomySignalHelperMatchesSingleGoalPolicy(): void {
     throw new Error('Expected shared taxonomy-strength helper to stay single-goal only');
   }
   console.log('[OK] taxonomy-strength helper stays aligned with single-goal strong-signal policy');
+}
+
+async function testTaxonomyGroundsSingleLogicalActFamilyFromExactAlias(): Promise<void> {
+  const result = await getTaxonomyCandidates({
+    query: 'КУпАП',
+    entities: [
+      { type: 'act_abbrev', value: 'КУпАП' },
+      { type: 'law_title', value: 'КУпАП' },
+    ],
+    category_hints: [],
+    document_type_hints: [],
+  });
+  if (result.grounded_act_hit_count !== 1) {
+    throw new Error(`Expected exact alias to ground a single logical act family, got ${result.grounded_act_hit_count}`);
+  }
+  if (!result.grounded_act_nregs.includes('80731-10')) {
+    throw new Error(`Expected logical-family representative 80731-10, got ${JSON.stringify(result.grounded_act_nregs)}`);
+  }
+  if (!result.rada_nreg_candidates.slice(0, 2).includes('80731-10')) {
+    throw new Error(`Expected 80731-10 near top taxonomy candidates, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 5))}`);
+  }
+  console.log('[OK] taxonomy grounds exact alias across split logical-act families');
+}
+
+async function testTaxonomyGroundsRepealOrderByDerivedTitleAlias(): Promise<void> {
+  const query = 'розпорядження про втрату чинності № 1478';
+  const result = await getTaxonomyCandidates({
+    query,
+    entities: [{ type: 'law_title', value: query }],
+    category_hints: [],
+    document_type_hints: ['Розпорядження КМУ'],
+  });
+  if (result.grounded_act_hit_count !== 1) {
+    throw new Error(`Expected repeal-order descriptive alias to ground one act, got ${result.grounded_act_hit_count}`);
+  }
+  if (!result.grounded_act_nregs.includes('3-2026-р')) {
+    throw new Error(`Expected repeal-order grounding to recover 3-2026-р, got ${JSON.stringify(result.grounded_act_nregs)}`);
+  }
+  if (!result.rada_nreg_candidates.slice(0, 3).includes('3-2026-р')) {
+    throw new Error(`Expected 3-2026-р near top taxonomy candidates, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 5))}`);
+  }
+  console.log('[OK] taxonomy grounds repeal-order descriptive aliases by derived title pattern');
 }
 
 function testStrongTaxonomySignalTreatsExactActHitAsStrong(): void {
@@ -2988,6 +3036,383 @@ async function testResolveSingleGoalSelectedActsRecoversGroundedDescriptiveSubor
   console.log('[OK] single-goal finalizer recovers grounded descriptive subordinate-act titles from noisy primary-law heads');
 }
 
+async function testResolveSingleGoalSelectedActsRecoversMetadataGroundedExplicitSubordinateAct(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Що регулює Наказ про скасування Правил торгівлі транспортними засобами?',
+    goalId: 'goal_1',
+    finalHits: [
+      ...Array.from({ length: 9 }, (_, index) => ({
+        rada_nreg: '80731-10',
+        r2_key: `r2://80731/${index}`,
+        json_path: `$.chunks[${index}]`,
+        score: 0.67 - index * 0.01,
+        ordering_score: 0.568 - index * 0.004,
+        title: 'Кодекс України про адміністративні правопорушення',
+        article_number: String(110 + index),
+      })),
+      {
+        rada_nreg: 'z0147-10',
+        r2_key: 'r2://z0147/4',
+        json_path: '$.chunks[3]',
+        score: 0.644,
+        ordering_score: 0.54,
+        title: 'Про визнання таким, що втратив чинність, наказу від 31.07.2002 N 228',
+        unit_type: 'point',
+        unit_number: '4',
+      },
+      {
+        rada_nreg: 'z1257-07',
+        r2_key: 'r2://z1257/1',
+        json_path: '$.chunks[0]',
+        score: 0.551,
+        ordering_score: 0.498,
+        title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+        unit_type: 'point',
+        unit_number: '1',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/977',
+        json_path: '$.chunks[977]',
+        score: 0.635,
+        ordering_score: 0.485,
+        title: 'Цивільний кодекс України',
+        article_number: '977',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: 'z0147-10',
+        title: 'Про визнання таким, що втратив чинність, наказу від 31.07.2002 N 228',
+        score: 18.5,
+        category: 'business_corporate',
+        document_type: 'Наказ',
+        document_type_slug: 'order',
+        reasons: ['exact_title_match', 'title_match', 'alias_match'],
+      },
+      {
+        rada_nreg: 'z1257-07',
+        title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+        score: 15.8,
+        category: 'business_corporate',
+        document_type: 'Наказ',
+        document_type_slug: 'order',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 2.1,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 1.4,
+        category: 'civil',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['z0147-10', 'z1257-07']),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['Наказ'],
+    taxonomyActCount: 2,
+    aliasHitCount: 1,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.7258294,
+    avgScore: 0.55,
+    categoryHintsCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.62,
+        max_score: 0.67,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.9,
+        max_ordering_score: 0.568,
+      },
+      {
+        rada_nreg: 'z1257-07',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.55,
+        max_score: 0.551,
+        best_rank_in_top30: 11,
+        rank_mass_top30: 0.67,
+        max_ordering_score: 0.498,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.63,
+        max_score: 0.635,
+        best_rank_in_top30: 12,
+        rank_mass_top30: 0.17,
+        max_ordering_score: 0.485,
+      },
+      {
+        rada_nreg: 'z0147-10',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.612,
+        max_score: 0.644,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.21,
+        max_ordering_score: 0.54,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        'z0147-10': {
+          title: 'Про визнання таким, що втратив чинність, наказу від 31.07.2002 N 228',
+          category: 'business_corporate',
+          document_type: 'Наказ',
+          document_type_slug: 'order',
+          storage_category: null,
+        },
+        'z1257-07': {
+          title: 'Про затвердження Правил роздрібної торгівлі непродовольчими товарами',
+          category: 'business_corporate',
+          document_type: 'Наказ',
+          document_type_slug: 'order',
+          storage_category: null,
+        },
+        '80731-10': {
+          title: 'Кодекс України про адміністративні правопорушення',
+          category: 'administrative_offenses',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '435-15': {
+          title: 'Цивільний кодекс України',
+          category: 'civil',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, act.document_type_slug ?? null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected metadata-grounded explicit subordinate-act query to recover confidently, got low_confidence with ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected metadata-grounded explicit subordinate-act query to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== 'z0147-10') {
+    throw new Error(`Expected metadata-grounded explicit subordinate-act query to recover z0147-10, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('METADATA_ACT_SCOPE_RECOVERED') || !result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected metadata-grounded explicit subordinate-act recovery reason codes, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers metadata-grounded explicit subordinate-act titles from noisy primary-law heads');
+}
+
+async function testResolveSingleGoalSelectedActsKeepsGroundedSubordinateActAsWeakEvidenceWhenChunksMiss(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'розпорядження про втрату чинності № 1478',
+    goalId: 'goal_1',
+    finalHits: [
+      {
+        rada_nreg: '1898-2010-р',
+        r2_key: 'r2://1898/3',
+        json_path: '$.chunks[2]',
+        score: 0.713,
+        ordering_score: 0.688,
+        title: 'Про визнання такими, що втратили чинність, деяких розпоряджень Кабінету Міністрів України',
+        unit_type: 'point',
+        unit_number: '3',
+      },
+      {
+        rada_nreg: '1898-2010-р',
+        r2_key: 'r2://1898/4',
+        json_path: '$.chunks[3]',
+        score: 0.707,
+        ordering_score: 0.685,
+        title: 'Про визнання такими, що втратили чинність, деяких розпоряджень Кабінету Міністрів України',
+        unit_type: 'point',
+        unit_number: '4',
+      },
+      {
+        rada_nreg: 'z0147-10',
+        r2_key: 'r2://z0147/2',
+        json_path: '$.chunks[1]',
+        score: 0.644,
+        ordering_score: 0.573,
+        title: 'Про визнання таким, що втратив чинність, наказу від 31.07.2002 N 228',
+        unit_type: 'point',
+        unit_number: '2',
+      },
+      {
+        rada_nreg: '22-2026-п',
+        r2_key: 'r2://22-2026/2',
+        json_path: '$.chunks[1]',
+        score: 0.639,
+        ordering_score: 0.66,
+        title: 'Про внесення змін до постанов Кабінету Міністрів України від 3 листопада 2023 р. № 1150 і від 28 червня 2024 р. № 764 та визнання такими, що втратили чинність, постанов Кабінету Міністрів України від 28 квітня 2023 р. № 417 і від 5 грудня 2023 р. № 1276',
+        unit_type: 'point',
+        unit_number: '2',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '3-2026-р',
+        title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 24 грудня 2025 р. № 1478',
+        score: 18.2,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'order',
+        reasons: ['exact_alias_match', 'title_match', 'grounded_act_scope'],
+      },
+      {
+        rada_nreg: '15-2026-р',
+        title: 'Про інше розпорядження Кабінету Міністрів України',
+        score: 15.9,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'order',
+        reasons: ['title_match'],
+      },
+      {
+        rada_nreg: '1898-2010-р',
+        title: 'Про визнання такими, що втратили чинність, деяких розпоряджень Кабінету Міністрів України',
+        score: 13.5,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'order',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['3-2026-р']),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['Розпорядження КМУ'],
+    taxonomyActCount: 1,
+    aliasHitCount: 1,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 1,
+    groundedActNregs: ['3-2026-р'],
+    actSelectionLowConfidence: true,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.7131011,
+    avgScore: 0.64,
+    categoryHintsCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '1898-2010-р',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.703,
+        max_score: 0.713,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.2,
+        max_ordering_score: 0.688,
+      },
+      {
+        rada_nreg: 'z0147-10',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.612,
+        max_score: 0.644,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.44,
+        max_ordering_score: 0.573,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '3-2026-р': {
+          title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 24 грудня 2025 р. № 1478',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'order',
+          storage_category: null,
+        },
+        '1898-2010-р': {
+          title: 'Про визнання такими, що втратили чинність, деяких розпоряджень Кабінету Міністрів України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'order',
+          storage_category: null,
+        },
+        '15-2026-р': {
+          title: 'Про інше розпорядження Кабінету Міністрів України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'order',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, act.document_type_slug ?? null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error('Expected grounded subordinate act recovery to resolve confidently once scope is recovered');
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected grounded subordinate act recovery to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '3-2026-р') {
+    throw new Error(`Expected taxonomy-only grounded subordinate recovery to keep 3-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('GROUNDED_ACT_SCOPE_RECOVERED')) {
+    throw new Error(`Expected grounded act scope recovery reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('GROUNDED_ACT_SCOPE_NO_CONVERGENCE')) {
+    throw new Error(`Expected taxonomy recovery to avoid false missing-act signal, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer turns grounded subordinate-act taxonomy recovery into confident scope resolution');
+}
+
 function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -3051,13 +3476,14 @@ function testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct(): void {
   console.log('[OK] coverage-gap promotes family-guard no-evidence to likely_missing_act');
 }
 
-function testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct(): void {
+function testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
     reasonCodes: ['EXPLICIT_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
     selectedActsCount: 1,
     selectedActsConfidence: 0.51,
     selectedActKinds: ['PRIMARY_LAW'],
+    exactActHitCount: 1,
     hitsCount: 14,
     topScore: 0.61,
     domainHint: 'general',
@@ -3066,10 +3492,10 @@ function testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct(): 
     entitiesCount: 0,
     anchorsCount: 0,
   });
-  if (coverageGap !== 'likely_missing_act') {
-    throw new Error(`Expected explicit-act-scope no-convergence to map to likely_missing_act, got ${coverageGap}`);
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected explicit-act-scope no-convergence with grounded act to map to weak_evidence, got ${coverageGap}`);
   }
-  console.log('[OK] coverage-gap promotes explicit-act-scope no-convergence to likely_missing_act');
+  console.log('[OK] coverage-gap keeps explicit-act-scope no-convergence as weak_evidence when the act is already grounded');
 }
 
 function testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct(): void {
@@ -3095,12 +3521,13 @@ function testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct()
   console.log('[OK] coverage-gap promotes mixed-goal procedural fallback to likely_missing_act');
 }
 
-function testCoverageGapUsesGroundedActScopeNoConvergenceForLikelyMissingAct(): void {
+function testCoverageGapUsesGroundedActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
     reasonCodes: ['GROUNDED_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
     selectedActsCount: 0,
     selectedActsConfidence: 0.4,
+    groundedActHitCount: 1,
     hitsCount: 20,
     topScore: 0.58,
     domainHint: 'general',
@@ -3109,10 +3536,31 @@ function testCoverageGapUsesGroundedActScopeNoConvergenceForLikelyMissingAct(): 
     entitiesCount: 0,
     anchorsCount: 0,
   });
-  if (coverageGap !== 'likely_missing_act') {
-    throw new Error(`Expected grounded-act-scope no-convergence to map to likely_missing_act, got ${coverageGap}`);
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected grounded-act-scope no-convergence with grounded act to map to weak_evidence, got ${coverageGap}`);
   }
-  console.log('[OK] coverage-gap promotes grounded-act-scope no-convergence to likely_missing_act');
+  console.log('[OK] coverage-gap keeps grounded-act-scope no-convergence as weak_evidence when the act is already grounded');
+}
+
+function testCoverageGapUsesMetadataActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['METADATA_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 0,
+    selectedActsConfidence: 0.42,
+    metadataGroundedActCount: 1,
+    hitsCount: 18,
+    topScore: 0.57,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected metadata-act-scope no-convergence with grounded act to map to weak_evidence, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap keeps metadata-act-scope no-convergence as weak_evidence when the act is already grounded');
 }
 
 function testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct(): void {
@@ -4468,6 +4916,8 @@ async function main(): Promise<void> {
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
   testStrongTaxonomySignalHelperMatchesSingleGoalPolicy();
+  await testTaxonomyGroundsSingleLogicalActFamilyFromExactAlias();
+  await testTaxonomyGroundsRepealOrderByDerivedTitleAlias();
   testStrongTaxonomySignalTreatsExactActHitAsStrong();
   testStrongTaxonomySignalTreatsGroundedAliasAsStrong();
   testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly();
@@ -4549,12 +4999,15 @@ async function main(): Promise<void> {
   await testResolveSingleGoalSelectedActsClearsOutOfScopeForExactActScope();
   await testResolveSingleGoalSelectedActsRecoversExplicitIdentifierFromTailEvidence();
   await testResolveSingleGoalSelectedActsRecoversGroundedDescriptiveSubordinateAct();
+  await testResolveSingleGoalSelectedActsRecoversMetadataGroundedExplicitSubordinateAct();
+  await testResolveSingleGoalSelectedActsKeepsGroundedSubordinateActAsWeakEvidenceWhenChunksMiss();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
-  testCoverageGapUsesExplicitActScopeNoConvergenceForLikelyMissingAct();
+  testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
   testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct();
-  testCoverageGapUsesGroundedActScopeNoConvergenceForLikelyMissingAct();
+  testCoverageGapUsesGroundedActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
+  testCoverageGapUsesMetadataActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
   testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct();
   testDeriveTopScoreFromHitsUsesPostprocessedHits();
   testNormalizeFinalReasonCodesDropsRecoveredWeakSignals();

@@ -6,6 +6,11 @@ export interface DeriveCoverageGapInput {
   selectedActsCount: number;
   selectedActsConfidence?: number;
   selectedActKinds?: string[];
+  exactActHitCount?: number;
+  groundedActHitCount?: number;
+  metadataGroundedActCount?: number;
+  mixedProcedureAndNonProcedureGoals?: boolean;
+  proceduralOnlySelection?: boolean;
   hitsCount: number;
   topScore?: number | null;
   domainHint?: string;
@@ -61,17 +66,31 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
     reasonCodes.has('UNGROUNDED_MULTI_FAMILY_SELECTION');
   const hasMissingActSignal =
     reasonCodes.has('NO_STRONG_ACT_EVIDENCE') ||
+    reasonCodes.has('NO_ACT_GROUNDING_PROCEDURAL_PRIMARY_ONLY') ||
     reasonCodes.has('COVERAGE_MISS_SELECTED_ACTS') ||
     reasonCodes.has('COVERAGE_GUARD_FAILED') ||
     reasonCodes.has('MISSING_TAXONOMY_CONVERGENCE') ||
     reasonCodes.has('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE') ||
+    reasonCodes.has('GROUNDED_ACT_SCOPE_NO_CONVERGENCE') ||
+    reasonCodes.has('METADATA_ACT_SCOPE_NO_CONVERGENCE') ||
+    reasonCodes.has('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED') ||
     reasonCodes.has('FAMILY_GUARD_NO_EVIDENCE') ||
     reasonCodes.has('FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
   const hasExplicitMissingTaxonomySignal = reasonCodes.has('MISSING_TAXONOMY_CONVERGENCE');
   const hasExplicitActScopeNoConvergence = reasonCodes.has('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE');
+  const hasGroundedActScopeNoConvergence = reasonCodes.has('GROUNDED_ACT_SCOPE_NO_CONVERGENCE');
+  const hasMetadataActScopeNoConvergence = reasonCodes.has('METADATA_ACT_SCOPE_NO_CONVERGENCE');
+  const hasAnyActScopeNoConvergence =
+    hasExplicitActScopeNoConvergence ||
+    hasGroundedActScopeNoConvergence ||
+    hasMetadataActScopeNoConvergence;
   const hasFamilyGuardMissingSignal =
     reasonCodes.has('FAMILY_GUARD_NO_EVIDENCE') ||
     reasonCodes.has('FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE');
+  const hasIndexedActGroundingSignal =
+    (input.exactActHitCount ?? 0) > 0 ||
+    (input.groundedActHitCount ?? 0) > 0 ||
+    (input.metadataGroundedActCount ?? 0) > 0;
   const lowSelectionConfidence = (input.selectedActsConfidence ?? 0) < 0.55;
   const noStableSelectedActs = input.selectedActsCount === 0 || lowSelectionConfidence;
   const hasPrimarySelectedAct = (input.selectedActKinds ?? []).some((kind) => kind === 'PRIMARY_LAW');
@@ -83,7 +102,18 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
   if (looksLegallySpecific(input) && lowSelectionConfidence && hasExplicitMissingTaxonomySignal) {
     return 'likely_missing_act';
   }
-  if (hasExplicitActScopeNoConvergence) {
+  if (hasAnyActScopeNoConvergence) {
+    return hasIndexedActGroundingSignal ? 'weak_evidence' : 'likely_missing_act';
+  }
+  if (looksLegallySpecific(input) && reasonCodes.has('NO_ACT_GROUNDING_PROCEDURAL_PRIMARY_ONLY')) {
+    return 'likely_missing_act';
+  }
+  if (
+    looksLegallySpecific(input) &&
+    input.mixedProcedureAndNonProcedureGoals === true &&
+    input.proceduralOnlySelection === true &&
+    (hasMissingActSignal || hasWeakEvidenceSignal)
+  ) {
     return 'likely_missing_act';
   }
   if (looksLegallySpecific(input) && lowSelectionConfidence && hasFamilyGuardMissingSignal && hasPrimarySelectedAct) {
