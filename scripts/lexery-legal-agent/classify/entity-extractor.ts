@@ -27,6 +27,12 @@ const PART_ARTICLE = /(?:^|[\s\W])(?:ч\.?|частина)\s*(\d+)\s*(?:ст\.?|
 const POINT_PART_ARTICLE = /(?:^|[\s\W])(?:п\.?|пункт)\s*(\d+)\s*(?:(?:ч\.?|частини)\s*(\d+)\s*)?(?:ст\.?|статті|статтю)\s*(\d+(?:-\d+)?)(?:[\s\W]|$)/gi;
 // ЗУ "Про ..."
 const LAW_TITLE = /\bЗУ\s*[«"]\s*Про\s+[^»"]+/gi;
+// Generic explicit act-title cues for point/order/procedure style queries.
+const GENERIC_LAW_TITLE =
+  /(?:^|[\s\W])((?:правил|правила|порядку|порядок|кодексу|кодекс|закону|закон|конституції|конституція|регламенту|регламент|інструкції|інструкція|конвенції|конвенція|указу|указ|постанови|постанова|наказу|наказ|розпорядження|рішення|положення)\s+[^\n,.?!;:]{8,140})(?=$|[\s\W])/giu;
+// Short explicit act references with number, e.g. "ПКМ №100", "постанова КМУ №1178", "наказ МОЗ №385".
+const SHORT_ACT_REFERENCE =
+  /(?:^|[\s\W])((?:(?:пкм|постанова|розпорядження|наказ|рішення|порядок|правила|інструкція|положення|регламент|закон|кодекс|указ)(?:\s+[A-ZА-ЯІЇЄҐ]{2,10})?|[A-ZА-ЯІЇЄҐ]{2,10})\s*№\s*[\d][\p{L}\d/-]{0,20})(?=$|[\s\W])/giu;
 
 export function extractEntities(query: string): {
   entities: ExtractedEntity[];
@@ -98,6 +104,14 @@ export function extractEntities(query: string): {
   const lawTitleRegex = new RegExp(LAW_TITLE.source, 'gi');
   while ((m = lawTitleRegex.exec(q)) !== null) {
     add({ type: 'law_title', value: m[0].trim() });
+  }
+  const genericLawTitleRegex = new RegExp(GENERIC_LAW_TITLE.source, 'giu');
+  while ((m = genericLawTitleRegex.exec(q)) !== null) {
+    add({ type: 'law_title', value: m[1].trim() });
+  }
+  const shortActReferenceRegex = new RegExp(SHORT_ACT_REFERENCE.source, 'giu');
+  while ((m = shortActReferenceRegex.exec(q)) !== null) {
+    add({ type: 'law_title', value: m[1].trim() });
   }
 
   // Authorities (Cyrillic-safe boundaries)

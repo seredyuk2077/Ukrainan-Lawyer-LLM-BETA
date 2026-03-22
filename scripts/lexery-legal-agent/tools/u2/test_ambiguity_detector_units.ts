@@ -1,4 +1,6 @@
 import { detectAmbiguity } from '../../classify/ambiguity-detector.js';
+import { extractEntities } from '../../classify/entity-extractor.js';
+import type { ExtractedEntity } from '../../classify/types.js';
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(`ASSERT FAIL: ${message}`);
@@ -34,12 +36,42 @@ function testVeryShortConcreteLegalDomainQueryDoesNotBecomeHard(): void {
   console.log('[OK] very short concrete legal-domain query does not become hard ambiguity');
 }
 
+function testLawTitleStructuralCueDoesNotTriggerGeneralDomainAmbiguity(): void {
+  const entities: ExtractedEntity[] = [
+    {
+      type: 'law_title',
+      value: 'Правил перетинання державного кордону',
+    },
+  ];
+  const result = detectAmbiguity(
+    'Які обмеження на виїзд за кордон під час воєнного стану за пунктом 21 Правил перетинання державного кордону?',
+    'general',
+    entities
+  );
+  assert(result.is_ambiguous === false, 'explicit law_title structural cue must clear soft general-domain ambiguity');
+  assert(result.reason_codes?.includes('GENERAL_DOMAIN_NO_DIRECT_REF') !== true, 'law_title cue must suppress GENERAL_DOMAIN_NO_DIRECT_REF');
+  console.log('[OK] law_title structural cue suppresses general-domain ambiguity');
+}
+
+function testShortExplicitActReferenceDoesNotBecomeHardAmbiguous(): void {
+  const queries = ['ПКМ №100', 'постанова КМУ №1178', 'наказ МОЗ №385'];
+  for (const query of queries) {
+    const { entities } = extractEntities(query);
+    const result = detectAmbiguity(query, 'general', entities);
+    assert(result.strength !== 'hard', `${query} must not become hard ambiguity`);
+    assert(result.reason_codes?.includes('TOO_SHORT_QUERY') !== true, `${query} must not emit TOO_SHORT_QUERY`);
+  }
+  console.log('[OK] short explicit act references stay out of hard ambiguity');
+}
+
 function main(): void {
   console.log('ambiguity detector unit tests\n');
   testShortQueryRemainsHard();
   testTopicWordsDoNotCreateHardAmbiguity();
   testConcreteDomainQueryDoesNotBecomeHardJustBecauseItIsShort();
   testVeryShortConcreteLegalDomainQueryDoesNotBecomeHard();
+  testLawTitleStructuralCueDoesNotTriggerGeneralDomainAmbiguity();
+  testShortExplicitActReferenceDoesNotBecomeHardAmbiguous();
   console.log('\nAll ambiguity detector unit tests passed.');
 }
 

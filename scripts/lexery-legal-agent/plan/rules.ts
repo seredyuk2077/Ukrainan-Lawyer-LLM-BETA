@@ -108,13 +108,13 @@ export function buildSearchPlanFromProfile(
     reasons.push('direct_citation');
   }
   if (ambiguousHard) {
-    if (allowsLegalExpansion) {
+    if (allowsLegalExpansion && config.doclistEnabled) {
       sources.use_doclist = true;
     }
     reasons.push('ambiguity_hard');
   }
   if (needDeep) {
-    if (allowsLegalExpansion) {
+    if (allowsLegalExpansion && config.doclistEnabled) {
       sources.use_doclist = true;
     }
     reasons.push('need_deep_retrieval');

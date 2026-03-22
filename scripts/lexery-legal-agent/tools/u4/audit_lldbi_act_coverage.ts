@@ -14,7 +14,7 @@
  */
 import { createServer } from 'net';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
@@ -88,6 +88,7 @@ type AuditResult = {
   qdrant_calls: number | null;
   low_confidence: boolean;
   coverage_gap: string;
+  failure_mode: 'retrieval_miss' | 'selection_drift' | 'honesty_fail' | 'trace_anomaly' | null;
 };
 
 type ProbeMode = 'best' | 'generalized';
@@ -108,6 +109,31 @@ type ActSummary = {
   alias_probes_pass: number;
   low_confidence_probes: number;
   coverage_gaps_seen: string[];
+};
+
+type AuditReport = {
+  generated_at: string;
+  completed_at?: string;
+  status: 'in_progress' | 'complete';
+  total: number;
+  docs_total: number;
+  pass: number;
+  fail: number;
+  max_rank: number;
+  offset: number;
+  limit: number;
+  probe_mode: ProbeMode;
+  processed_probes: number;
+  remaining_probes: number;
+  latency_p50_ms: number;
+  latency_p95_ms: number;
+  qdrant_calls_median: number;
+  probe_summary: Array<{ probe_kind: ProbeRow['probe_kind']; total: number; pass: number }>;
+  category_summary: Array<{ category: string; total: number; pass: number }>;
+  failure_mode_summary: Array<{ failure_mode: NonNullable<AuditResult['failure_mode']>; total: number }>;
+  act_summary: ActSummary[];
+  failures: AuditResult[];
+  results: AuditResult[];
 };
 
 const GROUNDED_PROBE_KINDS = new Set<ProbeRow['probe_kind']>([
@@ -204,12 +230,112 @@ function buildActSummary(results: AuditResult[]): ActSummary[] {
   return [...byAct.values()].sort((left, right) => left.rada_nreg.localeCompare(right.rada_nreg));
 }
 
+function buildProbeKey(probe: Pick<ProbeRow, 'rada_nreg' | 'probe_kind' | 'query'>): string {
+  return `${probe.rada_nreg}::${probe.probe_kind}::${probe.query.normalize('NFC').trim()}`;
+}
+
+function createAuditReport(input: {
+  docs: DocRow[];
+  results: AuditResult[];
+  maxRank: number;
+  offset: number;
+  limit: number;
+  probeMode: ProbeMode;
+  expectedTotal: number;
+  status: 'in_progress' | 'complete';
+}): AuditReport {
+  const { docs, results, maxRank, offset, limit, probeMode, expectedTotal, status } = input;
+  const passCount = results.filter((result) => result.pass).length;
+  const failCount = results.length - passCount;
+  const latencies = [...results.map((result) => result.latency_ms)].sort((left, right) => left - right);
+  const qdrantCalls = results
+    .map((result) => result.qdrant_calls)
+    .filter((value): value is number => typeof value === 'number')
+    .sort((left, right) => left - right);
+  const p50Latency = latencies.length ? latencies[Math.floor(latencies.length / 2)] ?? 0 : 0;
+  const p95Latency = latencies.length
+    ? latencies[Math.min(Math.ceil(latencies.length * 0.95) - 1, latencies.length - 1)] ?? 0
+    : 0;
+  const medianQdrant = qdrantCalls.length ? qdrantCalls[Math.floor(qdrantCalls.length / 2)] ?? 0 : 0;
+
+  const byCategory = new Map<string, { total: number; pass: number }>();
+  for (const result of results) {
+    const key = result.category ?? 'unknown';
+    const bucket = byCategory.get(key) ?? { total: 0, pass: 0 };
+    bucket.total += 1;
+    if (result.pass) bucket.pass += 1;
+    byCategory.set(key, bucket);
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    completed_at: status === 'complete' ? new Date().toISOString() : undefined,
+    status,
+    total: results.length,
+    docs_total: docs.length,
+    pass: passCount,
+    fail: failCount,
+    max_rank: maxRank,
+    offset,
+    limit,
+    probe_mode: probeMode,
+    processed_probes: results.length,
+    remaining_probes: Math.max(0, expectedTotal - results.length),
+    latency_p50_ms: p50Latency,
+    latency_p95_ms: p95Latency,
+    qdrant_calls_median: medianQdrant,
+    probe_summary: (['nreg', 'alias', 'anchored_title', 'title_fragment', 'cued_number'] as ProbeRow['probe_kind'][])
+      .map((probeKind) => {
+        const probeResults = results.filter((result) => result.probe_kind === probeKind);
+        return {
+          probe_kind: probeKind,
+          total: probeResults.length,
+          pass: probeResults.filter((result) => result.pass).length,
+        };
+      })
+      .filter((bucket) => bucket.total > 0),
+    category_summary: [...byCategory.entries()]
+      .sort((left, right) => right[1].total - left[1].total)
+      .map(([category, stats]) => ({ category, ...stats })),
+    failure_mode_summary: (['retrieval_miss', 'selection_drift', 'honesty_fail', 'trace_anomaly'] as const)
+      .map((failureMode) => ({
+        failure_mode: failureMode,
+        total: results.filter((result) => result.failure_mode === failureMode).length,
+      }))
+      .filter((bucket) => bucket.total > 0),
+    act_summary: buildActSummary(results),
+    failures: results.filter((result) => !result.pass),
+    results,
+  };
+}
+
+function writeAuditReport(reportPath: string, report: AuditReport): void {
+  mkdirSync(dirname(reportPath), { recursive: true });
+  const tempPath = `${reportPath}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, reportPath);
+}
+
 function getArgValue(name: string): string | null {
   const direct = process.argv.find((arg) => arg.startsWith(`${name}=`));
   if (direct) return direct.slice(name.length + 1);
   const idx = process.argv.findIndex((arg) => arg === name);
   if (idx >= 0 && process.argv[idx + 1]) return process.argv[idx + 1];
   return null;
+}
+
+function classifyFailureMode(input: {
+  pass: boolean;
+  selectedActHit: boolean;
+  topHitRank: number | null;
+  lowConfidence: boolean;
+  coverageGap: string;
+}): AuditResult['failure_mode'] {
+  if (input.pass) return null;
+  if (input.topHitRank == null) return 'retrieval_miss';
+  if (!input.selectedActHit) return 'selection_drift';
+  if (input.lowConfidence || input.coverageGap !== 'none') return 'honesty_fail';
+  return 'trace_anomaly';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -506,19 +632,56 @@ async function main(): Promise<void> {
   const offset = parseInt(getArgValue('--offset') ?? '0', 10);
   const maxRank = parseInt(getArgValue('--max-rank') ?? '12', 10);
   const probeMode = (getArgValue('--probe-mode') ?? 'best') as ProbeMode;
+  const resume = process.argv.includes('--resume');
   if (!['best', 'generalized'].includes(probeMode)) {
     throw new Error(`Unsupported --probe-mode=${probeMode}; expected best|generalized`);
   }
   const reportPath = resolve(
     process.cwd(),
-    'scripts/lexery-legal-agent/tools/_reports/lldbi_act_coverage_audit.json'
+    getArgValue('--report-path') ?? 'scripts/lexery-legal-agent/tools/_reports/lldbi_act_coverage_audit.json'
   );
 
   const docs = await fetchIndexedDocs(limit, offset);
   const probes = docs.flatMap((doc) => buildProbes(doc, probeMode));
+  const probeKeySet = new Set(probes.map((probe) => buildProbeKey(probe)));
+  const completedProbeKeys = new Set<string>();
+  const results: AuditResult[] = [];
+  if (resume && existsSync(reportPath)) {
+    const existing = JSON.parse(readFileSync(reportPath, 'utf8')) as Partial<AuditReport>;
+    if (
+      existing.offset !== offset ||
+      existing.limit !== limit ||
+      existing.max_rank !== maxRank ||
+      existing.probe_mode !== probeMode
+    ) {
+      throw new Error(
+        `Resume report mismatch for ${reportPath}: expected offset=${offset} limit=${limit} max_rank=${maxRank} probe_mode=${probeMode}`
+      );
+    }
+    for (const result of existing.results ?? []) {
+      const auditResult = result as AuditResult;
+      const probeKey = buildProbeKey(auditResult);
+      if (!probeKeySet.has(probeKey)) {
+        throw new Error(
+          `Resume report contains stale probe not present in current run: ${probeKey}`
+        );
+      }
+      results.push(auditResult);
+      completedProbeKeys.add(probeKey);
+    }
+  }
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  console.log('[audit_lldbi_act_coverage] port', port, 'docs', docs.length, 'probes', probes.length, `mode=${probeMode}`);
+  console.log(
+    '[audit_lldbi_act_coverage] port',
+    port,
+    'docs',
+    docs.length,
+    'probes',
+    probes.length,
+    `mode=${probeMode}`,
+    resume ? `resume=${results.length}` : 'resume=0'
+  );
 
   const serverEnv = {
     ...process.env,
@@ -526,6 +689,7 @@ async function main(): Promise<void> {
     DEV_API_KEY: DEV_KEY,
     LEGAL_AGENT_DISABLE_LLM: 'true',
     USE_RULE_BASED_CLASSIFIER: 'true',
+    DOCLIST_ENABLED: 'false',
     U10_DRY_RUN_KEEP_TRIAGE: 'true',
     U9_META_TRIAGE_ENABLED: 'false',
     MEMORY_RECENT_ENABLED: 'false',
@@ -541,7 +705,6 @@ async function main(): Promise<void> {
   child.stdout?.on('data', (chunk) => process.stdout.write(chunk));
   child.stderr?.on('data', (chunk) => process.stderr.write(chunk));
 
-  const results: AuditResult[] = [];
   try {
     const healthOk = await waitHealth(baseUrl);
     if (!healthOk) throw new Error('Health failed');
@@ -549,16 +712,21 @@ async function main(): Promise<void> {
     const tenantId = '00000000-0000-0000-0000-000000000001';
     const userId = '00000000-0000-0000-0000-000000000002';
     for (const probe of probes) {
+      const probeKey = buildProbeKey(probe);
+      if (completedProbeKeys.has(probeKey)) continue;
       const { runId, latencyMs, retrievalTrace } = await runQuery(baseUrl, probe.query, tenantId, userId);
       const trace = await loadTrace(runId, retrievalTrace);
       const rank = findHitRank(trace, probe.rada_nreg);
       const selected = selectedActHit(trace, probe.rada_nreg);
       const groundedProbe = GROUNDED_PROBE_KINDS.has(probe.probe_kind);
       const honestyOk = trace?.meta?.low_confidence !== true && (trace?.meta?.coverage_gap ?? 'none') === 'none';
+      const recovered = selected || (rank != null && rank <= maxRank);
       const pass = groundedProbe
         ? selected && honestyOk
-        : selected || (rank != null && rank <= maxRank);
-      results.push({
+        : recovered && (!selected || honestyOk);
+      const lowConfidence = trace?.meta?.low_confidence === true;
+      const coverageGap = trace?.meta?.coverage_gap ?? 'none';
+      const result: AuditResult = {
         rada_nreg: probe.rada_nreg,
         title: probe.title,
         category: probe.category,
@@ -572,9 +740,31 @@ async function main(): Promise<void> {
         top_hit_rank: rank,
         latency_ms: latencyMs,
         qdrant_calls: trace?.meta?.qdrant_calls_count_total ?? null,
-        low_confidence: trace?.meta?.low_confidence === true,
-        coverage_gap: trace?.meta?.coverage_gap ?? 'none',
-      });
+        low_confidence: lowConfidence,
+        coverage_gap: coverageGap,
+        failure_mode: classifyFailureMode({
+          pass,
+          selectedActHit: selected,
+          topHitRank: rank,
+          lowConfidence,
+          coverageGap,
+        }),
+      };
+      results.push(result);
+      completedProbeKeys.add(probeKey);
+      writeAuditReport(
+        reportPath,
+        createAuditReport({
+          docs,
+          results,
+          maxRank,
+          offset,
+          limit,
+          probeMode,
+          expectedTotal: probes.length,
+          status: 'in_progress',
+        })
+      );
       console.log(
         '[audit_lldbi_act_coverage]',
         probe.rada_nreg,
@@ -589,76 +779,35 @@ async function main(): Promise<void> {
     await sleep(SHUTDOWN_WAIT_MS).catch(() => undefined);
   }
 
-  const passCount = results.filter((result) => result.pass).length;
-  const failCount = results.length - passCount;
-  const latencies = [...results.map((result) => result.latency_ms)].sort((left, right) => left - right);
-  const qdrantCalls = results
-    .map((result) => result.qdrant_calls)
-    .filter((value): value is number => typeof value === 'number')
-    .sort((left, right) => left - right);
-  const p50Latency = latencies.length ? latencies[Math.floor(latencies.length / 2)] ?? 0 : 0;
-  const p95Latency = latencies.length
-    ? latencies[Math.min(Math.ceil(latencies.length * 0.95) - 1, latencies.length - 1)] ?? 0
-    : 0;
-  const medianQdrant = qdrantCalls.length ? qdrantCalls[Math.floor(qdrantCalls.length / 2)] ?? 0 : 0;
-
-  const byCategory = new Map<string, { total: number; pass: number }>();
-  for (const result of results) {
-    const key = result.category ?? 'unknown';
-    const bucket = byCategory.get(key) ?? { total: 0, pass: 0 };
-    bucket.total += 1;
-    if (result.pass) bucket.pass += 1;
-    byCategory.set(key, bucket);
-  }
-
-  const report = {
-    generated_at: new Date().toISOString(),
-    total: results.length,
-    docs_total: docs.length,
-    pass: passCount,
-    fail: failCount,
-    max_rank: maxRank,
+  const report = createAuditReport({
+    docs,
+    results,
+    maxRank,
     offset,
     limit,
-    probe_mode: probeMode,
-    latency_p50_ms: p50Latency,
-    latency_p95_ms: p95Latency,
-    qdrant_calls_median: medianQdrant,
-    probe_summary: (['nreg', 'alias', 'anchored_title', 'title_fragment', 'cued_number'] as ProbeRow['probe_kind'][])
-      .map((probeKind) => {
-        const probeResults = results.filter((result) => result.probe_kind === probeKind);
-        return {
-          probe_kind: probeKind,
-          total: probeResults.length,
-          pass: probeResults.filter((result) => result.pass).length,
-        };
-      })
-      .filter((bucket) => bucket.total > 0),
-    category_summary: [...byCategory.entries()]
-      .sort((left, right) => right[1].total - left[1].total)
-      .map(([category, stats]) => ({ category, ...stats })),
-    act_summary: buildActSummary(results),
-    failures: results.filter((result) => !result.pass),
-    results,
-  };
-
-  mkdirSync(dirname(reportPath), { recursive: true });
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    probeMode,
+    expectedTotal: probes.length,
+    status: 'complete',
+  });
+  writeAuditReport(reportPath, report);
 
   console.log('\n--- LLDBI Act Coverage Summary ---');
-  console.log(`pass: ${passCount} / ${results.length}`);
-  console.log(`fail: ${failCount}`);
-  console.log(`latency p50 ms: ${p50Latency}`);
-  console.log(`latency p95 ms: ${p95Latency}`);
-  console.log(`qdrant_calls median: ${medianQdrant}`);
+  console.log(`pass: ${report.pass} / ${results.length}`);
+  console.log(`fail: ${report.fail}`);
+  console.log(`latency p50 ms: ${report.latency_p50_ms}`);
+  console.log(`latency p95 ms: ${report.latency_p95_ms}`);
+  console.log(`qdrant_calls median: ${report.qdrant_calls_median}`);
   for (const bucket of report.probe_summary) {
     console.log(`probe ${bucket.probe_kind}: ${bucket.pass}/${bucket.total} PASS`);
+  }
+  for (const bucket of report.failure_mode_summary) {
+    console.log(`failure_mode ${bucket.failure_mode}: ${bucket.total}`);
   }
   const actPassAny = report.act_summary.filter((item) => item.pass_any).length;
   const groundedActPassAny = report.act_summary.filter((item) => item.grounded_probe_pass_any).length;
   console.log(`act pass_any: ${actPassAny}/${report.act_summary.length}`);
   console.log(`act grounded_probe_pass_any: ${groundedActPassAny}/${report.act_summary.length}`);
-  if (failCount > 0) {
+  if (report.fail > 0) {
     console.log('sample failures:');
     for (const failure of results.filter((result) => !result.pass).slice(0, 12)) {
       console.log(
@@ -667,7 +816,7 @@ async function main(): Promise<void> {
     }
   }
   console.log(`[audit_lldbi_act_coverage] report: ${reportPath}`);
-  if (failCount > 0) process.exitCode = 1;
+  if (report.fail > 0) process.exitCode = 1;
 }
 
 main().catch((error) => {

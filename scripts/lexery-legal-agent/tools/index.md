@@ -86,7 +86,7 @@
 | `u4/manual_run_inspect.ts` | `brain:inspect:run` | Інспекція конкретного `run_id` |
 | `u4/run_one_query.ts` | — | Разовий запуск retrieval case |
 | `u4/query_retrieval_debug.ts` | — | Ad hoc retrieval-focused debug для довільного legal query |
-| `u4/audit_lldbi_act_coverage.ts` | `brain:audit:lldbi-act-coverage` | Broad LLDBI act-coverage audit по багатьох indexed актах; `--probe-mode=generalized` запускає кілька query families на кожен акт (`nreg`, `alias`, `anchored title`, `title fragment`, а за наявності cue-патернів — і `document+№number` phrasing), а grounded probes тепер вважаються PASS лише коли target act не просто трапляється у hits, а чесно доходить до `selected_acts` без `low_confidence/coverage_gap` drift |
+| `u4/audit_lldbi_act_coverage.ts` | `brain:audit:lldbi-act-coverage` | Broad LLDBI act-coverage audit по багатьох indexed актах; `--probe-mode=generalized` запускає кілька query families на кожен акт (`nreg`, `alias`, `anchored title`, `title fragment`, а за наявності cue-патернів — і `document+№number` phrasing), broad runs forced to LLDBI-only (`DOCLIST_ENABLED=false`), honesty leaks count as failures, а `--report-path` + strict `--resume` validation + atomic checkpoints дозволяють робити shard-based corpus sweeps і кластеризувати generalized failures |
 | `u4/dataset_retrieval_real.ts` | `brain:dataset:retrieval-real` | Збір prod-like queries |
 | `u4/dataset_act_type_audit.ts` | `brain:dataset:act-type-audit` | Snapshot act types |
 | `u4/dataset_lldbi_vocabulary_snapshot.ts` | `brain:dataset:lldbi-vocabulary` | Vocabulary snapshot |

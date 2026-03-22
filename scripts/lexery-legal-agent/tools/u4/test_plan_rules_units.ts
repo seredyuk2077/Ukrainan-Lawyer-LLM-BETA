@@ -1,5 +1,6 @@
 import { buildSearchPlanFromProfile } from '../../plan/rules.js';
 import type { QueryProfile, RoutingFlags } from '../../classify/types.js';
+import { config } from '../../lib/config.js';
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(`ASSERT FAIL: ${message}`);
@@ -109,6 +110,25 @@ function testSoftAmbiguityDoesNotBecomeHard(): void {
   console.log('[OK] soft ambiguity is not promoted to ambiguity_hard');
 }
 
+function testDoclistDisabledPreventsDoclistExpansion(): void {
+  const original = config.doclistEnabled;
+  config.doclistEnabled = false;
+  try {
+    const profile = makeProfile();
+    const routing: RoutingFlags = {
+      context_mode: 'mixed',
+      need_deep_retrieval: true,
+    };
+    const { plan, reason_codes } = buildSearchPlanFromProfile(profile, routing);
+    assert(reason_codes.includes('ambiguity_hard'), 'diagnostic ambiguity reason must remain');
+    assert(reason_codes.includes('need_deep_retrieval'), 'diagnostic deep reason must remain');
+    assert(plan.sources.use_doclist === false, 'doclist must stay off when config disables it');
+    console.log('[OK] config.doclistEnabled=false blocks doclist expansion');
+  } finally {
+    config.doclistEnabled = original;
+  }
+}
+
 function main(): void {
   console.log('plan rules unit tests\n');
   testUnresolvedNoSourceWhenNoStructuralCues();
@@ -116,6 +136,7 @@ function main(): void {
   testResolvedMixedStillAllowsDoclistAndWeb();
   testResolvedMemoryStaysPureMemory();
   testSoftAmbiguityDoesNotBecomeHard();
+  testDoclistDisabledPreventsDoclistExpansion();
   console.log('\nAll plan rules unit tests passed.');
 }
 

@@ -196,7 +196,7 @@ export type FamilyEvidenceSummaryInput = {
 export type BuildSelectedActsInput = {
   finalHits: RawHit[];
   actCandidatesTop: ActCandidateInput[];
-  goals_summary: { goal_id: string }[];
+  goals_summary: { goal_id: string; goal_type?: string }[];
   goal_support_by_act?: Record<string, string[]>;
   /** hits_by_act for top acts in top-30 (from distribution). */
   hits_by_act_top3?: Record<string, number>;
@@ -614,19 +614,48 @@ function canFallbackSelectAct(input: {
   );
 }
 
+const METADATA_GROUNDING_REASON_CODES = new Set([
+  'exact_alias_match',
+  'exact_title_match',
+]);
+
+function candidateHasMetadataGrounding(candidate: ActCandidateInput | undefined): boolean {
+  return candidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+}
+
+export function isProceduralPrimaryLawCandidate(candidate: ActCandidateInput | undefined): boolean {
+  if (classifyCandidateActKind(candidate) !== 'PRIMARY_LAW') return false;
+  const familyKey = categoryToFamilyKey(candidate?.category);
+  if (familyKey.includes('procedure')) return true;
+  const normalizedTitle = normalizeMetaKey(candidate?.title);
+  return normalizedTitle.includes('процесуальн') || normalizedTitle.includes('судочинств');
+}
+
+function hasMixedProcedureAndNonProcedureGoals(
+  goalsSummary: Array<{ goal_id: string; goal_type?: string }>
+): boolean {
+  const goalTypes = new Set(
+    goalsSummary
+      .map((goal) => String(goal.goal_type ?? '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return goalTypes.has('procedure') && [...goalTypes].some((goalType) => goalType !== 'procedure');
+}
+
 function shouldAllowSingleActCoverageForMultiGoal(
   isMultiGoal: boolean,
   chunksEvidenceTopActs: ChunksEvidenceItem[],
   candidateByNreg: Map<string, ActCandidateInput>,
   familyEvidence: FamilyEvidenceSummaryInput | undefined,
   goalSupportByAct: GoalSupportByAct,
-  goalsCount: number
-): boolean {
-  if (!isMultiGoal) return false;
-  if (familyEvidence?.family_conflict) return false;
+  goalsCount: number,
+  goalsSummary: Array<{ goal_id: string; goal_type?: string }>
+): { allowed: boolean; blockedReason?: string } {
+  if (!isMultiGoal) return { allowed: false };
+  if (familyEvidence?.family_conflict) return { allowed: false };
   const strongEvidence = chunksEvidenceTopActs.filter((item) => isStrongChunksEvidence(item));
   const top = strongEvidence[0];
-  if (!top) return false;
+  if (!top) return { allowed: false };
   const topCandidate = candidateByNreg.get(top.rada_nreg);
   if (
     classifyActKind(
@@ -636,14 +665,24 @@ function shouldAllowSingleActCoverageForMultiGoal(
       topCandidate?.document_type_slug
     ) !== 'PRIMARY_LAW'
   ) {
-    return false;
+    return { allowed: false };
   }
   const topGoalSupport = goalSupportByAct.get(top.rada_nreg);
-  if (!topGoalSupport || topGoalSupport.size < goalsCount) return false;
+  if (!topGoalSupport || topGoalSupport.size < goalsCount) return { allowed: false };
+  if (
+    hasMixedProcedureAndNonProcedureGoals(goalsSummary) &&
+    isProceduralPrimaryLawCandidate(topCandidate) &&
+    !candidateHasMetadataGrounding(topCandidate)
+  ) {
+    return {
+      allowed: false,
+      blockedReason: 'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED',
+    };
+  }
   const second = strongEvidence[1];
-  if (!second) return true;
+  if (!second) return { allowed: true };
   const topStrongEvidenceNregs = new Set(strongEvidence.slice(0, 3).map((item) => item.rada_nreg));
-  if (topStrongEvidenceNregs.size === 1) return true;
+  if (topStrongEvidenceNregs.size === 1) return { allowed: true };
   const secondCandidate = candidateByNreg.get(second.rada_nreg);
   const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
   const secondFamilyKey = categoryToFamilyKey(secondCandidate?.category);
@@ -664,14 +703,15 @@ function shouldAllowSingleActCoverageForMultiGoal(
     secondBestRank <= 3 &&
     isStrongChunksEvidence(second)
   ) {
-    return false;
+    return { allowed: false };
   }
   const topRankMass = top.rank_mass_top30 ?? 0;
   const secondRankMass = second.rank_mass_top30 ?? 0;
-  return (
-    top.count_in_top30 >= Math.max(6, second.count_in_top30 * MULTI_GOAL_SINGLE_ACT_COUNT_RATIO) &&
-    topRankMass >= secondRankMass * MULTI_GOAL_SINGLE_ACT_RANK_MASS_RATIO
-  );
+  return {
+    allowed:
+      top.count_in_top30 >= Math.max(6, second.count_in_top30 * MULTI_GOAL_SINGLE_ACT_COUNT_RATIO) &&
+      topRankMass >= secondRankMass * MULTI_GOAL_SINGLE_ACT_RANK_MASS_RATIO,
+  };
 }
 
 export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedActsOutput {
@@ -705,14 +745,16 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   );
   const isMultiGoal = (input.goals_summary?.length ?? 0) >= 2;
   const candidateByNreg = new Map(actCandidatesTop.map((a) => [a.rada_nreg, a]));
-  const allowSingleActCoverageForMultiGoal = shouldAllowSingleActCoverageForMultiGoal(
+  const singleActCoverageDecision = shouldAllowSingleActCoverageForMultiGoal(
     isMultiGoal,
     chunks_evidence_top_acts,
     candidateByNreg,
     familyEvidence,
     goalSupportByAct,
-    input.goals_summary.length
+    input.goals_summary.length,
+    input.goals_summary
   );
+  const allowSingleActCoverageForMultiGoal = singleActCoverageDecision.allowed;
   const selectedActsMin =
     allowSingleActCoverageForMultiGoal
       ? SELECTED_ACTS_MIN_SINGLE
@@ -720,6 +762,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         ? Math.max(SELECTED_ACTS_MIN_MULTI, input.goals_summary.length)
         : SELECTED_ACTS_MIN_SINGLE;
   const reasonCodes: string[] = [];
+  if (singleActCoverageDecision.blockedReason) reasonCodes.push(singleActCoverageDecision.blockedReason);
   const selected: SelectedActOutput[] = [];
   const fromTaxonomy: string[] = [];
   const fromActsSearch: string[] = [];
