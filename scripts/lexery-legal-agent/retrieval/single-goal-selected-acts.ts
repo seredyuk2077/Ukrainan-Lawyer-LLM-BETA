@@ -10,7 +10,10 @@ import {
 import { deriveCoverageGap } from './coverage-gap.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary, type FamilyEvidence } from './family-evidence.js';
 import { hasExplicitActScopeCue } from './goal-splitter.js';
-import { resolveSingleActScopeSelection } from './single-goal-act-scope.js';
+import {
+  isMetadataGroundedActCandidate,
+  resolveSingleActScopeSelection,
+} from './single-goal-act-scope.js';
 import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
@@ -341,7 +344,7 @@ export async function resolveSingleGoalSelectedActs(
 
   const metadataGroundedSelectedActsCount = selected_acts.filter((act) => {
     const candidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === act.rada_nreg);
-    return candidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+    return isMetadataGroundedActCandidate(candidate, query, METADATA_GROUNDING_REASON_CODES);
   }).length;
   const coverageGuardRecoveredWithActGrounding = canRelaxCoverageGuardWithActGrounding({
     selectedActsReasonCodes: selectedActsResult.selected_acts_reason_codes,
@@ -997,7 +1000,11 @@ export async function resolveSingleGoalSelectedActs(
     ? actCandidatesTopHydrated.find((candidate) => candidate.rada_nreg === leadSelectedAct.rada_nreg)
     : undefined;
   const leadSelectedMetadataGrounded =
-    leadSelectedCandidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+    isMetadataGroundedActCandidate(
+      leadSelectedCandidate,
+      query,
+      METADATA_GROUNDING_REASON_CODES
+    );
   const hasStructuredGroundingSignals =
     (documentTypeHints?.length ?? 0) > 0 ||
     entitiesCount > 0 ||
@@ -1011,7 +1018,7 @@ export async function resolveSingleGoalSelectedActs(
   const distinctPrimaryFamilies = [...new Set(selectedPrimaryFamilies.filter(Boolean))];
   const metadataGroundedPrimaryActsCount = selectedPrimaryActs.filter((act) => {
     const candidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === act.rada_nreg);
-    return candidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+    return isMetadataGroundedActCandidate(candidate, query, METADATA_GROUNDING_REASON_CODES);
   }).length;
   const leadSelectedFamilyKey = toFamilyKey(leadSelectedCandidate?.category ?? leadSelectedAct?.category);
   const hasDomainAlignedPrimaryFamily = selectedPrimaryFamilies.some((familyKey) =>

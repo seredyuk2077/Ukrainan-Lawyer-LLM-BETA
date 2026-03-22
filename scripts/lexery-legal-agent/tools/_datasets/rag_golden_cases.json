@@ -1137,5 +1137,165 @@
     "expected_coverage_gap": ["weak_evidence", "likely_missing_act"],
     "max_selected_acts": 2,
     "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_residence_permit_cancellation",
+    "bucket": "ood / corpus-gap",
+    "priority": "high",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "За яких підстав скасовують посвідку на тимчасове проживання і як оскаржити це рішення?",
+    "description": "Special-act + procedure query: якщо substantive migration act не покритий LLDBI, retrieval не має прикидатися, що одного КАСУ достатньо.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["likely_missing_act", "weak_evidence"],
+    "max_selected_acts": 2,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_copyright_registration_program",
+    "bucket": "primary law + procedure",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Як зареєструвати авторське право на комп'ютерну програму і які документи подаються?",
+    "description": "Новий LLDBI домен: після ingest спеціальний закон про авторське право має grounded-покривати query без процедурного шуму.",
+    "expected_primary": {
+      "rada_nreg": "2811-20",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["2811-20"],
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_procurement_order_documents_v1",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "За постановою № 1178 які документи подаються для участі в закупівлі?",
+    "description": "Grounded subordinate-act query: retrieval має зберігати один домінантний підзаконний акт без false weak-evidence лише через відсутність PRIMARY_LAW.",
+    "expected_primary": {
+      "rada_nreg": "1178-2022-п",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1178-2022-п"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_procurement_order_documents_v2",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Постанова 1178: які документи потрібні учаснику для тендерної пропозиції?",
+    "description": "Short colloquial subordinate-act query: exact bylaw grounding should survive compact phrasing without drifting to generic trade rules.",
+    "expected_primary": {
+      "rada_nreg": "1178-2022-п",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1178-2022-п"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_procurement_order_documents_v3",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Що за постановою №1178 подає учасник у складі пропозиції на закупівлю?",
+    "description": "Synonymized subordinate-act query family: retrieval має тримати той самий grounded bylaw even when user phrasing is looser and more latent.",
+    "expected_primary": {
+      "rada_nreg": "1178-2022-п",
+      "max_rank": 5
+    },
+    "expected_selected_acts": ["1178-2022-п"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_disciplinary_closure_order_metadata_v1",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?",
+    "description": "Descriptive subordinate-act discovery query with a metadata follow-up: retrieval should stay on one grounded subordinate act instead of splitting into generic code noise.",
+    "expected_primary": {
+      "rada_nreg": "19-2026-р",
+      "max_rank": 8
+    },
+    "expected_selected_acts": ["19-2026-р"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_disciplinary_closure_order_metadata_v2",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Яке розпорядження закрило дисциплінарне провадження та ким воно прийняте?",
+    "description": "Shorter synonymized act-discovery query: the same subordinate act should remain grounded even when the user asks in a looser metadata style.",
+    "expected_primary": {
+      "rada_nreg": "19-2026-р",
+      "max_rank": 8
+    },
+    "expected_selected_acts": ["19-2026-р"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_repeal_order_discovery_v2",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 14,
+    "query": "Що регулює Наказ про скасування Правил торгівлі транспортними засобами?",
+    "description": "Descriptive repeal-order discovery query on an under-tested subordinate act: retrieval should ground the indexed repeal order instead of drifting into generic primary-law noise.",
+    "expected_primary": {
+      "rada_nreg": "z0147-10",
+      "max_rank": 10
+    },
+    "expected_selected_acts": ["z0147-10"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_repeal_order_effective_date_v1",
+    "bucket": "ood / corpus-gap",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Яким наказом визнано таким, що втратив чинність, попередній порядок або інструкцію, і з якого моменту припинилося її застосування?",
+    "description": "Descriptive repeal-order discovery query: until LLDBI has stable act evidence, retrieval should stay honest and report weak or missing coverage instead of fabricating grounded success.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["weak_evidence", "likely_missing_act"],
+    "max_selected_acts": 2,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_selector_heavy_rules_exception_v1",
+    "bucket": "structural selector heavy",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "За абз. 2 п. 12 Правил який виняток передбачено із загального строку подання та для яких випадків він застосовується?",
+    "description": "Selector-heavy subordinate-rules query: if LLDBI evidence is weak, retrieval should surface honest low-confidence semantics instead of drifting into generic codes.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": ["weak_evidence", "likely_missing_act"],
+    "max_selected_acts": 2,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
   }
 ]

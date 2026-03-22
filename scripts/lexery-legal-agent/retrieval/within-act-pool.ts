@@ -1,6 +1,7 @@
 import type { RawHit } from './types.js';
 
 export interface BuildWithinActPoolInput {
+  groundedNregs?: string[];
   taxonomyNregs?: string[];
   actSearchNregs?: string[];
   bootstrapActNregs?: string[];
@@ -8,6 +9,7 @@ export interface BuildWithinActPoolInput {
   plannerPreferredNregs?: string[];
   categoryHintCount?: number;
   preferChunkEvidence?: boolean;
+  explicitActScopeCue?: boolean;
   limit: number;
 }
 
@@ -65,6 +67,7 @@ export function extractChunkEvidenceNregsFromHits(
 
 export function buildWithinActPool(input: BuildWithinActPoolInput): string[] {
   const {
+    groundedNregs = [],
     taxonomyNregs = [],
     actSearchNregs = [],
     bootstrapActNregs = [],
@@ -72,12 +75,16 @@ export function buildWithinActPool(input: BuildWithinActPoolInput): string[] {
     plannerPreferredNregs = [],
     categoryHintCount = 0,
     preferChunkEvidence = false,
+    explicitActScopeCue = false,
     limit,
   } = input;
 
   if (limit <= 0) return [];
 
+  const groundedSingleAct = groundedNregs.length === 1 ? groundedNregs : [];
+
   const evidenceFirstOrder = uniqueOrdered([
+    ...groundedSingleAct,
     ...chunkEvidenceNregs,
     ...bootstrapActNregs,
     ...actSearchNregs,
@@ -86,11 +93,37 @@ export function buildWithinActPool(input: BuildWithinActPoolInput): string[] {
 
   const taxonomyLedOrder =
     categoryHintCount > 0
-      ? uniqueOrdered([...taxonomyNregs, ...bootstrapActNregs, ...actSearchNregs, ...chunkEvidenceNregs])
-      : uniqueOrdered([...bootstrapActNregs, ...actSearchNregs, ...chunkEvidenceNregs, ...taxonomyNregs]);
+      ? uniqueOrdered([
+          ...groundedSingleAct,
+          ...taxonomyNregs,
+          ...bootstrapActNregs,
+          ...actSearchNregs,
+          ...chunkEvidenceNregs,
+        ])
+      : uniqueOrdered([
+          ...groundedSingleAct,
+          ...bootstrapActNregs,
+          ...actSearchNregs,
+          ...chunkEvidenceNregs,
+          ...taxonomyNregs,
+        ]);
+
+  const explicitActScopeOrder =
+    explicitActScopeCue && groundedSingleAct.length === 0 && taxonomyNregs.length > 0
+      ? uniqueOrdered([
+          ...taxonomyNregs,
+          ...bootstrapActNregs,
+          ...actSearchNregs,
+          ...chunkEvidenceNregs,
+        ])
+      : [];
 
   const baseOrder =
-    preferChunkEvidence && evidenceFirstOrder.length > 0 ? evidenceFirstOrder : taxonomyLedOrder;
+    explicitActScopeOrder.length > 0
+      ? explicitActScopeOrder
+      : preferChunkEvidence && evidenceFirstOrder.length > 0
+        ? evidenceFirstOrder
+        : taxonomyLedOrder;
 
   if (plannerPreferredNregs.length === 0) {
     return baseOrder.slice(0, limit);

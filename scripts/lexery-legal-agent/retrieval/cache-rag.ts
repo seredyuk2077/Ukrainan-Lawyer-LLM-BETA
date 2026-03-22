@@ -16,6 +16,7 @@ import {
   tryCategoryClusterSplitV2,
   getProcedureCategoryEnvelope,
   isProcedureCategory,
+  hasExplicitActScopeCue,
 } from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
 import {
@@ -41,6 +42,7 @@ import {
   buildSelectedActs,
   computeChunksEvidenceTopActs,
   classifyActKind,
+  isProceduralPrimaryLawCandidate,
   SELECTED_ACTS_MAX_OUT,
   type SelectedActOutput,
 } from './selected-acts.js';
@@ -97,6 +99,44 @@ function toLldbiHintsUsed(
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+}
+
+function hasMixedProcedureAndNonProcedureGoals(
+  goalsSummary: Array<{ goal_type?: string }>
+): boolean {
+  const goalTypes = new Set(
+    goalsSummary
+      .map((goal) => String(goal.goal_type ?? '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return goalTypes.has('procedure') && [...goalTypes].some((goalType) => goalType !== 'procedure');
+}
+
+function normalizeRetrievalEntities(
+  entities:
+    | Array<
+        | { act_abbrev?: string; law_title?: string; article_ref?: string }
+        | { type?: string; value?: string }
+      >
+    | undefined
+): Array<{ act_abbrev?: string; law_title?: string; article_ref?: string }> {
+  const normalized: Array<{ act_abbrev?: string; law_title?: string; article_ref?: string }> = [];
+  for (const entity of entities ?? []) {
+    if (!entity || typeof entity !== 'object') continue;
+    if ('act_abbrev' in entity || 'law_title' in entity || 'article_ref' in entity) {
+      normalized.push({
+        act_abbrev: entity.act_abbrev?.trim(),
+        law_title: entity.law_title?.trim(),
+        article_ref: entity.article_ref?.trim(),
+      });
+      continue;
+    }
+    if (!('type' in entity) || !('value' in entity) || typeof entity.value !== 'string') continue;
+    if (entity.type === 'act_abbrev') normalized.push({ act_abbrev: entity.value.trim() });
+    else if (entity.type === 'law_title') normalized.push({ law_title: entity.value.trim() });
+    else if (entity.type === 'article_ref') normalized.push({ article_ref: entity.value.trim() });
+  }
+  return normalized.filter((entity) => entity.act_abbrev || entity.law_title || entity.article_ref);
 }
 
 async function prioritizeProcedureActs(nregs: string[]): Promise<string[]> {
@@ -389,8 +429,8 @@ export interface RunCacheRagInput {
   domainHint?: string;
   /** Optional U2 lldbi routing: categories_ranked_top3, document_types_ranked_top3 → taxonomy hints. */
   lldbi?: { categories_ranked_top3?: string[]; document_types_ranked_top3?: string[] } | null;
-  /** Optional U2 entities for taxonomy scoring (act_abbrev, article_ref). */
-  entities?: { act_abbrev?: string; article_ref?: string }[];
+  /** Optional U2 entities for taxonomy scoring (act_abbrev, law_title, article_ref). */
+  entities?: { act_abbrev?: string; law_title?: string; article_ref?: string }[];
   /** Optional routing flags for multi-goal (contract/table/large input). */
   routing_flags?: RoutingFlags | null;
   /** Optional run_id for caching LLM planner result in RunContext. */
@@ -431,7 +471,7 @@ export interface RunCacheRagResult {
 /** Single-goal retrieval: embed + taxonomy + optional domain bootstrap + steps + within-act + hybrid sort. Returns hits with goal_id set. */
 async function runOneGoal(
   goal: EvidenceGoal,
-  entities: { act_abbrev?: string; article_ref?: string }[] | undefined,
+  entities: { act_abbrev?: string; law_title?: string; article_ref?: string }[] | undefined,
   searchPlan: SearchPlan,
   steps: SearchStep[] | undefined,
   collections: { chunks: string; acts: string },
@@ -616,12 +656,14 @@ async function runOneGoal(
   const taxonomyCandidatesNregs = taxonomyResult.rada_nreg_candidates ?? [];
   const actNregsFromStep = extractActSearchNregsFromHits(rawPerStep);
   const topNregs = buildWithinActPool({
+    groundedNregs: taxonomyResult.grounded_act_nregs ?? [],
     taxonomyNregs: taxonomyCandidatesNregs,
     actSearchNregs: actNregsFromStep,
     bootstrapActNregs,
     chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
     categoryHintCount: lldbiHints?.categoryHints.length ?? 0,
     preferChunkEvidence: topScore != null && topScore >= GOOD_SCORE_THRESHOLD,
+    explicitActScopeCue: hasExplicitActScopeCue(goal.subquery),
     limit: TWO_STAGE_ACTS_TOP,
   });
 
@@ -748,8 +790,9 @@ async function fetchMemoryForRun(params: {
 }
 
 export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagResult> {
-  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities, routing_flags, run_id, tenant_id, user_id, conversation_id } = input;
+  const { query: rawQuery, searchPlan, steps, domainHint, lldbi, entities: rawEntities, routing_flags, run_id, tenant_id, user_id, conversation_id } = input;
   const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  const entities = normalizeRetrievalEntities(rawEntities);
   const topLevelQuerySelectors = extractQueryCitationSelectors(query);
   if (query.length === 0) {
     const emptyTrace: RetrievalTrace = {
@@ -986,6 +1029,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       ? {
           taxonomy_act_count: taxonomyResultEarly?.rada_nreg_candidates?.length ?? 0,
           alias_hit_count: taxonomyResultEarly?.alias_hits?.length ?? 0,
+          exact_act_hit_count: taxonomyResultEarly?.exact_act_hit_count ?? 0,
+          grounded_act_hit_count: taxonomyResultEarly?.grounded_act_hit_count ?? 0,
           category_hint_count: taxonomyResultEarly?.category_hints?.length ?? 0,
           document_type_hint_count: documentTypeHints.length,
         }
@@ -1182,7 +1227,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const selectedActsMulti = buildSelectedActs({
       finalHits: finalMulti,
       actCandidatesTop: multiActCandidatesTopHydrated,
-      goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id })),
+      goals_summary: goalsSummary.map((g) => ({ goal_id: g.goal_id, goal_type: g.goal_type })),
       goal_support_by_act: serializeGoalSupportMap(goalSupportByAct),
       taxonomyNregs: new Set(mergedNregs),
       actsSearchNregs: mergedNregs,
@@ -1268,12 +1313,25 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         .slice(0, 2);
       multiReasonCodesFinal.push('LOW_CONFIDENCE_TAIL_TRIMMED');
     }
+    const mixedProcedureAndNonProcedureGoals = hasMixedProcedureAndNonProcedureGoals(goalsSummary);
+    const proceduralOnlySelection =
+      selected_acts_multi.length > 0 &&
+      selected_acts_multi.every((act) =>
+        isProceduralPrimaryLawCandidate({
+          rada_nreg: act.rada_nreg,
+          title: act.act_title,
+          document_type: act.document_type ?? undefined,
+          category: act.category ?? undefined,
+        })
+      );
     const multiCoverageGap = deriveCoverageGap({
       lowConfidence: multiLowConfidence,
       reasonCodes: multiReasonCodesFinal,
       selectedActsCount: selected_acts_multi.length,
       selectedActsConfidence: selectedActsMulti.selected_acts_confidence,
       selectedActKinds: selected_acts_multi.map((act) => act.act_kind ?? 'UNKNOWN'),
+      mixedProcedureAndNonProcedureGoals,
+      proceduralOnlySelection,
       hitsCount: finalMulti.length,
       topScore: topScoreMulti,
       domainHint,
@@ -1431,6 +1489,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const singleGoalTaxonomyStrength = {
     taxonomy_act_count: taxonomyResult.rada_nreg_candidates?.length ?? 0,
     alias_hit_count: taxonomyResult.alias_hits?.length ?? 0,
+    exact_act_hit_count: taxonomyResult.exact_act_hit_count ?? 0,
+    grounded_act_hit_count: taxonomyResult.grounded_act_hit_count ?? 0,
     category_hint_count: taxonomyResult.category_hints?.length ?? 0,
     document_type_hint_count: documentTypeHints.length,
   };
@@ -1637,9 +1697,12 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     needTwoStage,
     querySelectors,
     entities,
+    explicitActScopeCue: hasExplicitActScopeCue(query),
     goalType: goalSplit.goals[0]?.goal_type,
     goalReasonCodes: goalSplit.reason_codes,
     mustHaveSignalsCount: singleGoalGroundedQuery.appliedSignals.length,
+    groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
+    queryTokenCount: effective.normalize('NFC').split(/[^\p{L}\p{N}]+/u).filter(Boolean).length,
     weakLimit: TWO_STAGE_ACTS_TOP,
   });
   const withinActLimit = withinActDecision.limit;
@@ -1648,6 +1711,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   // but skip it on already-strong generic single-goal runs to trim Qdrant fanout.
   if (hasActCandidates && !degraded.lldbi && withinActLimit > 0) {
     const topNregs = buildWithinActPool({
+      groundedNregs: taxonomyResult.grounded_act_nregs ?? [],
       taxonomyNregs: taxonomyResult.rada_nreg_candidates ?? [],
       actSearchNregs: extractActSearchNregsFromHits(rawPerStep),
       chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
@@ -1657,6 +1721,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           .map((candidate) => candidate.rada_nreg as string) ?? [],
       categoryHintCount: categoryHints.length,
       preferChunkEvidence: !needTwoStage,
+      explicitActScopeCue: hasExplicitActScopeCue(query),
       limit: withinActLimit,
     });
     if (topNregs.length > 0) {
@@ -1807,6 +1872,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     documentTypeHints,
     taxonomyActCount: taxonomyResult.rada_nreg_candidates?.length ?? 0,
     aliasHitCount: taxonomyResult.alias_hits?.length ?? 0,
+    exactActHitCount: taxonomyResult.exact_act_hit_count ?? 0,
+    exactActNregs: taxonomyResult.exact_act_nregs ?? [],
+    groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
+    groundedActNregs: taxonomyResult.grounded_act_nregs ?? [],
     actSelectionLowConfidence,
     reasonCodes,
     useLowConfidenceFallback,
@@ -1906,6 +1975,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     withinActPolicyReasonCodes: withinActDecision.reason_codes,
     actsSearchPolicyReasonCodes: firstPassPlan.actsSearchPolicyReasonCodes,
     anchorsUsed,
+    exactActHitCount: taxonomyResult.exact_act_hit_count ?? 0,
+    exactActNregs: taxonomyResult.exact_act_nregs ?? [],
+    groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
+    groundedActNregs: taxonomyResult.grounded_act_nregs ?? [],
     taxonomySnapshotVersion,
     lldbiHintsPresent,
     lldbiHintsUsed: toLldbiHintsUsed(taxonomyResult.taxonomy_hints_used),

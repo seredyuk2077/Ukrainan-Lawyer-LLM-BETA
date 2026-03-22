@@ -1,5 +1,6 @@
 import {
   extractStructuredActIdentifiers,
+  extractActReferenceSignals,
   looksLikeStructuredActIdentifier,
   type ActMeta,
 } from './act-taxonomy-store.js';
@@ -85,6 +86,89 @@ function countQueryTokens(query: string): number {
   return query.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
 }
 
+function tokenizeGroundingWords(value: string): string[] {
+  return value
+    .normalize('NFC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 4);
+}
+
+const GENERIC_METADATA_GROUNDING_TOKENS = new Set([
+  'яким',
+  'яка',
+  'яке',
+  'який',
+  'якою',
+  'ким',
+  'хто',
+  'коли',
+  'що',
+  'цим',
+  'цю',
+  'цього',
+  'регулює',
+  'оформлюється',
+  'оформлюється',
+  'оформлено',
+  'затверджено',
+  'затверджує',
+  'прийнято',
+  'прийняв',
+  'визнано',
+  'таким',
+  'втратив',
+  'чинність',
+]);
+
+function tokensSoftMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.length < 6 || right.length < 6) return false;
+  return left.startsWith(right.slice(0, 5)) || right.startsWith(left.slice(0, 5));
+}
+
+function hasSoftTokenMatch(token: string, candidates: string[]): boolean {
+  return candidates.includes(token) || candidates.some((candidateToken) => tokensSoftMatch(token, candidateToken));
+}
+
+export function isMetadataGroundedActCandidate(
+  candidate:
+    | Pick<ActCandidateInput, 'reasons' | 'title' | 'document_type'>
+    | undefined,
+  query: string,
+  metadataGroundingReasonCodes: Set<string>
+): boolean {
+  if (!candidate) return false;
+  const reasons = new Set(candidate.reasons ?? []);
+  if ([...metadataGroundingReasonCodes].some((reasonCode) => reasons.has(reasonCode))) return true;
+  if (!reasons.has('title_match')) return false;
+
+  const candidateTitleTokens = tokenizeGroundingWords(candidate.title ?? '');
+  const candidateDocumentTypeTokens = tokenizeGroundingWords(candidate.document_type ?? '');
+  if (candidateTitleTokens.length === 0) return false;
+
+  for (const signal of extractActReferenceSignals(query)) {
+    const signalTokens = tokenizeGroundingWords(signal);
+    if (signalTokens.length < 2) continue;
+
+    const signalTitleTokens = signalTokens.filter(
+      (token) =>
+        !hasSoftTokenMatch(token, candidateDocumentTypeTokens) &&
+        !GENERIC_METADATA_GROUNDING_TOKENS.has(token)
+    );
+    if (signalTitleTokens.length < 2) continue;
+
+    let titleMatches = 0;
+    for (const token of signalTitleTokens) {
+      if (hasSoftTokenMatch(token, candidateTitleTokens)) titleMatches += 1;
+    }
+
+    if (titleMatches >= 2 && titleMatches / signalTitleTokens.length >= 0.5) return true;
+  }
+  return false;
+}
+
 export async function resolveSingleActScopeSelection(
   input: ResolveSingleActScopeSelectionInput
 ): Promise<ResolveSingleActScopeSelectionOutput> {
@@ -121,8 +205,11 @@ export async function resolveSingleActScopeSelection(
     hasExplicitActScopeCue(query) || extractStructuredActIdentifiers(query).length >= 1;
   const topActCandidate = actCandidatesTopHydrated[0];
   const runnerUpActCandidate = actCandidatesTopHydrated[1];
-  const metadataTopActGrounded =
-    topActCandidate?.reasons?.some((reasonCode) => metadataGroundingReasonCodes.has(reasonCode)) ?? false;
+  const metadataTopActGrounded = isMetadataGroundedActCandidate(
+    topActCandidate,
+    query,
+    metadataGroundingReasonCodes
+  );
   const metadataSingleActConverged =
     explicitActScopeCueQuery &&
     !exactSingleActConverged &&
@@ -252,8 +339,11 @@ export async function resolveSingleActScopeSelection(
       const evidence = chunksEvidenceTopActs.find((item) => item.rada_nreg === scopeNreg);
       const scopeCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === scopeNreg);
       const runnerUpCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg !== scopeNreg);
-      const metadataGroundedScopeCandidate =
-        scopeCandidate?.reasons?.some((reasonCode) => metadataGroundingReasonCodes.has(reasonCode)) ?? false;
+      const metadataGroundedScopeCandidate = isMetadataGroundedActCandidate(
+        scopeCandidate,
+        query,
+        metadataGroundingReasonCodes
+      );
       const dominantMetadataGroundedScopeCandidate =
         metadataGroundedScopeCandidate &&
         (scopeCandidate?.score ?? 0) >= ((runnerUpCandidate?.score ?? 0) + 2);

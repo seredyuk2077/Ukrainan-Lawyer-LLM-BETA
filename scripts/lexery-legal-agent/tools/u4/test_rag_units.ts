@@ -73,6 +73,7 @@ import {
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
 } from '../../retrieval/single-goal-selected-acts.js';
+import { isMetadataGroundedActCandidate } from '../../retrieval/single-goal-act-scope.js';
 import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
@@ -234,6 +235,9 @@ function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
   if (!hasExplicitActScopeCue('Що регулює Наказ про скасування Правил торгівлі транспортними засобами?')) {
     throw new Error('Expected descriptive subordinate-act title to count as explicit act scope');
   }
+  if (!hasExplicitActScopeCue('Яким розпорядженням закрито дисциплінарне провадження?')) {
+    throw new Error('Expected interrogative subordinate-act locator to count as explicit act scope');
+  }
   if (hasExplicitActScopeCue('Який порядок реєстрації і які документи подаються?')) {
     throw new Error('Expected generic procedural query without grounded act cue to remain non-grounded');
   }
@@ -246,6 +250,9 @@ function testStrongActScopeCueCountDistinguishesSingleAndMixedActScope(): void {
   }
   if (countStrongActScopeCues('Що регулює Наказ про скасування Правил торгівлі транспортними засобами?') !== 1) {
     throw new Error('Expected one strong act-scope cue for descriptive subordinate-act title query');
+  }
+  if (countStrongActScopeCues('Яким наказом визнано таким, що втратив чинність, попередній порядок або інструкцію?') !== 1) {
+    throw new Error('Expected one strong act-scope cue for interrogative repeal-order query');
   }
   if (
     countStrongActScopeCues(
@@ -274,6 +281,55 @@ function testGoalSplitCompactsSingleStrongActScopeBundle(): void {
     throw new Error(`Expected single strong act-scope bundle to compact back to one goal, got ${r.goals.length}`);
   }
   console.log('[OK] heuristicGoalSplit compacts same-act bundle only on strong single-act grounding');
+}
+
+function testGoalSplitCompactsActMetadataBundle(): void {
+  const q = 'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected act-metadata bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'definition') {
+    throw new Error(`Expected compacted act-metadata bundle to stay definition-like, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('act_metadata_bundle_compaction')) {
+    throw new Error(`Expected act_metadata_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction to remain present, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if ((r.goals[0]?.must_have_signals?.length ?? 0) !== 0) {
+    throw new Error(`Expected act-metadata bundle to avoid procedural must-have signals, got ${JSON.stringify(r.goals[0]?.must_have_signals)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts descriptive subordinate-act metadata bundle');
+}
+
+function testGoalSplitCompactsRepealOrderMetadataBundle(): void {
+  const q =
+    'Яким наказом визнано таким, що втратив чинність, попередній порядок або інструкцію, і з якого моменту припинилося її застосування?';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected repeal-order metadata bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'definition') {
+    throw new Error(`Expected repeal-order metadata bundle to stay definition-like, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('act_metadata_bundle_compaction')) {
+    throw new Error(`Expected act_metadata_bundle_compaction for repeal-order bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts repeal-order metadata bundle');
+}
+
+function testGoalSplitDoesNotCompactActLocatorWithSubstantiveProcedureBundle(): void {
+  const q = 'Яким законом передбачена відповідальність за шахрайство і хто розслідує цей злочин?';
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected act-locator + substantive/procedure bundle to remain split, got ${r.goals.length}`);
+  }
+  if (r.reason_codes.includes('act_metadata_bundle_compaction')) {
+    throw new Error(`Did not expect act_metadata_bundle_compaction for substantive/procedure bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit does not over-compact non-metadata act-locator bundle');
 }
 
 function testGoalSplitCarriesSubjectIntoProceduralQuestion(): void {
@@ -876,6 +932,22 @@ function testBuildWithinActPoolPrioritizesGroundedSingleAct(): void {
   console.log('[OK] within-act pool prioritizes grounded single-act convergence');
 }
 
+function testBuildWithinActPoolPrefersTaxonomyForExplicitActScopeQueries(): void {
+  const pool = buildWithinActPool({
+    taxonomyNregs: ['19-2026-р', '60/2026', '4651-17'],
+    chunkEvidenceNregs: ['2747-15', '80732-10', '1697-18'],
+    preferChunkEvidence: true,
+    explicitActScopeCue: true,
+    limit: 3,
+  });
+  if (JSON.stringify(pool) !== JSON.stringify(['19-2026-р', '60/2026', '4651-17'])) {
+    throw new Error(
+      `Expected explicit act-scope query to preserve taxonomy-led candidate pool ahead of chunk noise, got ${JSON.stringify(pool)}`
+    );
+  }
+  console.log('[OK] within-act pool preserves taxonomy-led candidates for descriptive explicit act-scope queries');
+}
+
 function testQueryRewritePolicySkipsAnchoredStructuralTitleQuery(): void {
   const decision = decideQueryRewritePolicy({
     query: 'Який обов\'язок продавця щодо інформації про товар передбачений пунктом 12 Правил роздрібної торгівлі непродовольчими товарами?',
@@ -1100,6 +1172,30 @@ function testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructural
     );
   }
   console.log('[OK] within-act expansion keeps grounded single-act queries on a cheap act fanout');
+}
+
+function testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors(
+      'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?'
+    ),
+    entities: [],
+    explicitActScopeCue: true,
+    goalType: 'definition',
+    goalReasonCodes: ['same_act_bundle_compaction', 'act_metadata_bundle_compaction'],
+    mustHaveSignalsCount: 0,
+    groundedActHitCount: 0,
+    queryTokenCount: 10,
+    weakLimit: 5,
+  });
+  if (decision.limit !== 3 || !decision.reason_codes.includes('EXPLICIT_ACT_SCOPE_QUERY')) {
+    throw new Error(
+      `Expected explicit act-scope query without exact grounding to keep act-anchored within-act fanout, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] within-act expansion keeps explicit act-scope queries alive even without exact grounding');
 }
 
 function testAuditBestProbeUsesNregInsteadOfWeakShortAlias(): void {
@@ -3238,6 +3334,191 @@ async function testResolveSingleGoalSelectedActsRecoversMetadataGroundedExplicit
   console.log('[OK] single-goal finalizer recovers metadata-grounded explicit subordinate-act titles from noisy primary-law heads');
 }
 
+async function testResolveSingleGoalSelectedActsRecoversAnchoredDescriptiveSubordinateAct(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?',
+    goalId: 'goal_1',
+    finalHits: [
+      ...Array.from({ length: 6 }, (_, index) => ({
+        rada_nreg: index % 2 === 0 ? '392/2020' : '1697-18',
+        r2_key: `r2://noise/${index}`,
+        json_path: `$.chunks[${index}]`,
+        score: 0.54 - index * 0.02,
+        ordering_score: 0.33 - index * 0.01,
+        title:
+          index % 2 === 0
+            ? 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"'
+            : 'Про прокуратуру',
+      })),
+      {
+        rada_nreg: '19-2026-р',
+        r2_key: 'r2://19/1',
+        json_path: '$.chunks[0]',
+        score: 0.526,
+        ordering_score: 0.277,
+        title: 'Про закриття дисциплінарного провадження',
+        unit_type: 'paragraph',
+        unit_number: '1',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '19-2026-р',
+        title: 'Про закриття дисциплінарного провадження',
+        score: 7.37,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['keyword_match', 'title_match', 'summary_match', 'category_hint', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: 'v6-3_700-08',
+        title: 'Щодо порушення десятиденного строку розгляду заяв',
+        score: 4.88,
+        category: 'judiciary_justice',
+        document_type: 'Постанова Пленуму Верховного Суду',
+        document_type_slug: 'court_explanation',
+        reasons: ['keyword_match', 'topic_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '392/2020',
+        title:
+          'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        score: 4.71,
+        category: 'national_security',
+        document_type: 'Указ Президента',
+        document_type_slug: 'presidential_decree',
+        reasons: ['summary_match', 'keyword_match', 'topic_match', 'title_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 2.2,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'summary_match', 'hits_evidence'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['19-2026-р', 'v6-3_700-08', '392/2020']),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['Розпорядження КМУ'],
+    taxonomyActCount: 8,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.53890216,
+    avgScore: 0.41,
+    categoryHintsCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '392/2020',
+        count_in_top30: 17,
+        avg_score_in_top30: 0.287,
+        max_score: 0.36,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.65,
+        max_ordering_score: 0.329,
+      },
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.398,
+        max_score: 0.539,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.34,
+        max_ordering_score: 0.526,
+      },
+      {
+        rada_nreg: '19-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.526,
+        max_score: 0.526,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.125,
+        max_ordering_score: 0.277,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '19-2026-р': {
+          title: 'Про закриття дисциплінарного провадження',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '392/2020': {
+          title:
+            'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+          category: 'national_security',
+          document_type: 'Указ Президента',
+          document_type_slug: 'presidential_decree',
+          storage_category: null,
+        },
+        '1697-18': {
+          title: 'Про прокуратуру',
+          category: 'judiciary_justice',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, act.document_type_slug ?? null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(
+      `Expected anchored descriptive subordinate-act query to recover confidently, got low_confidence with ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(
+      `Expected anchored descriptive subordinate-act query to keep coverage_gap=none, got ${result.coverageGap}`
+    );
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '19-2026-р') {
+    throw new Error(
+      `Expected anchored descriptive subordinate-act query to recover 19-2026-р, got ${JSON.stringify(result.selected_acts_final)}`
+    );
+  }
+  if (
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_RECOVERED') ||
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(
+      `Expected anchored descriptive subordinate-act recovery reason codes, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] single-goal finalizer recovers anchored descriptive subordinate-act titles from noisy heads');
+}
+
 async function testResolveSingleGoalSelectedActsKeepsGroundedSubordinateActAsWeakEvidenceWhenChunksMiss(): Promise<void> {
   const result = await resolveSingleGoalSelectedActs({
     query: 'розпорядження про втрату чинності № 1478',
@@ -3770,6 +4051,51 @@ function testExtractActReferenceSignalsCapturesExplicitDocumentTitles(): void {
     throw new Error(`Expected explicit document-title signal for decree query, got ${JSON.stringify(signals)}`);
   }
   console.log('[OK] act-reference signal extraction captures explicit title-heavy act references');
+}
+
+function testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator(): void {
+  const signals = extractActReferenceSignals(
+    'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?'
+  );
+  if (!signals.some((signal) => signal.toLowerCase().includes('яким розпорядженням закрито дисциплінарне провадження'))) {
+    throw new Error(`Expected trimmed interrogative act-locator signal, got ${JSON.stringify(signals)}`);
+  }
+  if (!signals.some((signal) => signal.toLowerCase() === 'закрито дисциплінарне провадження')) {
+    throw new Error(`Expected descriptive fragment without metadata tail, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] act-reference signal extraction trims metadata tail from interrogative locator query');
+}
+
+function testMetadataGroundedActCandidateAcceptsDistinctDescriptiveLocator(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      title: 'Про закриття дисциплінарного провадження',
+      document_type: 'Розпорядження КМУ',
+      reasons: ['title_match', 'summary_match'],
+    },
+    'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?',
+    new Set(['exact_alias_match', 'exact_title_match'])
+  );
+  if (!grounded) {
+    throw new Error('Expected distinct descriptive subordinate-act locator to qualify for metadata grounding');
+  }
+  console.log('[OK] metadata act grounding accepts distinct descriptive subordinate-act locator');
+}
+
+function testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      title: 'Про визнання таким, що втратив чинність, наказу від 31.07.2002 N 228',
+      document_type: 'Наказ',
+      reasons: ['title_match', 'summary_match'],
+    },
+    'Яким наказом визнано таким, що втратив чинність, попередній порядок або інструкцію, і з якого моменту припинилося її застосування?',
+    new Set(['exact_alias_match', 'exact_title_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected boilerplate repeal-order locator to remain non-grounded without distinct act identity');
+  }
+  console.log('[OK] metadata act grounding rejects boilerplate repeal-order locator without distinct identity');
 }
 
 function testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle(): void {
@@ -4899,6 +5225,9 @@ async function main(): Promise<void> {
   testStrongActScopeCueCountDistinguishesSingleAndMixedActScope();
   testGoalSplitDoesNotCompactMixedActScopeBundle();
   testGoalSplitCompactsSingleStrongActScopeBundle();
+  testGoalSplitCompactsActMetadataBundle();
+  testGoalSplitCompactsRepealOrderMetadataBundle();
+  testGoalSplitDoesNotCompactActLocatorWithSubstantiveProcedureBundle();
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
   testGoalSplitAddsSpecificTaxAppealSignals();
@@ -4934,6 +5263,7 @@ async function main(): Promise<void> {
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
   testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns();
   testBuildWithinActPoolPrioritizesGroundedSingleAct();
+  testBuildWithinActPoolPrefersTaxonomyForExplicitActScopeQueries();
   testBuildWithinActPoolPromotesPlannerPreferredActs();
   testQueryRewritePolicySkipsAnchoredStructuralTitleQuery();
   testQueryRewritePolicySkipsGroundedCitationWithActCue();
@@ -4949,6 +5279,7 @@ async function main(): Promise<void> {
   testWithinActExpansionCompactsProceduralNonStructuralQueries();
   testWithinActExpansionTreatsNormalizedRetrievalEntitiesAsActAnchors();
   testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructuralSelectors();
+  testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding();
   testAuditBestProbeUsesNregInsteadOfWeakShortAlias();
   testAuditBestProbeUsesNregInsteadOfWeakShortCuedNumberAlias();
   testAuditBestProbeKeepsStrongCodeAlias();
@@ -5000,6 +5331,7 @@ async function main(): Promise<void> {
   await testResolveSingleGoalSelectedActsRecoversExplicitIdentifierFromTailEvidence();
   await testResolveSingleGoalSelectedActsRecoversGroundedDescriptiveSubordinateAct();
   await testResolveSingleGoalSelectedActsRecoversMetadataGroundedExplicitSubordinateAct();
+  await testResolveSingleGoalSelectedActsRecoversAnchoredDescriptiveSubordinateAct();
   await testResolveSingleGoalSelectedActsKeepsGroundedSubordinateActAsWeakEvidenceWhenChunksMiss();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
@@ -5018,6 +5350,9 @@ async function main(): Promise<void> {
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
   testExtractActReferenceSignalsCapturesExplicitDocumentTitles();
+  testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator();
+  testMetadataGroundedActCandidateAcceptsDistinctDescriptiveLocator();
+  testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator();
   testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle();
   testExtractStructuredActIdentifiersIgnoresDates();
   testExtractCuedNumericActReferencesCapturesBareNumberWithCue();
