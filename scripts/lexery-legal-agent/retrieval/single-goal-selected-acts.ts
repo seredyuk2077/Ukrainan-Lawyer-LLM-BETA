@@ -174,6 +174,7 @@ const LOW_CONFIDENCE_FINAL_ONLY_REASON_CODES = new Set([
   'LOW_EVIDENCE',
   'NO_STRONG_ACT_EVIDENCE',
   'ROUTING_HINTS_LOW_CONF',
+  'OOD_GUARD_WEAK_BUT_ACT_GROUNDED',
   'UNGROUNDED_PRIMARY_FALLBACK',
   'NON_PRIMARY_ONLY_WEAK_CONFIDENCE',
   'EMPTY_SELECTED_ACTS_RECOVERED_FROM_EVIDENCE',
@@ -394,6 +395,10 @@ export async function resolveSingleGoalSelectedActs(
     const topScoreWeak = topScore == null || topScore < config.u4OodGuardTopScoreThreshold;
     const noCategoryHints = categoryHintsCount === 0;
     const avgScoreWeak = avgScore == null || avgScore < config.u4OodGuardAvgScoreThreshold;
+    const actGroundedForOod =
+      exactActHitCount > 0 ||
+      groundedActHitCount > 0 ||
+      metadataGroundedSelectedActsCount > 0;
     if (topScoreWeak) oodWhy.push('TOP_SCORE_WEAK');
     if (domainWeak) oodWhy.push('DOMAIN_WEAK');
     if (noCategoryHints) oodWhy.push('NO_CATEGORY_HINTS');
@@ -401,8 +406,12 @@ export async function resolveSingleGoalSelectedActs(
     if (oodWhy.length === 4) {
       low_confidence_final = true;
       oodGuardResult.fired = true;
-      oodGuardResult.why = oodWhy;
-      pushUnique(reasonCodes, 'OUT_OF_SCOPE');
+      oodGuardResult.why = actGroundedForOod ? [...oodWhy, 'ACT_GROUNDED'] : oodWhy;
+      if (actGroundedForOod) {
+        pushUnique(reasonCodes, 'OOD_GUARD_WEAK_BUT_ACT_GROUNDED');
+      } else {
+        pushUnique(reasonCodes, 'OUT_OF_SCOPE');
+      }
       pushUnique(reasonCodes, 'LOW_EVIDENCE');
     }
   }
@@ -932,8 +941,31 @@ export async function resolveSingleGoalSelectedActs(
     if (selected_acts_final.length === 0) {
       const scopeNreg = [...scopeConstrainedNregSet][0];
       const evidence = chunksEvidenceTopActs.find((item) => item.rada_nreg === scopeNreg);
-      if (evidence && evidence.best_rank_in_top30 <= 8) {
-        const candidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === scopeNreg);
+      const scopeCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg === scopeNreg);
+      const runnerUpCandidate = actCandidatesTopHydrated.find((item) => item.rada_nreg !== scopeNreg);
+      const metadataGroundedScopeCandidate =
+        scopeCandidate?.reasons?.some((reasonCode) => METADATA_GROUNDING_REASON_CODES.has(reasonCode)) ?? false;
+      const dominantMetadataGroundedScopeCandidate =
+        metadataGroundedScopeCandidate &&
+        (scopeCandidate?.score ?? 0) >= ((runnerUpCandidate?.score ?? 0) + 2);
+      const recoverableScopedEvidence =
+        evidence != null &&
+        (
+          evidence.best_rank_in_top30 <= 8 ||
+          (
+            explicitIdentifierScopedQuery &&
+            evidence.best_rank_in_top30 <= 30 &&
+            (evidence.max_ordering_score ?? 0) >= 0.25
+          ) ||
+          (
+            groundedSingleActConverged &&
+            dominantMetadataGroundedScopeCandidate &&
+            evidence.best_rank_in_top30 <= 15 &&
+            (evidence.max_ordering_score ?? 0) >= 0.33
+          )
+        );
+      if (recoverableScopedEvidence && evidence) {
+        const candidate = scopeCandidate;
         const meta = (candidate?.title && candidate.document_type !== undefined && candidate.category !== undefined)
           ? null
           : await getActMeta(scopeNreg);
@@ -1095,6 +1127,8 @@ export async function resolveSingleGoalSelectedActs(
       'LOW_EVIDENCE',
       'ACT_SELECTION_LOW_CONFIDENCE',
       'NO_STRONG_ACT_EVIDENCE',
+      'OOD_GUARD_WEAK_BUT_ACT_GROUNDED',
+      'OUT_OF_SCOPE',
     ];
     reasonCodes.splice(0, reasonCodes.length, ...removeReasonCodes(reasonCodes, recoverableExactScopeCodes));
     const hasIrrecoverableLowConfidenceReason = reasonCodes.some((code) =>

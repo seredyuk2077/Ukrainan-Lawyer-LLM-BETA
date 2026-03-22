@@ -148,6 +148,8 @@ export interface QueryProfileMeta {
     distinctCategories: number;
     distinctDocumentTypes: number;
   };
+  /** Query text itself grounded exactly to one indexed LLDBI act alias or title fragment before LLM routing. */
+  exact_act_alias_grounded?: boolean;
 }
 
 export interface QueryProfile {

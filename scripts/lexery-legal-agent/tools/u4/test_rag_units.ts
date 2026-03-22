@@ -5,6 +5,7 @@
  */
 import {
   heuristicGoalSplit,
+  countStrongActScopeCues,
   hasMultiClauseStructure,
   hasExplicitActScopeCue,
   getProcedureCategoryEnvelope,
@@ -16,6 +17,10 @@ import {
   extractCuedNumericActReferences,
   extractActReferenceSignals,
   extractStructuredActIdentifiers,
+  getActMeta,
+  getTaxonomyCandidates,
+  isAmendmentLikeActTitle,
+  queryLooksAmendmentFocused,
   scoreActCandidate,
   findActByTitleFragment,
 } from '../../retrieval/act-taxonomy-store.js';
@@ -68,7 +73,13 @@ import {
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
 } from '../../retrieval/single-goal-selected-acts.js';
+import {
+  canRelaxCoverageGuardWithActGrounding,
+  hasStickySingleGoalLowConfidenceReason,
+  shouldFlagProceduralPrimaryWithoutActGrounding,
+} from '../../retrieval/single-goal-honesty.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
+import { buildBestProbe } from './audit_lldbi_act_coverage.js';
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -224,6 +235,39 @@ function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
     throw new Error('Expected generic procedural query without grounded act cue to remain non-grounded');
   }
   console.log('[OK] hasExplicitActScopeCue handles structured ids and subordinate act anchors');
+}
+
+function testStrongActScopeCueCountDistinguishesSingleAndMixedActScope(): void {
+  if (countStrongActScopeCues('За постановою №1178 які документи подаються для участі?') !== 1) {
+    throw new Error('Expected one strong act-scope cue for single subordinate-act query');
+  }
+  if (
+    countStrongActScopeCues(
+      'За законом про публічні закупівлі які підстави відхилення і за постановою №1178 які документи подаються?'
+    ) < 2
+  ) {
+    throw new Error('Expected mixed act-scope bundle to expose multiple strong act cues');
+  }
+  console.log('[OK] strong act-scope cue counting distinguishes single-act and mixed-act bundles');
+}
+
+function testGoalSplitDoesNotCompactMixedActScopeBundle(): void {
+  const q =
+    'За законом про публічні закупівлі які підстави відхилення і за постановою №1178 які документи подаються?';
+  const r = heuristicGoalSplit(q, 'administrative', undefined);
+  if (r.goals.length < 2) {
+    throw new Error(`Expected mixed act-scope bundle to remain multi-goal, got ${r.goals.length}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps mixed act-scope bundle split');
+}
+
+function testGoalSplitCompactsSingleStrongActScopeBundle(): void {
+  const q = 'За постановою №1178 які документи подаються та які підстави відхилення пропозиції?';
+  const r = heuristicGoalSplit(q, 'administrative', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected single strong act-scope bundle to compact back to one goal, got ${r.goals.length}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts same-act bundle only on strong single-act grounding');
 }
 
 function testGoalSplitCarriesSubjectIntoProceduralQuestion(): void {
@@ -970,6 +1014,165 @@ function testWithinActExpansionCompactsProceduralNonStructuralQueries(): void {
   console.log('[OK] within-act expansion compacts non-structural procedural bundle queries');
 }
 
+function testWithinActExpansionTreatsNormalizedRetrievalEntitiesAsActAnchors(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors('27-2026-р'),
+    entities: [{ law_title: '27-2026-р' }],
+    goalType: 'other',
+    goalReasonCodes: [],
+    mustHaveSignalsCount: 0,
+    weakLimit: 5,
+  });
+  if (decision.limit !== 3 || !decision.reason_codes.includes('ENTITY_ANCHORED_QUERY')) {
+    throw new Error(
+      `Expected normalized retrieval law_title to keep act-anchored within-act fanout, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] within-act expansion respects normalized retrieval law_title entities');
+}
+
+function testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructuralSelectors(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors('дотація на утримання закладів'),
+    entities: [],
+    goalType: 'other',
+    goalReasonCodes: [],
+    mustHaveSignalsCount: 0,
+    groundedActHitCount: 1,
+    queryTokenCount: 4,
+    weakLimit: 5,
+  });
+  if (decision.limit !== 2 || !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY')) {
+    throw new Error(
+      `Expected grounded single-act query to keep cheap within-act fanout, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] within-act expansion keeps grounded single-act queries on a cheap act fanout');
+}
+
+function testAuditBestProbeUsesNregInsteadOfWeakShortAlias(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '254к/96-вр',
+    title: 'Конституція України',
+    aliases: ['КУ'],
+    category: 'constitutional',
+    storage_category: null,
+    document_type: 'Конституція',
+    document_type_slug: 'constitution',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '254к/96-вр') {
+    throw new Error(`Expected weak short alias to fall back to nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe rejects weak short alias in favor of nreg');
+}
+
+function testAuditBestProbeUsesNregInsteadOfWeakShortCuedNumberAlias(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '25-2026-р',
+    title: "Про погодження розподілу додаткової дотації на здійснення переданих з державного бюджету видатків з утримання закладів освіти та охорони здоров'я між місцевими бюджетами у 2026 році",
+    aliases: ['розпорядження кму №25-р'],
+    category: 'finance_banking',
+    storage_category: null,
+    document_type: 'Розпорядження КМУ',
+    document_type_slug: 'cmu_order',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '25-2026-р') {
+    throw new Error(`Expected weak short cued-number alias to fall back to nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe rejects low-information short cued-number alias');
+}
+
+function testAuditBestProbeKeepsStrongCodeAlias(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '2947-14',
+    title: 'Сімейний кодекс України',
+    aliases: ['СКУ'],
+    category: 'family',
+    storage_category: null,
+    document_type: 'Кодекс',
+    document_type_slug: 'code',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'alias' || probe.query.normalize('NFC').toLowerCase() !== 'ску') {
+    throw new Error(`Expected strong code alias to remain best probe, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe keeps strong code alias');
+}
+
+function testAuditBestProbeRejectsAliasWithoutActIdentityOverlap(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '29-2026-р',
+    title: 'Про звільнення Корзуна А.В. з посади заступника Міністра енергетики України',
+    aliases: ['розпорядження свириденко'],
+    category: 'energy_utilities',
+    storage_category: null,
+    document_type: 'Розпорядження КМУ',
+    document_type_slug: 'cmu_order',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '29-2026-р') {
+    throw new Error(`Expected non-overlapping person-name alias to fall back to nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe rejects alias without act-identity overlap');
+}
+
+function testAuditBestProbeUsesNregForAmendmentLikeActAliases(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '27-2026-р',
+    title: 'Про внесення зміни у додаток до розпорядження Кабінету Міністрів України від 29 квітня 2025 р. № 408',
+    aliases: ['Зміни до стипендій КМУ'],
+    category: 'education_science',
+    storage_category: 'other',
+    document_type: 'Розпорядження КМУ',
+    document_type_slug: 'cmu_order',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '27-2026-р') {
+    throw new Error(`Expected amendment-like alias probe to fall back to nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe uses nreg for amendment-like act aliases');
+}
+
+function testAuditBestProbeUsesNregForBoilerplateAdministrativeAliases(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '15-2026-р',
+    title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 19 листопада 2025 р. № 1292',
+    aliases: ['розпорядження про втрату чинності'],
+    category: 'administrative',
+    storage_category: null,
+    document_type: 'Розпорядження КМУ',
+    document_type_slug: 'cmu_order',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '15-2026-р') {
+    throw new Error(`Expected boilerplate administrative alias to fall back to nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe uses nreg for boilerplate administrative aliases');
+}
+
+function testAuditBestProbeUsesOwnNregWhenAmendmentAliasReferencesDifferentActNumber(): void {
+  const probe = buildBestProbe({
+    rada_nreg: '22-2026-п',
+    title: 'Про внесення змін до постанов Кабінету Міністрів України від 3 листопада 2023 р. № 1150 і від 28 червня 2024 р. № 764 та визнання такими, що втратили чинність, постанов Кабінету Міністрів України від 28 квітня 2023 р. № 417 і від 5 грудня 2023 р. № 1276',
+    aliases: ['скасування постанови №417'],
+    category: 'digital_data',
+    storage_category: null,
+    document_type: 'Постанова КМУ',
+    document_type_slug: 'cmu_resolution',
+    validity_status: 'in_force',
+  });
+  if (probe.probe_kind !== 'nreg' || probe.query !== '22-2026-п') {
+    throw new Error(`Expected amendment alias with foreign numeric stem to fall back to own nreg, got ${JSON.stringify(probe)}`);
+  }
+  console.log('[OK] audit best probe prefers own nreg when amendment alias references another act number');
+}
+
 function testQueryRewritePolicySkipsSimpleFocusedLegalQuery(): void {
   const decision = decideQueryRewritePolicy({
     query: "Яка відповідальність за керування авто в стані алкогольного сп'яніння вперше?",
@@ -1659,6 +1862,22 @@ function testClassifyActKindUsesDocumentTypeSlug(): void {
   console.log('[OK] classifyActKind(document_type_slug) → stable act kind without human document_type');
 }
 
+function testAmendmentSignalsStayGeneric(): void {
+  if (!isAmendmentLikeActTitle('Про внесення змін до постанови Кабінету Міністрів України')) {
+    throw new Error('Expected generic amendment title detector to recognize modification act');
+  }
+  if (isAmendmentLikeActTitle('Про затвердження Правил роздрібної торгівлі нафтопродуктами')) {
+    throw new Error('Expected substantive base act title to stay non-amendment');
+  }
+  if (!queryLooksAmendmentFocused('Які зміни внесено до постанови про правила АЗС?')) {
+    throw new Error('Expected query with explicit change language to be amendment-focused');
+  }
+  if (queryLooksAmendmentFocused('Які правила торгівлі на АЗС зараз діють?')) {
+    throw new Error('Expected substantive compliance query to stay non-amendment-focused');
+  }
+  console.log('[OK] amendment detectors distinguish modifier intent from substantive act queries');
+}
+
 async function testTaxonomyKeywordTopicNotInScore(): Promise<void> {
   // Even if a token matches a keyword/topic in taxonomy, it must NOT add to score.
   // Only alias_match and category_hint may contribute to scoreActCandidate score.
@@ -1671,6 +1890,28 @@ async function testTaxonomyKeywordTopicNotInScore(): Promise<void> {
     );
   }
   console.log('[OK] taxonomy keyword/topic does not drive acceptance-critical score');
+}
+
+async function testTaxonomyPrefersBaseActOverAmendmentOnAliasCollision(): Promise<void> {
+  const baseMeta = await getActMeta('1442-97-п');
+  const amendmentMeta = await getActMeta('280-98-п');
+  if (!baseMeta || !amendmentMeta) {
+    console.log('[SKIP] amendment collision taxonomy test (acts not present in current LLDBI snapshot)');
+    return;
+  }
+  const taxonomy = await getTaxonomyCandidates({ query: 'правила азс' });
+  const baseRank = taxonomy.rada_nreg_candidates.indexOf('1442-97-п');
+  const amendmentRank = taxonomy.rada_nreg_candidates.indexOf('280-98-п');
+  if (baseRank < 0) {
+    throw new Error(`Expected base act 1442-97-п in taxonomy candidates, got ${JSON.stringify(taxonomy.rada_nreg_candidates.slice(0, 10))}`);
+  }
+  if (amendmentRank >= 0 && amendmentRank < baseRank) {
+    throw new Error(`Expected base act to outrank amendment act on substantive alias query, got base=${baseRank} amendment=${amendmentRank}`);
+  }
+  if (taxonomy.grounded_act_nregs.length === 1 && taxonomy.grounded_act_nregs[0] !== '1442-97-п') {
+    throw new Error(`Expected grounded act recovery to prefer base act, got ${JSON.stringify(taxonomy.grounded_act_nregs)}`);
+  }
+  console.log('[OK] taxonomy prefers substantive base act over amendment alias collision');
 }
 
 async function testFindActByTitleFragmentExport(): Promise<void> {
@@ -2301,6 +2542,452 @@ async function testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope(
   console.log('[OK] single-goal finalizer keeps grounded subordinate-act scope without false weak_evidence');
 }
 
+async function testResolveSingleGoalSelectedActsClearsOutOfScopeForExactActScope(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: '1697-18',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '1697-18',
+        r2_key: 'r2://1697/1',
+        json_path: '$.chunks[0]',
+        score: 0.536,
+        ordering_score: 0.514,
+        title: 'Про прокуратуру',
+        article_number: '21',
+      },
+      {
+        rada_nreg: '1697-18',
+        r2_key: 'r2://1697/2',
+        json_path: '$.chunks[1]',
+        score: 0.53,
+        ordering_score: 0.49,
+        title: 'Про прокуратуру',
+        article_number: '44',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 0.91,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'zakon',
+        reasons: ['exact_title_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['1697-18']),
+    actsSearchNregs: ['1697-18'],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 1,
+    aliasHitCount: 0,
+    exactActHitCount: 1,
+    exactActNregs: ['1697-18'],
+    groundedActHitCount: 1,
+    groundedActNregs: ['1697-18'],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.536,
+    avgScore: 0.41,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.52,
+        max_score: 0.54,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.94,
+        max_ordering_score: 0.514,
+      },
+    ],
+    getActMeta: async (rada_nreg) =>
+      rada_nreg === '1697-18'
+        ? {
+            rada_nreg,
+            title: 'Про прокуратуру',
+            category: 'judiciary_justice',
+            document_type: 'Закон',
+            document_type_slug: 'zakon',
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null,
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected exact-act scope to recover from OOD guard, got low_confidence with ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected exact-act scope to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.reasonCodes.includes('OUT_OF_SCOPE')) {
+    throw new Error(`Expected exact-act scope to clear OUT_OF_SCOPE, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.selected_acts_final[0]?.rada_nreg !== '1697-18') {
+    throw new Error(`Expected exact-act scope to keep 1697-18 selected, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  console.log('[OK] single-goal finalizer clears out_of_scope when exact act scope is confirmed');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversExplicitIdentifierFromTailEvidence(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: '27-2026-р',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '43-2026-п',
+        r2_key: 'r2://43/1',
+        json_path: '$.chunks[0]',
+        score: 0.735,
+        ordering_score: 0.623,
+        title: 'Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39',
+        unit_type: 'point',
+        unit_number: '2',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/1',
+        json_path: '$.chunks[1]',
+        score: 0.683,
+        ordering_score: 0.419,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+        unit_number: '20',
+      },
+      {
+        rada_nreg: '27-2026-р',
+        r2_key: 'r2://27/1',
+        json_path: '$.chunks[15]',
+        score: 0.451,
+        ordering_score: 0.294,
+        title: 'Про внесення зміни у додаток до розпорядження Кабінету Міністрів України від 29 квітня 2025 р. № 408',
+        unit_type: 'point',
+        unit_number: '1',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '27-2026-р',
+        title: 'Про внесення зміни у додаток до розпорядження Кабінету Міністрів України від 29 квітня 2025 р. № 408',
+        score: 13.1,
+        category: 'education_science',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['exact_identifier_match', 'exact_alias_match'],
+      },
+      {
+        rada_nreg: '43-2026-п',
+        title: 'Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39',
+        score: 2.1,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['27-2026-р']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 1,
+    aliasHitCount: 1,
+    exactActHitCount: 1,
+    exactActNregs: ['27-2026-р'],
+    groundedActHitCount: 1,
+    groundedActNregs: ['27-2026-р'],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.735,
+    avgScore: 0.61,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '43-2026-п',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.735,
+        max_score: 0.735,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1,
+        max_ordering_score: 0.623,
+      },
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.624,
+        max_score: 0.683,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 1.69,
+        max_ordering_score: 0.419,
+      },
+      {
+        rada_nreg: '27-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.451,
+        max_score: 0.451,
+        best_rank_in_top30: 16,
+        rank_mass_top30: 0.0625,
+        max_ordering_score: 0.294,
+      },
+    ],
+    getActMeta: async (rada_nreg) =>
+      rada_nreg === '27-2026-р'
+        ? {
+            rada_nreg,
+            title: 'Про внесення зміни у додаток до розпорядження Кабінету Міністрів України від 29 квітня 2025 р. № 408',
+            summary: null,
+            aliases: [],
+            category: 'education_science',
+            storage_category: null,
+            document_type: 'Розпорядження КМУ',
+            document_type_slug: 'cmu_order',
+            validity_status: 'in_force',
+          }
+        : null,
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected exact identifier tail evidence to recover same act, got low_confidence with ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected exact identifier tail evidence to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '27-2026-р') {
+    throw new Error(`Expected exact identifier tail evidence to recover 27-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('EXACT_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected EXACT_ACT_SCOPE_CONFIRMED after recovery, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers explicit identifier from same-act tail evidence');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversGroundedDescriptiveSubordinateAct(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'розпорядження про закриття дисциплінарного провадження',
+    goalId: 'goal_0',
+    finalHits: [
+      ...Array.from({ length: 7 }, (_, index) => ({
+        rada_nreg: '1697-18',
+        r2_key: `r2://1697/${index}`,
+        json_path: `$.chunks[${index}]`,
+        score: 0.52 - index * 0.01,
+        ordering_score: 0.53 - index * 0.01,
+        title: 'Про прокуратуру',
+        article_number: String(44 + index),
+      })),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        rada_nreg: '4651-17',
+        r2_key: `r2://4651/${index}`,
+        json_path: `$.chunks[${index}]`,
+        score: 0.51 - index * 0.01,
+        ordering_score: 0.53 - index * 0.01,
+        title: 'Кримінальний процесуальний кодекс України',
+        article_number: String(284 + index),
+      })),
+      ...Array.from({ length: 2 }, (_, index) => ({
+        rada_nreg: '2747-15',
+        r2_key: `r2://2747/${index}`,
+        json_path: `$.chunks[${index}]`,
+        score: 0.52 - index * 0.01,
+        ordering_score: 0.38 - index * 0.01,
+        title: 'Кодекс адміністративного судочинства України',
+        article_number: String(238 + index),
+      })),
+      {
+        rada_nreg: '19-2026-р',
+        r2_key: 'r2://19/1',
+        json_path: '$.chunks[12]',
+        score: 0.6021546,
+        ordering_score: 0.359948024,
+        title: 'Про закриття дисциплінарного провадження',
+        unit_type: 'paragraph',
+        unit_number: '1',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '19-2026-р',
+        title: 'Про закриття дисциплінарного провадження',
+        score: 44.637206405166275,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['exact_alias_match', 'alias_match', 'title_match'],
+      },
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 0,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'zakon',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0,
+        category: 'administrative',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['19-2026-р', '15-2026-р', '18-2026-р']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Розпорядження КМУ'],
+    taxonomyActCount: 3,
+    aliasHitCount: 1,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 1,
+    groundedActNregs: ['19-2026-р'],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.6021546,
+    avgScore: 0.426,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 2,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.4495,
+        max_score: 0.5186,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.49,
+        max_ordering_score: 0.5326,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.4503,
+        max_score: 0.5112,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.73,
+        max_ordering_score: 0.5297,
+      },
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.4615,
+        max_score: 0.5378,
+        best_rank_in_top30: 11,
+        rank_mass_top30: 0.48,
+        max_ordering_score: 0.3856,
+      },
+      {
+        rada_nreg: '19-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.6021546,
+        max_score: 0.6021546,
+        best_rank_in_top30: 13,
+        rank_mass_top30: 0.0769,
+        max_ordering_score: 0.359948024,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '19-2026-р': {
+          title: 'Про закриття дисциплінарного провадження',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '1697-18': {
+          title: 'Про прокуратуру',
+          category: 'judiciary_justice',
+          document_type: 'Закон',
+          document_type_slug: 'zakon',
+          storage_category: null,
+        },
+        '4651-17': {
+          title: 'Кримінальний процесуальний кодекс України',
+          category: 'criminal_procedure',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '2747-15': {
+          title: 'Кодекс адміністративного судочинства України',
+          category: 'administrative',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(act.act_title ?? '', act.document_type ?? null, act.category ?? null, act.document_type_slug ?? null),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected grounded descriptive subordinate-act query to recover confidently, got low_confidence with ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected grounded descriptive subordinate-act query to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '19-2026-р') {
+    throw new Error(`Expected grounded descriptive subordinate-act query to recover 19-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('GROUNDED_ACT_SCOPE_RECOVERED') || !result.reasonCodes.includes('GROUNDED_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected grounded descriptive subordinate-act recovery reason codes, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers grounded descriptive subordinate-act titles from noisy primary-law heads');
+}
+
 function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -2510,6 +3197,74 @@ function testNormalizeFinalReasonCodesDropsRecoveredWeakSignals(): void {
   console.log('[OK] final reason code normalization drops stale low-confidence signals after recovery');
 }
 
+function testCoverageGuardRecoveryRequiresActGrounding(): void {
+  const relaxedWithoutGrounding = canRelaxCoverageGuardWithActGrounding({
+    selectedActsReasonCodes: ['COVERAGE_GUARD_FAILED'],
+    familyReasonCodes: ['FAMILY_DOMINANT_OK'],
+    qrSignaledOod: false,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedSelectedActsCount: 0,
+  });
+  if (relaxedWithoutGrounding) {
+    throw new Error('Expected coverage-guard recovery to stay blocked without act-level grounding');
+  }
+  const relaxedWithGrounding = canRelaxCoverageGuardWithActGrounding({
+    selectedActsReasonCodes: ['COVERAGE_GUARD_FAILED'],
+    familyReasonCodes: ['FAMILY_DOMINANT_OK'],
+    qrSignaledOod: false,
+    exactActHitCount: 0,
+    groundedActHitCount: 1,
+    metadataGroundedSelectedActsCount: 0,
+  });
+  if (!relaxedWithGrounding) {
+    throw new Error('Expected grounded act evidence to allow coverage-guard relaxation');
+  }
+  console.log('[OK] coverage-guard relaxation requires real act grounding');
+}
+
+function testStickySingleGoalLowConfidenceReasonsBlockRecovery(): void {
+  if (!hasStickySingleGoalLowConfidenceReason(['FAMILY_GUARD_NO_EVIDENCE'])) {
+    throw new Error('Expected family-guard no-evidence to remain sticky');
+  }
+  if (hasStickySingleGoalLowConfidenceReason(['FINALIZER_DROPPED_ROUTING_ADD'])) {
+    throw new Error('Did not expect non-confidence forensic code to become sticky');
+  }
+  console.log('[OK] sticky single-goal low-confidence reasons preserve missing-act honesty');
+}
+
+function testProceduralPrimaryWithoutGroundingRequiresActSignals(): void {
+  const shouldFlag = shouldFlagProceduralPrimaryWithoutActGrounding({
+    proceduralOnlyPrimarySelection: true,
+    explicitActScopeCue: true,
+    structuredActIdentifiersCount: 0,
+    documentTypeHintsCount: 1,
+    anchorsCount: 0,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedPrimaryActsCount: 0,
+    leadSelectedMetadataGrounded: false,
+  });
+  if (!shouldFlag) {
+    throw new Error('Expected explicit act-scoped procedural selection without grounding to be low confidence');
+  }
+  const shouldNotFlagGenericProcedure = shouldFlagProceduralPrimaryWithoutActGrounding({
+    proceduralOnlyPrimarySelection: true,
+    explicitActScopeCue: false,
+    structuredActIdentifiersCount: 0,
+    documentTypeHintsCount: 0,
+    anchorsCount: 0,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedPrimaryActsCount: 0,
+    leadSelectedMetadataGrounded: false,
+  });
+  if (shouldNotFlagGenericProcedure) {
+    throw new Error('Expected generic procedural-code query without act-scope signals to remain eligible for grounded success');
+  }
+  console.log('[OK] procedural-primary honesty guard only fires when act-level grounding is expected');
+}
+
 function testProcedureCategoryEnvelopeFallsBackToProcedureFamilies(): void {
   const envelope = getProcedureCategoryEnvelope(['tax_customs']);
   const expected = [
@@ -2540,6 +3295,14 @@ function testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases(): void {
     throw new Error(`Expected phrase-level signal for tax notice, got ${JSON.stringify(signals.phrases)}`);
   }
   console.log('[OK] buildTaxonomyQuerySignals keeps multi-word legal phrases for metadata matching');
+}
+
+function testBuildTaxonomyQuerySignalsKeepsShortDiscriminativePhrases(): void {
+  const signals = buildTaxonomyQuerySignals('Які правила азс діють для роздрібної торгівлі пальним?');
+  if (!signals.phrases.includes('правила азс')) {
+    throw new Error(`Expected short discriminative phrase to survive taxonomy signal build, got ${JSON.stringify(signals.phrases)}`);
+  }
+  console.log('[OK] buildTaxonomyQuerySignals keeps short discriminative legal phrases');
 }
 
 function testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers(): void {
@@ -3685,6 +4448,9 @@ async function main(): Promise<void> {
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
   testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs();
+  testStrongActScopeCueCountDistinguishesSingleAndMixedActScope();
+  testGoalSplitDoesNotCompactMixedActScopeBundle();
+  testGoalSplitCompactsSingleStrongActScopeBundle();
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
   testGoalSplitAddsSpecificTaxAppealSignals();
@@ -3731,6 +4497,15 @@ async function main(): Promise<void> {
   testWithinActExpansionPrefersProceduralAndStructuralQueries();
   testWithinActExpansionCompactsSignalOnlyBundleQueries();
   testWithinActExpansionCompactsProceduralNonStructuralQueries();
+  testWithinActExpansionTreatsNormalizedRetrievalEntitiesAsActAnchors();
+  testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructuralSelectors();
+  testAuditBestProbeUsesNregInsteadOfWeakShortAlias();
+  testAuditBestProbeUsesNregInsteadOfWeakShortCuedNumberAlias();
+  testAuditBestProbeKeepsStrongCodeAlias();
+  testAuditBestProbeRejectsAliasWithoutActIdentityOverlap();
+  testAuditBestProbeUsesNregForAmendmentLikeActAliases();
+  testAuditBestProbeUsesNregForBoilerplateAdministrativeAliases();
+  testAuditBestProbeUsesOwnNregWhenAmendmentAliasReferencesDifferentActNumber();
   testStructuralCitationSelectorsCaptureNoteAndSubpoint();
   testStructuralCitationSelectorsCaptureDottedSubpoint();
   testStructuralCitationSelectorsCapturePluralPartSyntax();
@@ -3771,6 +4546,9 @@ async function main(): Promise<void> {
   testSelectedActsTrimNonPrimaryOnlyTailAndLowerConfidence();
   testCoverageGapTreatsNoPrimaryLawAsWeakEvidence();
   await testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope();
+  await testResolveSingleGoalSelectedActsClearsOutOfScopeForExactActScope();
+  await testResolveSingleGoalSelectedActsRecoversExplicitIdentifierFromTailEvidence();
+  await testResolveSingleGoalSelectedActsRecoversGroundedDescriptiveSubordinateAct();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
@@ -3780,6 +4558,9 @@ async function main(): Promise<void> {
   testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct();
   testDeriveTopScoreFromHitsUsesPostprocessedHits();
   testNormalizeFinalReasonCodesDropsRecoveredWeakSignals();
+  testCoverageGuardRecoveryRequiresActGrounding();
+  testStickySingleGoalLowConfidenceReasonsBlockRecovery();
+  testProceduralPrimaryWithoutGroundingRequiresActSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();

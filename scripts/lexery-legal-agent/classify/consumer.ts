@@ -44,17 +44,19 @@ import {
   legalDomainToTaxonomyKey,
   type DerivedLldbiHintsResult,
 } from './lldbi-hints-from-vocabulary.js';
+import { findActByAlias, findActByTitleFragment } from '../retrieval/act-taxonomy-store.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { isCircuitOpen, recordLlmFailure } from './circuit-breaker.js';
 import { OpenRouterError } from '../lib/openrouter.js';
 import { classifyIntent } from './intent-classifier.js';
 import { tagLegalDomain } from './legal-domain-tagger.js';
 import { extractEntities } from './entity-extractor.js';
+import { alignLlmEntitiesToSurface } from './entity-alignment.js';
 import { detectAmbiguity } from './ambiguity-detector.js';
 import { classifyWithLLM, repairContextMode } from './llm-classifier.js';
 import { normalizeInput } from './input-normalizer.js';
 import { classifyDomainWithAi } from './ai-domain-classifier.js';
-import { shouldUseDocsOnlyFastPath } from '../lib/queryScopeHints.js';
+import { hasExplicitMemoryRecallRequest, shouldUseDocsOnlyFastPath } from '../lib/queryScopeHints.js';
 import type {
   QueryProfile,
   ExtractedEntity,
@@ -161,6 +163,77 @@ function hasStructuralDomainCue(entities: ExtractedEntity[]): boolean {
   );
 }
 
+function countCompactQueryTokens(query: string): number {
+  return query
+    .normalize('NFC')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean).length;
+}
+
+function shouldTryExactActAliasGrounding(query: string, entities: ExtractedEntity[]): boolean {
+  const trimmed = query.normalize('NFC').trim();
+  if (!trimmed) return false;
+  if (hasExplicitMemoryRecallRequest(trimmed)) return false;
+  if (hasStructuralDomainCue(entities)) return false;
+  const tokenCount = countCompactQueryTokens(trimmed);
+  if (tokenCount === 0 || tokenCount > 6) return false;
+  if (trimmed.length > 80) return false;
+  return true;
+}
+
+async function enrichEntitiesWithExactActAlias(
+  query: string,
+  entities: ExtractedEntity[]
+): Promise<{ entities: ExtractedEntity[]; exactActAliasGrounded: boolean }> {
+  if (!shouldTryExactActAliasGrounding(query, entities)) {
+    return { entities, exactActAliasGrounded: false };
+  }
+  try {
+    const matches = await findActByAlias(query);
+    if (matches.length === 1) {
+      return {
+        entities: [...entities, { type: 'law_title', value: query.trim() }],
+        exactActAliasGrounded: true,
+      };
+    }
+    const titleFragmentMatches =
+      query.normalize('NFC').trim().length >= 10 ? await findActByTitleFragment(query) : [];
+    if (titleFragmentMatches.length !== 1) {
+      return { entities, exactActAliasGrounded: false };
+    }
+    return {
+      entities: [...entities, { type: 'law_title', value: query.trim() }],
+      exactActAliasGrounded: true,
+    };
+  } catch {
+    return { entities, exactActAliasGrounded: false };
+  }
+}
+
+function inferDeterministicContextMode(
+  query: string,
+  entities: ExtractedEntity[],
+  hasDirectCitation: boolean
+): RoutingFlags['context_mode'] | undefined {
+  const explicitMemoryRecall = hasExplicitMemoryRecallRequest(query);
+  const hasLawStructuralCue = hasStructuralDomainCue(entities) || hasDirectCitation;
+
+  if (explicitMemoryRecall && hasLawStructuralCue) return 'mixed';
+  if (explicitMemoryRecall) return 'memory';
+  if (shouldUseDocsOnlyFastPath(query)) return undefined;
+  if (hasLawStructuralCue) return 'law';
+  return undefined;
+}
+
+function normalizeContextModeForStructuralLegalCue(
+  query: string,
+  entities: ExtractedEntity[],
+  contextMode: RoutingFlags['context_mode'] | undefined
+): RoutingFlags['context_mode'] | undefined {
+  if (contextMode !== 'memory' || !hasStructuralDomainCue(entities)) return contextMode;
+  return hasExplicitMemoryRecallRequest(query) ? 'mixed' : 'law';
+}
+
 /** Decide gating reason when we call LLM (for meta.llm_used_reason) */
 function gatingReasonForLlm(
   normalizer: { isComplexInput: boolean; routingOverrides: RoutingFlags; isNoise: boolean },
@@ -226,7 +299,8 @@ function mergeAmbiguity(
 }
 
 /** Merge policy: pre_entities (rules) as minimum reliability layer + LLM entities, dedup by type+value. */
-function mergeEntities(pre: ExtractedEntity[], llm: ExtractedEntity[]): ExtractedEntity[] {
+function mergeEntities(query: string, pre: ExtractedEntity[], llm: ExtractedEntity[]): ExtractedEntity[] {
+  const alignedLlm = alignLlmEntitiesToSurface(query, pre, llm);
   const seen = new Set<string>();
   const out: ExtractedEntity[] = [];
   for (const e of pre) {
@@ -235,7 +309,7 @@ function mergeEntities(pre: ExtractedEntity[], llm: ExtractedEntity[]): Extracte
     seen.add(key);
     out.push(e);
   }
-  for (const e of llm) {
+  for (const e of alignedLlm) {
     const key = `${e.type}:${e.value}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -412,12 +486,17 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
 
     // Pre-extract (rule-based) — always run for hybrid
     const tPre = Date.now();
-    const { entities: preEntities, has_direct_citation } = extractEntities(query);
+    let { entities: preEntities, has_direct_citation } = extractEntities(query);
     const preExtractMs = Date.now() - tPre;
 
     // U2-preprocessor: long/noise + heuristics (contract/table/legal_text)
     const normalizer = normalizeInput(query, preEntities);
     const effectiveQuery = normalizer.effectiveQuery;
+    const exactActAliasGrounding = await enrichEntitiesWithExactActAlias(
+      effectiveQuery,
+      preEntities
+    );
+    preEntities = exactActAliasGrounding.entities;
     const routingOverrides = normalizer.routingOverrides;
     const metaExtra =
       normalizer.inputTruncated
@@ -426,8 +505,12 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             original_length: normalizer.originalLength,
             effective_length: normalizer.effectiveLength,
             input_source: inputSource,
+            exact_act_alias_grounded: exactActAliasGrounding.exactActAliasGrounded || undefined,
           }
-        : { input_source: inputSource };
+        : {
+            input_source: inputSource,
+            exact_act_alias_grounded: exactActAliasGrounding.exactActAliasGrounded || undefined,
+          };
 
     const circuitOpen = isCircuitOpen();
     const useRulesOnlyConfig =
@@ -457,14 +540,19 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
 
     // Gating: structural cue from entities only (article_ref, act_abbrev, law_title). No topic wordlists.
     const explicitCue = hasStructuralDomainCue(preEntities);
+    const reliableStructuralCue =
+      explicitCue &&
+      (has_direct_citation || preEntities.some((entity) => entity.type === 'law_title'));
     const skipLlmByGating =
       !useRulesOnlyConfig &&
       config.u2GatingEnabled &&
-      domain !== 'general' &&
       explicitCue &&
-      rulesConfidence.overall >= config.u2GatingConfidenceThreshold &&
       !normalizer.isComplexInput &&
-      !ambiguity.is_ambiguous;
+      !ambiguity.is_ambiguous &&
+      (
+        rulesConfidence.overall >= config.u2GatingConfidenceThreshold ||
+        (reliableStructuralCue && rulesConfidence.intent >= 0.6 && rulesConfidence.ambiguity >= 0.75)
+      );
     const docsOnlyFastPath =
       !useRulesOnlyConfig &&
       config.u2GatingEnabled &&
@@ -483,6 +571,11 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
     let routing_flags: RoutingFlags | undefined;
 
     if (useRulesOnly) {
+      const inferredContextMode = inferDeterministicContextMode(
+        effectiveQuery,
+        preEntities,
+        has_direct_citation
+      );
       if (skipLlmByGating || docsOnlyFastPath) {
         incrementU2GatingLlmSkipped();
         incrementU2GatingReason(docsOnlyFastPath ? 'rules_docs_only_scope' : 'rules_high_confidence');
@@ -512,7 +605,10 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         has_direct_citation,
         ambiguity,
         rulesMs + preExtractMs,
-        { ...routingOverrides },
+        {
+          ...routingOverrides,
+          ...(inferredContextMode ? { context_mode: inferredContextMode } : {}),
+        },
         {
           ...metaExtra,
           gating_decision: gatingDecision,
@@ -583,28 +679,50 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         incrementU2Domain(llmResult.domain);
         const { final: finalAmbiguity, ambiguity_source: ambiguitySource, overrideWarning } = mergeAmbiguity(ambiguity, llmResult.ambiguity);
         if (finalAmbiguity.is_ambiguous) incrementU2Ambiguous();
-        const mergedEntities = mergeEntities(preEntities, llmResult.entities);
+        const mergedEntities = mergeEntities(effectiveQuery, preEntities, llmResult.entities);
         const now = new Date().toISOString();
         routing_flags = { ...routingOverrides, ...llmResult.routing_flags, ambiguous: finalAmbiguity.is_ambiguous };
         if (routing_flags.context_mode === undefined) {
-          const repair = await withTransientU2ClassifierRetry(() =>
-            repairContextMode(
-              {
-                apiKey: config.openRouterApiKey,
-                modelId: config.clfModelId,
-                fallbackModelId: config.clfFallbackModelId || undefined,
-                timeoutSec: config.clfTimeoutSec,
-              },
-              effectiveQuery,
-              { pre_entities: preEntities, has_direct_citation: mergedEntities.some((e) => e.type === 'article_ref' || e.type === 'act_abbrev') }
-            )
+          const inferredContextMode = inferDeterministicContextMode(
+            effectiveQuery,
+            mergedEntities,
+            mergedEntities.some((e) => e.type === 'article_ref' || e.type === 'act_abbrev')
           );
-          if ('context_mode' in repair) {
-            routing_flags = { ...routing_flags, context_mode: repair.context_mode };
+          if (inferredContextMode) {
+            routing_flags = { ...routing_flags, context_mode: inferredContextMode };
           } else {
-            llmResult.meta.warnings = [...(llmResult.meta.warnings || []), repair.reason];
+            const repair = await withTransientU2ClassifierRetry(() =>
+              repairContextMode(
+                {
+                  apiKey: config.openRouterApiKey,
+                  modelId: config.clfModelId,
+                  fallbackModelId: config.clfFallbackModelId || undefined,
+                  timeoutSec: config.clfTimeoutSec,
+                },
+                effectiveQuery,
+                {
+                  pre_entities: preEntities,
+                  has_direct_citation: mergedEntities.some(
+                    (e) => e.type === 'article_ref' || e.type === 'act_abbrev'
+                  ),
+                }
+              )
+            );
+            if ('context_mode' in repair) {
+              routing_flags = { ...routing_flags, context_mode: repair.context_mode };
+            } else {
+              llmResult.meta.warnings = [...(llmResult.meta.warnings || []), repair.reason];
+            }
           }
         }
+        routing_flags = {
+          ...routing_flags,
+          context_mode: normalizeContextModeForStructuralLegalCue(
+            effectiveQuery,
+            mergedEntities,
+            routing_flags.context_mode
+          ),
+        };
         const llmWarnings = [...(llmResult.meta.warnings || [])];
         if (overrideWarning) llmWarnings.push(overrideWarning);
         queryProfile = {
@@ -710,13 +828,21 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
         incrementU2RulesRoutingDerived();
         if (lldbiDerived.document_types_ranked_top3.length > 0) incrementU2RulesDocTypeNonempty();
         if (lldbiDerived.categories_ranked_top3.length > 0) incrementU2RulesCategoryNonempty();
+        const inferredContextMode = inferDeterministicContextMode(
+          effectiveQuery,
+          preEntities,
+          has_direct_citation
+        );
         queryProfile = buildDegradedProfile(
           query,
           preEntities,
           has_direct_citation,
           ambiguity,
           warnings,
-          { ...routingOverrides },
+          {
+            ...routingOverrides,
+            ...(inferredContextMode ? { context_mode: inferredContextMode } : {}),
+          },
           {
             ...metaExtra,
             gating_decision: 'llm_fallback',
@@ -756,6 +882,14 @@ export async function handleU2Event(event: RunEvent): Promise<void> {
             // repair is best-effort; unresolved fallback remains explicit in U3
           }
         }
+        queryProfile.routing_flags = {
+          ...queryProfile.routing_flags,
+          context_mode: normalizeContextModeForStructuralLegalCue(
+            effectiveQuery,
+            preEntities,
+            queryProfile.routing_flags?.context_mode
+          ),
+        };
         if (ambiguity.is_ambiguous) incrementU2Ambiguous();
         incrementU2Intent('question');
         incrementU2Domain('general');

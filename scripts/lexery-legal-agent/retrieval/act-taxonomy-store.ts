@@ -32,6 +32,30 @@ const CATEGORY_HINT_SCORE_BOOST = 0.25;
 const APPROX_REFERENCE_GROUNDING_BOOST = 2.6;
 const APPROX_REFERENCE_MIN_SCORE = 3;
 const APPROX_REFERENCE_MIN_MARGIN = 1;
+const EXACT_TEXT_GROUNDING_MIN_MARGIN = 0.9;
+
+const AMENDMENT_TITLE_PREFIXES = [
+  'про внесення змін',
+  'про внесення зміни',
+  'про внесення змін і доповнень',
+  'про затвердження змін',
+  'про визнання таким, що втратив чинність',
+  'про визнання такими, що втратили чинність',
+];
+
+const AMENDMENT_QUERY_MARKERS = [
+  'змін',
+  'зміни',
+  'зміною',
+  'внести',
+  'внесення',
+  'редакц',
+  'доповн',
+  'скасув',
+  'втратив чинність',
+  'втратили чинність',
+  'нова редакц',
+];
 
 const QUERY_STOPWORDS = new Set([
   'а',
@@ -268,6 +292,67 @@ function tokensSoftMatch(a: string, b: string): boolean {
   return a.startsWith(b.slice(0, 5)) || b.startsWith(a.slice(0, 5));
 }
 
+export function isAmendmentLikeActTitle(title: string | null | undefined): boolean {
+  const key = toKey(title ?? '');
+  if (!key) return false;
+  return AMENDMENT_TITLE_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+export function queryLooksAmendmentFocused(query: string | null | undefined): boolean {
+  const key = toKey(query ?? '');
+  if (!key) return false;
+  return AMENDMENT_QUERY_MARKERS.some((marker) => key.includes(marker));
+}
+
+function scoreExactTextGroundingEntry(entry: ActEntry, signal: string, query: string): number {
+  const signalKey = toKey(signal);
+  if (!signalKey) return Number.NEGATIVE_INFINITY;
+
+  let score = 0;
+  const titleKey = toKey(entry.title);
+  const aliasExact = entry.aliases.some((alias) => toKey(alias) === signalKey);
+  const titleExact = titleKey === signalKey;
+  const candidateTokens = new Set([
+    ...buildReferenceTokens(entry.title),
+    ...entry.aliases.flatMap((alias) => buildReferenceTokens(alias)),
+  ]);
+  const signalTokens = buildReferenceTokens(signal);
+  const tokenMatches = signalTokens.filter((token) => candidateTokens.has(token)).length;
+
+  if (titleExact) score += 2.6;
+  if (aliasExact) score += 2.3;
+  if (titleKey && (titleKey.includes(signalKey) || signalKey.includes(titleKey))) score += 0.45;
+  score += Math.min(1.2, tokenMatches * 0.35);
+  if (entry.validity_status === 'in_force') score += VALIDITY_IN_FORCE_BOOST;
+  if (!queryLooksAmendmentFocused(query) && isAmendmentLikeActTitle(entry.title)) {
+    score -= 1.8;
+  }
+  return score;
+}
+
+function resolveExactTextGroundingAmbiguity(
+  entries: ActEntry[],
+  signal: string,
+  query: string
+): ActEntry | null {
+  let best: { entry: ActEntry; score: number } | null = null;
+  let secondScore = Number.NEGATIVE_INFINITY;
+
+  for (const entry of entries) {
+    const score = scoreExactTextGroundingEntry(entry, signal, query);
+    if (!best || score > best.score) {
+      secondScore = best?.score ?? secondScore;
+      best = { entry, score };
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  if (!best) return null;
+  if (best.score - secondScore < EXACT_TEXT_GROUNDING_MIN_MARGIN) return null;
+  return best.entry;
+}
+
 export function extractActReferenceSignals(query: string): string[] {
   const out = new Set<string>();
   for (const match of query.normalize('NFC').matchAll(ACT_REFERENCE_SIGNAL_REGEX)) {
@@ -294,7 +379,11 @@ function buildPhraseSignals(tokens: string[], maxWords: number): string[] {
   for (let size = 2; size <= Math.min(maxWords, tokens.length); size += 1) {
     for (let index = 0; index <= tokens.length - size; index += 1) {
       const slice = tokens.slice(index, index + size);
-      if (slice.some((token) => token.length < MIN_METADATA_TOKEN_LEN)) continue;
+      if (slice.some((token) => token.length < MIN_TOKEN_LEN)) continue;
+      const longTokenCount = slice.filter((token) => token.length >= MIN_METADATA_TOKEN_LEN).length;
+      const shortTokenCount = slice.length - longTokenCount;
+      if (longTokenCount === 0) continue;
+      if (shortTokenCount > 1) continue;
       out.add(slice.join(' '));
     }
   }
@@ -495,6 +584,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
       document_type_slug,
       validity_status,
     };
+    const titledDocument = document_type && title ? `${document_type} ${title}` : '';
     acts.set(rada_nreg, entry);
     addToMap(byStructuredId, normalizeActIdentifier(rada_nreg), entry);
     const numericStem = extractPrimaryNumericStem(rada_nreg);
@@ -516,7 +606,11 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     for (const titleSignal of metadataSignals(title, { includePhrases: true })) {
       addToMap(byTitle, titleSignal, entry);
     }
+    for (const titleSignal of metadataSignals(titledDocument, { includePhrases: true })) {
+      addToMap(byTitle, titleSignal, entry);
+    }
     if (title) addToMap(byTitleExact, title, entry);
+    if (titledDocument) addToMap(byTitleExact, titledDocument, entry);
     for (const summarySignal of metadataSignals(summary, { includePhrases: false })) {
       addToMap(bySummary, summarySignal, entry);
     }
@@ -717,7 +811,7 @@ export async function getTaxonomyCandidates(
   for (const signal of exactTextSignals) {
     const key = toKey(signal);
     if (!key) continue;
-    const groundedEntries = [
+    let groundedEntries = [
       ...new Map(
         [...(snap.byAliasExact.get(key) ?? []), ...(snap.byTitleExact.get(key) ?? [])].map((entry) => [
           entry.rada_nreg,
@@ -725,6 +819,10 @@ export async function getTaxonomyCandidates(
         ] as const)
       ).values(),
     ];
+    if (groundedEntries.length > 1) {
+      const resolvedEntry = resolveExactTextGroundingAmbiguity(groundedEntries, signal, query);
+      if (resolvedEntry) groundedEntries = [resolvedEntry];
+    }
     if (groundedEntries.length !== 1) continue;
     const [entry] = groundedEntries;
     groundedActHitNregs.add(entry.rada_nreg);
@@ -1009,16 +1107,31 @@ export async function findActByTitleFragment(fragment: string): Promise<string[]
   const key = toKey(fragment);
   if (!key || key.length < 5) return [];
 
-  const matches: string[] = [];
+  const candidates = new Map<string, ActEntry>();
+  for (const entry of snap.byTitleExact.get(key) ?? []) {
+    candidates.set(entry.rada_nreg, entry);
+  }
+  for (const entry of snap.byAliasExact.get(key) ?? []) {
+    candidates.set(entry.rada_nreg, entry);
+  }
   for (const entry of snap.acts.values()) {
     const titleKey = toKey(entry.title);
     if (!titleKey) continue;
     if (titleKey.includes(key) || key.includes(titleKey)) {
-      matches.push(entry.rada_nreg);
+      candidates.set(entry.rada_nreg, entry);
     }
   }
 
-  return [...new Set(matches)].sort((a, b) => a.localeCompare(b));
+  if (candidates.size === 1) {
+    return [...candidates.keys()];
+  }
+
+  const exactTextGrounded = resolveExactTextGroundingAmbiguity([...candidates.values()], fragment, fragment);
+  if (exactTextGrounded) {
+    return [exactTextGrounded.rada_nreg];
+  }
+
+  return [...candidates.keys()].sort((a, b) => a.localeCompare(b));
 }
 
 /** Find act candidates by alias token overlap (structural only). Returns rada_nreg[]. */

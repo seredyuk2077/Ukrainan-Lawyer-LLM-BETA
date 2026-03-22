@@ -22,6 +22,7 @@ import { config as loadEnv } from 'dotenv';
 import { RunRepository } from '../../gateway/storage.js';
 import { getRetrievalTraceHitsForForensics } from '../../retrieval/retrieval-trace-r2.js';
 import { tolerantNormalizeToStrings } from '../../retrieval/tolerant-normalizer.js';
+import { isAmendmentLikeActTitle } from '../../retrieval/act-taxonomy-store.js';
 import { createSupabaseAdminClient } from '../../../legislation/Lexery Legislation DB Infra/src/lib/supabaseAdmin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -122,6 +123,7 @@ type AuditReport = {
   max_rank: number;
   offset: number;
   limit: number;
+  only_nregs?: string[];
   probe_mode: ProbeMode;
   processed_probes: number;
   remaining_probes: number;
@@ -240,11 +242,12 @@ function createAuditReport(input: {
   maxRank: number;
   offset: number;
   limit: number;
+  onlyNregs?: string[];
   probeMode: ProbeMode;
   expectedTotal: number;
   status: 'in_progress' | 'complete';
 }): AuditReport {
-  const { docs, results, maxRank, offset, limit, probeMode, expectedTotal, status } = input;
+  const { docs, results, maxRank, offset, limit, onlyNregs, probeMode, expectedTotal, status } = input;
   const passCount = results.filter((result) => result.pass).length;
   const failCount = results.length - passCount;
   const latencies = [...results.map((result) => result.latency_ms)].sort((left, right) => left - right);
@@ -278,6 +281,7 @@ function createAuditReport(input: {
     max_rank: maxRank,
     offset,
     limit,
+    only_nregs: onlyNregs?.length ? [...onlyNregs] : undefined,
     probe_mode: probeMode,
     processed_probes: results.length,
     remaining_probes: Math.max(0, expectedTotal - results.length),
@@ -440,13 +444,167 @@ function tokenizeTitle(title: string): string[] {
     .filter((token) => token.length >= 3);
 }
 
-function pickBestAlias(title: string, aliases: unknown): string | null {
-  const normalizedTitle = normalizeKey(title);
+function looksLikeStructuredActReferenceToken(token: string): boolean {
+  const normalized = token.normalize('NFC').trim();
+  if (!normalized || normalized.length < 3) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return false;
+  if (/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/u.test(normalized)) return false;
+  if (/^[\p{L}]\d{3,8}-\d{2,4}$/iu.test(normalized)) return true;
+  if (/^\d{2,7}\/\d{2,8}$/u.test(normalized)) return true;
+  if (/^\d{2,7}-\d{2,8}-[\p{L}]{1,4}$/iu.test(normalized)) return true;
+  const twoSegmentMatch = normalized.match(/^(\d{3,7})-(\d{2,4})$/u);
+  if (!twoSegmentMatch) return false;
+  const left = Number(twoSegmentMatch[1]);
+  const right = Number(twoSegmentMatch[2]);
+  if (
+    twoSegmentMatch[1].length === 4 &&
+    Number.isFinite(left) &&
+    left >= 1900 &&
+    left <= 2100 &&
+    Number.isFinite(right) &&
+    right >= 1 &&
+    right <= 12
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function titleSupportsCompactAcronym(title: string): boolean {
+  return /(кодекс|конституц|конвенц)/iu.test(title.normalize('NFC'));
+}
+
+const GENERIC_ACT_ALIAS_TOKENS = new Set([
+  'акт',
+  'закон',
+  'кодекс',
+  'конституція',
+  'конвенція',
+  'постанова',
+  'розпорядження',
+  'наказ',
+  'рішення',
+  'правила',
+  'порядок',
+  'інструкція',
+  'положення',
+  'регламент',
+  'указ',
+  'кму',
+  'вру',
+  'мінукра',
+  'моз',
+  'мінфіну',
+  'мінфін',
+]);
+
+const GENERIC_ACT_ACTION_TOKENS = new Set([
+  'внесення',
+  'внесенні',
+  'зміни',
+  'змін',
+  'визнання',
+  'таким',
+  'такими',
+  'втрата',
+  'втрати',
+  'втрату',
+  'втратило',
+  'втратили',
+  'чинність',
+  'чинності',
+  'чинним',
+  'чинними',
+  'скасування',
+  'скасувати',
+  'скасовано',
+  'припинення',
+  'припинити',
+  'припинено',
+  'призначення',
+  'призначити',
+  'призначено',
+  'звільнення',
+  'звільнити',
+  'звільнено',
+  'схвалення',
+  'схвалити',
+  'затвердження',
+  'затвердити',
+  'утворення',
+  'утворити',
+  'ліквідації',
+  'ліквідація',
+  'реорганізації',
+  'реорганізація',
+]);
+
+function softTokenOverlap(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.length < 5 || right.length < 5) return false;
+  return left.startsWith(right.slice(0, 5)) || right.startsWith(left.slice(0, 5));
+}
+
+function informativeAliasTokens(value: string): string[] {
+  return tokenizeTitle(value).filter((token) => !GENERIC_ACT_ALIAS_TOKENS.has(token));
+}
+
+function durableAliasTokens(value: string): string[] {
+  return informativeAliasTokens(value).filter((token) => !GENERIC_ACT_ACTION_TOKENS.has(token));
+}
+
+function aliasOverlapsActIdentity(doc: DocRow, alias: string): boolean {
+  const aliasTokens = informativeAliasTokens(alias);
+  if (aliasTokens.length === 0) return false;
+  const titleTokens = informativeAliasTokens(doc.title);
+  return aliasTokens.some((aliasToken) =>
+    titleTokens.some((titleToken) => softTokenOverlap(aliasToken, titleToken))
+  );
+}
+
+function isWeakAuditAlias(doc: DocRow, alias: string): boolean {
+  const normalizedAlias = normalizeKey(alias);
+  if (!normalizedAlias) return true;
+  if (normalizedAlias === normalizeKey(doc.title)) return true;
+  if (normalizedAlias === normalizeKey(doc.rada_nreg)) return true;
+  if (looksLikeStructuredActReferenceToken(alias)) return true;
+
+  const compactLettersOnly = /^[\p{L}]{1,6}$/u.test(alias.normalize('NFC').trim());
+  if (compactLettersOnly && alias.trim().length <= 2) return true;
+  if (compactLettersOnly && alias.trim().length <= 4 && !titleSupportsCompactAcronym(doc.title)) return true;
+
+  const cue = normalizeActReferenceCue(alias);
+  const numericStem = extractLeadingNumericStem(alias);
+  if (cue && numericStem && numericStem.length < 3) return true;
+  if (!compactLettersOnly && !numericStem && !aliasOverlapsActIdentity(doc, alias)) return true;
+
+  return false;
+}
+
+function aliasHasDurableIdentity(doc: DocRow, alias: string): boolean {
+  const distinctAliasTokens = durableAliasTokens(alias);
+  if (distinctAliasTokens.length < 2) return false;
+  const distinctTitleTokens = durableAliasTokens(doc.title);
+  return distinctAliasTokens.some((aliasToken) =>
+    distinctTitleTokens.some((titleToken) => softTokenOverlap(aliasToken, titleToken))
+  );
+}
+
+function aliasNumericStemMatchesOwnAct(doc: DocRow, alias: string): boolean {
+  const aliasStem = extractLeadingNumericStem(alias);
+  const ownStem = extractLeadingNumericStem(doc.rada_nreg);
+  if (!aliasStem || !ownStem) return true;
+  return aliasStem === ownStem;
+}
+
+export function pickBestAlias(doc: DocRow, aliases: unknown): string | null {
+  const normalizedTitle = normalizeKey(doc.title);
   const candidates = tolerantNormalizeToStrings(aliases)
     .map((alias) => alias.trim())
     .filter(Boolean)
     .filter((alias) => normalizeKey(alias) !== normalizedTitle);
-  const ranked = candidates.sort((left, right) => {
+  const usable = candidates.filter((alias) => !isWeakAuditAlias(doc, alias));
+  const ranked = usable.sort((left, right) => {
     const leftWords = left.split(/\s+/).length;
     const rightWords = right.split(/\s+/).length;
     const leftAbbrev = /^[\p{Lu}\d./-]{2,20}$/u.test(left) ? 1 : 0;
@@ -501,9 +659,42 @@ function dedupeProbes(probes: ProbeRow[]): ProbeRow[] {
   return deduped;
 }
 
-function buildBestProbe(doc: DocRow): ProbeRow {
-  const alias = pickBestAlias(doc.title, doc.aliases);
-  if (alias) {
+export function buildBestProbe(doc: DocRow): ProbeRow {
+  const alias = pickBestAlias(doc, doc.aliases);
+  const nregProbeAvailable = canUseNregProbe(doc.rada_nreg);
+  const amendmentLikeAct = isAmendmentLikeActTitle(doc.title);
+  const compactCodeAlias =
+    alias != null &&
+    /^[\p{L}]{3,8}$/u.test(alias.normalize('NFC').trim()) &&
+    titleSupportsCompactAcronym(doc.title);
+  const strongAlias =
+    alias != null &&
+    (
+      compactCodeAlias ||
+      aliasHasDurableIdentity(doc, alias) ||
+      (extractLeadingNumericStem(alias)?.length ?? 0) >= 3
+    );
+  if (
+    amendmentLikeAct &&
+    nregProbeAvailable &&
+    alias != null &&
+    (
+      !compactCodeAlias &&
+      (extractLeadingNumericStem(alias)?.length ?? 0) < 3 ||
+      !aliasNumericStemMatchesOwnAct(doc, alias)
+    )
+  ) {
+    return {
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'nreg',
+      query: doc.rada_nreg,
+    };
+  }
+  if (alias && (strongAlias || !nregProbeAvailable)) {
     return {
       rada_nreg: doc.rada_nreg,
       title: doc.title,
@@ -512,6 +703,29 @@ function buildBestProbe(doc: DocRow): ProbeRow {
       validity_status: doc.validity_status,
       probe_kind: 'alias',
       query: alias,
+    };
+  }
+  if (nregProbeAvailable) {
+    return {
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'nreg',
+      query: doc.rada_nreg,
+    };
+  }
+  const anchoredTitle = buildAnchoredTitle(doc);
+  if (anchoredTitle) {
+    return {
+      rada_nreg: doc.rada_nreg,
+      title: doc.title,
+      category: doc.category,
+      document_type: doc.document_type,
+      validity_status: doc.validity_status,
+      probe_kind: 'anchored_title',
+      query: anchoredTitle,
     };
   }
   return {
@@ -541,7 +755,7 @@ function buildProbes(doc: DocRow, probeMode: ProbeMode): ProbeRow[] {
     });
   }
 
-  const alias = pickBestAlias(doc.title, doc.aliases);
+  const alias = pickBestAlias(doc, doc.aliases);
   if (alias) {
     probes.push({
       rada_nreg: doc.rada_nreg,
@@ -627,11 +841,31 @@ async function fetchIndexedDocs(limit: number, offset: number): Promise<DocRow[]
   return rows;
 }
 
+async function fetchIndexedDocsByNregs(radaNregs: string[]): Promise<DocRow[]> {
+  const normalized = [...new Set(radaNregs.map((value) => value.trim()).filter(Boolean))];
+  if (normalized.length === 0) return [];
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from('legislation_documents')
+    .select(
+      'rada_nreg,title,aliases,category,storage_category,document_type,document_type_slug,validity_status'
+    )
+    .eq('qdrant_status', 'indexed')
+    .in('rada_nreg', normalized);
+  if (error) throw new Error(`Failed to fetch legislation_documents by nregs: ${error.message}`);
+  const byNreg = new Map(((data ?? []) as DocRow[]).map((row) => [row.rada_nreg, row] as const));
+  return normalized.map((radaNreg) => byNreg.get(radaNreg)).filter((row): row is DocRow => row != null);
+}
+
 async function main(): Promise<void> {
   const limit = parseInt(getArgValue('--limit') ?? '60', 10);
   const offset = parseInt(getArgValue('--offset') ?? '0', 10);
   const maxRank = parseInt(getArgValue('--max-rank') ?? '12', 10);
   const probeMode = (getArgValue('--probe-mode') ?? 'best') as ProbeMode;
+  const onlyNregs = (getArgValue('--only-nregs') ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
   const resume = process.argv.includes('--resume');
   if (!['best', 'generalized'].includes(probeMode)) {
     throw new Error(`Unsupported --probe-mode=${probeMode}; expected best|generalized`);
@@ -641,7 +875,11 @@ async function main(): Promise<void> {
     getArgValue('--report-path') ?? 'scripts/lexery-legal-agent/tools/_reports/lldbi_act_coverage_audit.json'
   );
 
-  const docs = await fetchIndexedDocs(limit, offset);
+  const onlyNregSet = new Set(onlyNregs);
+  const docs =
+    onlyNregSet.size > 0
+      ? await fetchIndexedDocsByNregs([...onlyNregSet])
+      : await fetchIndexedDocs(limit, offset);
   const probes = docs.flatMap((doc) => buildProbes(doc, probeMode));
   const probeKeySet = new Set(probes.map((probe) => buildProbeKey(probe)));
   const completedProbeKeys = new Set<string>();
@@ -652,10 +890,11 @@ async function main(): Promise<void> {
       existing.offset !== offset ||
       existing.limit !== limit ||
       existing.max_rank !== maxRank ||
-      existing.probe_mode !== probeMode
+      existing.probe_mode !== probeMode ||
+      JSON.stringify((existing.only_nregs ?? []).slice().sort()) !== JSON.stringify([...onlyNregSet].sort())
     ) {
       throw new Error(
-        `Resume report mismatch for ${reportPath}: expected offset=${offset} limit=${limit} max_rank=${maxRank} probe_mode=${probeMode}`
+        `Resume report mismatch for ${reportPath}: expected offset=${offset} limit=${limit} max_rank=${maxRank} probe_mode=${probeMode} only_nregs=${[...onlyNregSet].sort().join(',')}`
       );
     }
     for (const result of existing.results ?? []) {
@@ -760,6 +999,7 @@ async function main(): Promise<void> {
           maxRank,
           offset,
           limit,
+          onlyNregs,
           probeMode,
           expectedTotal: probes.length,
           status: 'in_progress',
@@ -785,6 +1025,7 @@ async function main(): Promise<void> {
     maxRank,
     offset,
     limit,
+    onlyNregs,
     probeMode,
     expectedTotal: probes.length,
     status: 'complete',
@@ -819,7 +1060,13 @@ async function main(): Promise<void> {
   if (report.fail > 0) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error('[audit_lldbi_act_coverage] fatal:', error);
-  process.exit(1);
-});
+const isMainModule =
+  process.argv[1] != null &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error('[audit_lldbi_act_coverage] fatal:', error);
+    process.exit(1);
+  });
+}
