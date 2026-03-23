@@ -6,6 +6,7 @@ import { getRetrievalGateThresholds } from './verify_retrieval_real_dev.js';
 import { checkActFamilyHit } from './verify_retrieval_real_dev.js';
 import { isRetrievalTraceReadyForScoring } from './verify_retrieval_real_dev.js';
 import { evaluateArticleExpectations } from './verify_retrieval_real_dev.js';
+import { buildFastResultsCaseProjection } from './verify_retrieval_real_dev.js';
 
 function assert(condition: boolean, msg: string): void {
   if (!condition) throw new Error(`ASSERT FAIL: ${msg}`);
@@ -153,6 +154,49 @@ function testArticleExpectationOverlayNoopWithoutExpectation(): void {
   console.log('[OK] article strict overlay stays noop when expectation is absent');
 }
 
+function testFastResultsProjectionIncludesMetricsAndCoverageGap(): void {
+  const projected = buildFastResultsCaseProjection({
+    index: 7,
+    query: 'Кримінальна відповідальність за шахрайство і хто розслідує',
+    result: {
+      status: 'PASS',
+      latencyMs: 8123,
+      qdrantCalls: 7,
+      plannerTier: 0,
+      actListSize: 2,
+      routingHintsUsed: false,
+      articleExpectationApplied: true,
+      articleTraceReady: true,
+      articleTraceSource: 'r2',
+      articleStrictPass: true,
+      articlePrimaryRank: 2,
+      articleExpectedHitRanks: { '2341-14:190': 2 },
+      articleStrictReasons: [],
+      retrievalTrace: {
+        meta: {
+          low_confidence: true,
+          coverage_gap: 'weak_evidence',
+          reason_codes: ['LOW_EVIDENCE'],
+          selected_acts: [{ rada_nreg: '2341-14', act_title: 'Кримінальний кодекс України' }],
+          family_evidence_summary: { dominant_family_key: 'criminal' },
+          routing_hints: {
+            called: false,
+            not_used_reason_codes: ['NOT_CALLED'],
+            routing_path: 'NONE',
+          },
+        },
+      } as never,
+    },
+  });
+  assert(projected.latency_ms === 8123, 'projection must keep latency_ms');
+  assert(projected.qdrant_calls_count_total === 7, 'projection must keep qdrant call count');
+  assert(projected.coverage_gap === 'weak_evidence', 'projection must keep coverage_gap');
+  assert(projected.low_confidence === true, 'projection must keep low_confidence');
+  assert(projected.selected_act_count === 1, 'projection must expose selected_act_count');
+  assert(projected.dominant_family_key === 'criminal', 'projection must keep dominant family');
+  console.log('[OK] fast results projection includes per-case metrics and coverage gap');
+}
+
 function main(): void {
   console.log('verify_retrieval_real_dev gate unit tests\n');
   testSmokeRunRequiresZeroStableFails();
@@ -166,6 +210,7 @@ function main(): void {
   testRetrievalTraceReadyWithoutTerminalInRetrievalOnlyMode();
   testArticleExpectationOverlayReportsRankMiss();
   testArticleExpectationOverlayNoopWithoutExpectation();
+  testFastResultsProjectionIncludesMetricsAndCoverageGap();
   console.log('\nAll verify_retrieval_real_dev gate unit tests passed.');
 }
 

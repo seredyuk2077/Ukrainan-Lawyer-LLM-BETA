@@ -137,6 +137,7 @@ interface RunResult {
         category?: string | null;
         document_type?: string | null;
       }>;
+      coverage_gap?: string;
       goals_summary?: Array<{ goal_id: string }>;
       qdrant_calls_count_total?: number;
       hits_cap_applied?: boolean;
@@ -182,6 +183,84 @@ type HydratedArticleTraceResult = {
   ready: boolean;
   source: 'db' | 'r2' | 'fallback';
 };
+
+export type FastResultsCaseProjection = {
+  index: number;
+  query: string;
+  status: 'PASS' | 'FAIL_STABLE' | 'FAIL_FLAKY';
+  selected_acts: Array<{ rada_nreg?: string; act_title?: string }>;
+  selected_act_count: number;
+  reason_codes: string[];
+  routing_not_used_reason_codes: string[];
+  routing_path?: string;
+  routing_called?: boolean;
+  routing_used: boolean;
+  dominant_family_key?: string;
+  low_confidence: boolean;
+  coverage_gap?: string;
+  latency_ms: number | null;
+  qdrant_calls_count_total: number | null;
+  planner_tier: number | null;
+  act_list_size: number | null;
+  article_expectation_applied: boolean;
+  article_trace_ready: boolean;
+  article_trace_source?: 'db' | 'r2' | 'fallback';
+  article_strict_pass?: boolean;
+  article_primary_rank?: number;
+  article_expected_hit_ranks: Record<string, number | null>;
+  article_fail_reasons: string[];
+};
+
+export function buildFastResultsCaseProjection(input: {
+  index: number;
+  query: string;
+  result?: {
+    status?: 'PASS' | 'FAIL_STABLE' | 'FAIL_FLAKY';
+    retrievalTrace?: RunResult['retrievalTrace'];
+    routingHintsUsed?: boolean;
+    articleExpectationApplied?: boolean;
+    articleTraceReady?: boolean;
+    articleTraceSource?: 'db' | 'r2' | 'fallback';
+    articleStrictPass?: boolean;
+    articlePrimaryRank?: number;
+    articleExpectedHitRanks?: Record<string, number | null>;
+    articleStrictReasons?: string[];
+    latencyMs?: number;
+    qdrantCalls?: number;
+    plannerTier?: number;
+    actListSize?: number;
+  };
+}): FastResultsCaseProjection {
+  const result = input.result;
+  const rt = result?.retrievalTrace;
+  const meta = rt?.meta;
+  return {
+    index: input.index,
+    query: input.query.slice(0, 120),
+    status: result?.status ?? 'PASS',
+    selected_acts: meta?.selected_acts?.map((a) => ({ rada_nreg: a.rada_nreg, act_title: a.act_title })) ?? [],
+    selected_act_count: meta?.selected_acts?.length ?? 0,
+    reason_codes: meta?.reason_codes ?? meta?.selected_acts_decision?.reason_codes ?? [],
+    routing_not_used_reason_codes: meta?.routing_hints?.not_used_reason_codes ?? [],
+    routing_path: meta?.routing_hints?.routing_path,
+    routing_called: meta?.routing_hints?.called,
+    routing_used: result?.routingHintsUsed ?? false,
+    dominant_family_key: meta?.family_evidence_summary?.dominant_family_key,
+    low_confidence: meta?.low_confidence === true,
+    coverage_gap: meta?.coverage_gap,
+    latency_ms: result?.latencyMs ?? null,
+    qdrant_calls_count_total: result?.qdrantCalls ?? null,
+    planner_tier: result?.plannerTier ?? null,
+    act_list_size: result?.actListSize ?? null,
+    article_expectation_applied: result?.articleExpectationApplied ?? false,
+    article_trace_ready: result?.articleTraceReady ?? true,
+    article_trace_source: result?.articleTraceSource,
+    article_strict_pass: result?.articleStrictPass,
+    article_primary_rank: result?.articlePrimaryRank,
+    article_expected_hit_ranks: result?.articleExpectedHitRanks ?? {},
+    article_fail_reasons: result?.articleStrictReasons ?? [],
+  };
+}
 
 type RunGetPayload = {
   status?: string;
@@ -1096,30 +1175,13 @@ async function main(): Promise<void> {
         fail_stable_count: failStableCount,
         fail_flaky_count: failFlakyCount,
         flaky_check_enabled: FLAKY_CHECK_ENABLED,
-        cases: devToRun.map(({ index: i, row }, idx) => {
-          const r = results[idx];
-          const rt = r?.retrievalTrace;
-          const meta = rt?.meta;
-          return {
+        cases: devToRun.map(({ index: i, row }, idx) =>
+          buildFastResultsCaseProjection({
             index: i,
-            query: row.query.slice(0, 120),
-            status: r?.status ?? 'PASS',
-            selected_acts: meta?.selected_acts?.map((a) => ({ rada_nreg: a.rada_nreg, act_title: a.act_title })) ?? [],
-            reason_codes: meta?.reason_codes ?? meta?.selected_acts_decision?.reason_codes ?? [],
-            routing_not_used_reason_codes: meta?.routing_hints?.not_used_reason_codes ?? [],
-            routing_path: meta?.routing_hints?.routing_path,
-            routing_called: meta?.routing_hints?.called,
-            routing_used: (meta?.selected_acts_sources_breakdown?.from_routing_hints?.length ?? 0) > 0,
-            dominant_family_key: meta?.family_evidence_summary?.dominant_family_key,
-            article_expectation_applied: r?.articleExpectationApplied ?? false,
-            article_trace_ready: r?.articleTraceReady ?? true,
-            article_trace_source: r?.articleTraceSource,
-            article_strict_pass: r?.articleStrictPass,
-            article_primary_rank: r?.articlePrimaryRank,
-            article_expected_hit_ranks: r?.articleExpectedHitRanks ?? {},
-            article_fail_reasons: r?.articleStrictReasons ?? [],
-          };
-        }),
+            query: row.query,
+            result: results[idx],
+          })
+        ),
       };
       writeFileSync(resolve(reportsDir, 'retrieval_real_dev_fast_results.json'), JSON.stringify(fastResults, null, 2), 'utf8');
       console.log('[verify_retrieval_real_dev] wrote _reports/retrieval_real_dev_fast_results.json');
