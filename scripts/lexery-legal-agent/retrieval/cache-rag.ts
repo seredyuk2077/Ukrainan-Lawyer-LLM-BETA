@@ -67,15 +67,20 @@ import {
 import {
   buildWithinActPool,
   extractActSearchNregsFromHits,
-  extractChunkEvidenceNregsFromHits,
+  summarizeChunkEvidenceActs,
 } from './within-act-pool.js';
 import { decideWithinActExpansion } from './within-act-expansion-policy.js';
 import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
 import { deriveCoverageGap } from './coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
+import { buildSingleGoalDegradedTrace } from './single-goal-degraded-trace.js';
 import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
 import { buildGoalSupportByActFromGoalsSummary, serializeGoalSupportMap } from './goal-support.js';
+import {
+  hasStrongGoalSupportedMultiPrimaryCoverage,
+  shouldSkipMultiGoalVariantSearch,
+} from './multi-goal-confidence.js';
 import {
   buildSingleGoalFirstPassPlan,
   runSingleGoalFirstPassSearch,
@@ -372,10 +377,6 @@ const SELECTED_ACTS_CAP_HIGH = 3;
 const SELECTED_ACTS_CAP_LOW = 7;
 /** Max selected_acts / act_candidates_top length (harness invariant ≤9). */
 const SELECTED_ACTS_MAX = 9;
-/** Chunks per act in within-act retrieval (so relevant article can appear within each act). */
-const TWO_STAGE_CHUNKS_PER_ACT = 35;
-/** Multi-goal retrieval gets a slightly wider per-act chunk budget because each goal is narrower. */
-const TWO_STAGE_CHUNKS_PER_ACT_MULTI_GOAL = 50;
 
 function effectiveQuery(query: string): string {
   const t = query.trim();
@@ -481,6 +482,7 @@ async function runOneGoal(
   hits: RawHit[];
   actNregsForSummary: string[];
   usedFilteredChunks: boolean;
+  withinActPolicyReasonCodes: string[];
   stepsLatencyMs: number[];
   collectionsUsed: string[];
   taxonomyResult: TaxonomyCandidatesResult;
@@ -542,9 +544,27 @@ async function runOneGoal(
     vector = emb.embedding;
     stepsLatencyMs.push(Date.now() - embedStart);
   } catch {
-    return { hits: [], actNregsForSummary: [], usedFilteredChunks: false, stepsLatencyMs, collectionsUsed, taxonomyResult };
+    return {
+      hits: [],
+      actNregsForSummary: [],
+      usedFilteredChunks: false,
+      withinActPolicyReasonCodes: [],
+      stepsLatencyMs,
+      collectionsUsed,
+      taxonomyResult,
+    };
   }
-  if (!vector?.length) return { hits: [], actNregsForSummary: [], usedFilteredChunks: false, stepsLatencyMs, collectionsUsed, taxonomyResult };
+  if (!vector?.length) {
+    return {
+      hits: [],
+      actNregsForSummary: [],
+      usedFilteredChunks: false,
+      withinActPolicyReasonCodes: [],
+      stepsLatencyMs,
+      collectionsUsed,
+      taxonomyResult,
+    };
+  }
 
   let domainBootstrap: DomainBootstrapResult | undefined;
   let bootstrapActNregs: string[] = [];
@@ -650,32 +670,61 @@ async function runOneGoal(
     (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 ||
     bootstrapActNregs.length > 0 ||
     stepsToRun.some((s) => s.kind === 'lldbi_acts');
-  let usedFilteredChunks = false;
-  const actNregsForSummary: string[] = [];
-
+  const querySelectors = extractQueryCitationSelectors(goal.subquery);
+  const needTwoStage =
+    hits.length < MIN_HITS_FOR_TWO_STAGE ||
+    (topScore != null && topScore < GOOD_SCORE_THRESHOLD);
+  const chunkEvidenceSummary = summarizeChunkEvidenceActs(candidateHits);
   const taxonomyCandidatesNregs = taxonomyResult.rada_nreg_candidates ?? [];
   const actNregsFromStep = extractActSearchNregsFromHits(rawPerStep);
+  const leadingActNreg =
+    (taxonomyResult.grounded_act_nregs ?? [])[0] ??
+    taxonomyCandidatesNregs[0] ??
+    bootstrapActNregs[0] ??
+    actNregsFromStep[0] ??
+    chunkEvidenceSummary.top_nreg ??
+    null;
+  const withinActDecision = decideWithinActExpansion({
+    hasActCandidates,
+    needTwoStage,
+    querySelectors,
+    entities: entities ?? [],
+    explicitActScopeCue: hasExplicitActScopeCue(goal.subquery),
+    goalType: goal.goal_type,
+    mustHaveSignalsCount: goal.must_have_signals?.length ?? 0,
+    groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
+    queryTokenCount: effective.normalize('NFC').split(/[^\p{L}\p{N}]+/u).filter(Boolean).length,
+    chunkEvidenceActCount: chunkEvidenceSummary.act_count,
+    topChunkEvidenceHitCount: chunkEvidenceSummary.top_hit_count,
+    topChunkEvidenceMatchesLeadingAct:
+      Boolean(leadingActNreg) && chunkEvidenceSummary.top_nreg === leadingActNreg,
+    weakLimit: TWO_STAGE_ACTS_TOP,
+  });
+  const withinActLimit = withinActDecision.limit;
+  let usedFilteredChunks = false;
+  const actNregsForSummary: string[] = [];
   const topNregs = buildWithinActPool({
     groundedNregs: taxonomyResult.grounded_act_nregs ?? [],
     taxonomyNregs: taxonomyCandidatesNregs,
     actSearchNregs: actNregsFromStep,
     bootstrapActNregs,
-    chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
+    chunkEvidenceNregs: chunkEvidenceSummary.ordered_nregs,
     categoryHintCount: lldbiHints?.categoryHints.length ?? 0,
     preferChunkEvidence: topScore != null && topScore >= GOOD_SCORE_THRESHOLD,
     explicitActScopeCue: hasExplicitActScopeCue(goal.subquery),
-    limit: TWO_STAGE_ACTS_TOP,
+    limit: withinActLimit,
   });
 
-  if (hasActCandidates && topNregs.length > 0) {
+  if (hasActCandidates && withinActLimit > 0 && topNregs.length > 0) {
     try {
       actNregsForSummary.push(...topNregs);
       const chunkStart = Date.now();
+      const filteredChunksLimit = withinActDecision.chunks_per_act_limit;
       const filteredHits = await fetchFilteredChunkHitsByActs({
         radaNregs: topNregs,
         vector,
         collection: collections.chunks,
-        limit: TWO_STAGE_CHUNKS_PER_ACT_MULTI_GOAL,
+        limit: filteredChunksLimit,
         timeoutMs: config.qdrantTimeoutSec * 1000,
         callCounter,
         goalId: goal.id,
@@ -697,7 +746,16 @@ async function runOneGoal(
   if (hits.length > 0 && taxonomyResult.debug.source === 'supabase') {
     applyHybridOrdering(hits, effective, taxonomyResult, entities);
   }
-  return { hits, actNregsForSummary, usedFilteredChunks, stepsLatencyMs, collectionsUsed, taxonomyResult, domainBootstrap };
+  return {
+    hits,
+    actNregsForSummary,
+    usedFilteredChunks,
+    withinActPolicyReasonCodes: withinActDecision.reason_codes,
+    stepsLatencyMs,
+    collectionsUsed,
+    taxonomyResult,
+    domainBootstrap,
+  };
 }
 
 const RUN_CONTEXT_TTL_SEC = 3600;
@@ -1065,6 +1123,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       act_pool_size?: number;
     }> = [];
     const multiReasonCodes: string[] = [...goalSplit.reason_codes];
+    const multiWithinActPolicyReasonCodes: string[] = [];
     const allCollectionsUsed: string[] = [];
     let totalLatencyMulti = 0;
     let domainBootstrapAgg: DomainBootstrapResult | undefined;
@@ -1091,6 +1150,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       const one = settledGoal.value;
       for (const h of one.hits) multiHits.push(h);
       allCollectionsUsed.push(...one.collectionsUsed);
+      multiWithinActPolicyReasonCodes.push(...one.withinActPolicyReasonCodes);
       totalLatencyMulti += one.stepsLatencyMs.reduce((a, b) => a + b, 0);
       if (one.domainBootstrap?.attempted && !domainBootstrapAgg) domainBootstrapAgg = one.domainBootstrap;
       else if (one.domainBootstrap?.used) domainBootstrapAgg = one.domainBootstrap;
@@ -1109,13 +1169,45 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         top_score: one.hits.length > 0 ? Math.max(...one.hits.map((h) => h.score)) : null,
         split_source: goalSplitV2 ? 'TAXONOMY_CLUSTER_SPLIT_V2' : undefined,
         act_pool_size: poolSize,
+        required_categories: goal.required_categories,
       });
     }
     // QR variants for multi-goal: additional chunk searches for substantive acts missed by per-goal
     // subquery embeddings. E.g. procedural query → КПК dominates; variant "ст.121 КК тяжке тілесне
     // ушкодження" surfaces ккУ chunks that goal.subquery embedding misses.
     const goalSupportByAct = buildGoalSupportByActFromGoalsSummary(goalsSummary);
-    if (queryRewriteMeta.called && queryRewriteMeta.used && queryRewriteMeta.variants?.length && qdrantCallCounter.count < 20) {
+    const supportedActsForVariantGate = await Promise.all(
+      [...goalSupportByAct.entries()]
+        .filter(([, goalIds]) => goalIds.size > 0)
+        .map(async ([rada_nreg]) => {
+          const meta = await getActMeta(rada_nreg);
+          return {
+            rada_nreg,
+            act_kind: classifyActKind(
+              meta?.document_type ?? undefined,
+              meta?.category ?? undefined,
+              meta?.title ?? undefined,
+              meta?.document_type_slug ?? undefined
+            ),
+            category: meta?.category ?? undefined,
+          };
+        })
+    );
+    const skipMultiGoalVariantSearch = shouldSkipMultiGoalVariantSearch({
+      goalsSummary,
+      goalSupportByAct,
+      supportedActs: supportedActsForVariantGate,
+    });
+    if (skipMultiGoalVariantSearch) {
+      multiReasonCodes.push('MULTI_GOAL_VARIANT_SEARCH_SKIPPED_STRONG_GOAL_COVERAGE');
+    }
+    if (
+      queryRewriteMeta.called &&
+      queryRewriteMeta.used &&
+      queryRewriteMeta.variants?.length &&
+      qdrantCallCounter.count < 20 &&
+      !skipMultiGoalVariantSearch
+    ) {
       const varTopK = searchPlan.thresholds?.top_k_chunks ?? config.lldbiTopK;
       const variantQueries = queryRewriteMeta.variants
         .slice(0, 2)
@@ -1251,6 +1343,13 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const multiGoalSingleActCoverageAllowed = selectedActsMulti.selected_acts_reason_codes.includes(
       'MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED'
     );
+    const multiGoalStrongPrimaryCoverage = hasStrongGoalSupportedMultiPrimaryCoverage({
+      selectedActs: selected_acts_multi,
+      goalsSummary,
+      goalSupportByAct,
+      chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+      actCandidatesTop: multiActCandidatesTopHydrated,
+    });
     const multiPrimaryActsCount = selected_acts_multi.filter((act) => act.act_kind === 'PRIMARY_LAW').length;
     const multiPrimaryCoverageWeak =
       goalsSummary.length >= 2 &&
@@ -1263,9 +1362,16 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       goalsSummary.length >= 2 &&
       selected_acts_multi.length > goalsSummary.length &&
       multiFamilyMismatchSignals;
+    const relaxFamilyConflictLowConfidence =
+      multiGoalStrongPrimaryCoverage &&
+      topLevelQuerySelectors.explicitSelectorCount === 0 &&
+      !topLevelQuerySelectors.noteMentioned;
+    if (relaxFamilyConflictLowConfidence) {
+      multiReasonCodesFinal.push('MULTI_GOAL_FAMILY_CONFLICT_EXPLAINED_BY_GOAL_COVERAGE');
+    }
     const multiLowConfidence =
       selectedActsMulti.selected_acts_confidence < 0.6 ||
-      familyEvidenceMulti.family_conflict ||
+      (familyEvidenceMulti.family_conflict && !relaxFamilyConflictLowConfidence) ||
       multiPrimaryCoverageWeak ||
       multiWeakTailWithFamilyMismatch ||
       multiReasonCodesFinal.some((code) =>
@@ -1410,6 +1516,9 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           used_global_fallback: false,
           goal_split_v2: goalSplitV2,
         },
+        within_act_policy: multiWithinActPolicyReasonCodes.length
+          ? uniqueStrings(multiWithinActPolicyReasonCodes)
+          : undefined,
         goal_split_inputs:
           goalSplitV2 && goalSplit.goals.length >= 2
             ? {
@@ -1608,50 +1717,28 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     stepsLatencyMs.push(Date.now() - embedStart);
   } catch (err) {
     degraded.lldbi = true;
-    const trace: RetrievalTrace = {
-      version: 1,
-      hits: [],
-      top_score: null,
-      latency_ms: Date.now() - embedStart,
-      degraded_sources: degraded,
-      meta: {
-        collections_used: [],
-        steps_latency_ms: [Date.now() - embedStart],
-        error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-        steps_requested: [],
-        steps_executed: [],
-        query_used: effective.slice(0, 200),
-        hits_count: 0,
-        qdrant_calls_count_total: 0,
-        hits_total_before_cap: 0,
-        hits_total_after_cap: 0,
-        hits_cap_applied: false,
-      },
-    };
+    const trace = buildSingleGoalDegradedTrace({
+      queryUsed: effective,
+      latencyMs: Date.now() - runStartMs,
+      stepsLatencyMs: [Date.now() - embedStart],
+      degradedSources: degraded,
+      error: err instanceof Error ? err.message : String(err),
+      reasonCodes: ['EMBEDDING_FAILED'],
+      qdrantCallsCountTotal: qdrantCallCounter.count,
+    });
     return { rawHits: [], retrievalTrace: trace };
   }
 
   if (!vector || vector.length === 0) {
     degraded.lldbi = true;
-    const emptyTrace: RetrievalTrace = {
-      version: 1,
-      hits: [],
-      top_score: null,
-      latency_ms: stepsLatencyMs[0] ?? 0,
-      degraded_sources: degraded,
-      meta: {
-        collections_used: [],
-        steps_latency_ms: stepsLatencyMs,
-        steps_requested: [],
-        steps_executed: [],
-        query_used: effective.slice(0, 200),
-        hits_count: 0,
-        qdrant_calls_count_total: 0,
-        hits_total_before_cap: 0,
-        hits_total_after_cap: 0,
-        hits_cap_applied: false,
-      },
-    };
+    const emptyTrace = buildSingleGoalDegradedTrace({
+      queryUsed: effective,
+      latencyMs: Date.now() - runStartMs,
+      stepsLatencyMs,
+      degradedSources: degraded,
+      reasonCodes: ['EMPTY_QUERY_VECTOR'],
+      qdrantCallsCountTotal: qdrantCallCounter.count,
+    });
     return { rawHits: [], retrievalTrace: emptyTrace };
   }
 
@@ -1692,6 +1779,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const hasActCandidates =
     (taxonomyResult.rada_nreg_candidates?.length ?? 0) > 0 || usedActsSearch;
   const querySelectors = singleGoalQuerySelectors;
+  const chunkEvidenceSummary = summarizeChunkEvidenceActs(candidateHits);
+  const actSearchNregs = extractActSearchNregsFromHits(rawPerStep);
+  const leadingActNreg =
+    (taxonomyResult.grounded_act_nregs ?? [])[0] ??
+    (taxonomyResult.rada_nreg_candidates ?? [])[0] ??
+    actSearchNregs[0] ??
+    chunkEvidenceSummary.top_nreg ??
+    null;
   const withinActDecision = decideWithinActExpansion({
     hasActCandidates,
     needTwoStage,
@@ -1703,6 +1798,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     mustHaveSignalsCount: singleGoalGroundedQuery.appliedSignals.length,
     groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
     queryTokenCount: effective.normalize('NFC').split(/[^\p{L}\p{N}]+/u).filter(Boolean).length,
+    chunkEvidenceActCount: chunkEvidenceSummary.act_count,
+    topChunkEvidenceHitCount: chunkEvidenceSummary.top_hit_count,
+    topChunkEvidenceMatchesLeadingAct:
+      Boolean(leadingActNreg) && chunkEvidenceSummary.top_nreg === leadingActNreg,
     weakLimit: TWO_STAGE_ACTS_TOP,
   });
   const withinActLimit = withinActDecision.limit;
@@ -1713,8 +1812,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const topNregs = buildWithinActPool({
       groundedNregs: taxonomyResult.grounded_act_nregs ?? [],
       taxonomyNregs: taxonomyResult.rada_nreg_candidates ?? [],
-      actSearchNregs: extractActSearchNregsFromHits(rawPerStep),
-      chunkEvidenceNregs: extractChunkEvidenceNregsFromHits(candidateHits),
+      actSearchNregs,
+      chunkEvidenceNregs: chunkEvidenceSummary.ordered_nregs,
       plannerPreferredNregs:
         actPlannerOutput?.goals?.[0]?.act_candidates
           ?.filter((candidate) => candidate.rada_nreg)
@@ -1732,7 +1831,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
           radaNregs: topNregs,
           vector,
           collection: collections.chunks,
-          limit: TWO_STAGE_CHUNKS_PER_ACT,
+          limit: withinActDecision.chunks_per_act_limit,
           timeoutMs: config.qdrantTimeoutSec * 1000,
           callCounter: qdrantCallCounter,
         });

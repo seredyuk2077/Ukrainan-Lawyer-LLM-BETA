@@ -31,6 +31,7 @@ import {
   buildWithinActPool,
   extractActSearchNregsFromHits,
   extractChunkEvidenceNregsFromHits,
+  summarizeChunkEvidenceActs,
 } from '../../retrieval/within-act-pool.js';
 import {
   buildSingleGoalFirstPassPlan,
@@ -81,6 +82,10 @@ import {
   hasStickySingleGoalLowConfidenceReason,
   shouldFlagProceduralPrimaryWithoutActGrounding,
 } from '../../retrieval/single-goal-honesty.js';
+import {
+  hasStrongGoalSupportedMultiPrimaryCoverage,
+  shouldSkipMultiGoalVariantSearch,
+} from '../../retrieval/multi-goal-confidence.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 import { buildBestProbe } from './audit_lldbi_act_coverage.js';
 
@@ -946,6 +951,19 @@ function testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence(): vo
   console.log('[OK] within-act pool extracts chunk-evidence nregs by repeated chunk support');
 }
 
+function testSummarizeChunkEvidenceActsCapturesStrongHeadConsensus(): void {
+  const summary = summarizeChunkEvidenceActs([
+    { source: 'lldbi_chunks', rada_nreg: '4651-17', score: 0.71 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '4651-17', score: 0.62 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '2341-14', score: 0.58 } as const,
+    { source: 'lldbi_chunks', rada_nreg: '4651-17', score: 0.55 } as const,
+  ]);
+  if (summary.top_nreg !== '4651-17' || summary.top_hit_count !== 3 || summary.act_count !== 2) {
+    throw new Error(`Expected chunk-evidence summary to expose head consensus, got ${JSON.stringify(summary)}`);
+  }
+  console.log('[OK] within-act pool summarizes strong head act consensus');
+}
+
 function testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns(): void {
   const pool = buildWithinActPool({
     taxonomyNregs: ['80731-10', '2341-14'],
@@ -1206,14 +1224,22 @@ function testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructural
     mustHaveSignalsCount: 0,
     groundedActHitCount: 1,
     queryTokenCount: 4,
+    chunkEvidenceActCount: 1,
+    topChunkEvidenceHitCount: 2,
+    topChunkEvidenceMatchesLeadingAct: true,
     weakLimit: 5,
   });
-  if (decision.limit !== 2 || !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY')) {
+  if (
+    decision.limit !== 1 ||
+    decision.chunks_per_act_limit !== 24 ||
+    !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY') ||
+    !decision.reason_codes.includes('STRONG_HEAD_ACT_CONSENSUS')
+  ) {
     throw new Error(
-      `Expected grounded single-act query to keep cheap within-act fanout, got ${JSON.stringify(decision)}`
+      `Expected grounded single-act query with strong head evidence to collapse to one-act fanout, got ${JSON.stringify(decision)}`
     );
   }
-  console.log('[OK] within-act expansion keeps grounded single-act queries on a cheap act fanout');
+  console.log('[OK] within-act expansion collapses grounded single-act queries on strong head evidence');
 }
 
 function testWithinActExpansionCompactsGroundedStructuralSingleActQueries(): void {
@@ -1230,14 +1256,22 @@ function testWithinActExpansionCompactsGroundedStructuralSingleActQueries(): voi
     mustHaveSignalsCount: 1,
     groundedActHitCount: 1,
     queryTokenCount: 5,
+    chunkEvidenceActCount: 1,
+    topChunkEvidenceHitCount: 2,
+    topChunkEvidenceMatchesLeadingAct: true,
     weakLimit: 5,
   });
-  if (decision.limit !== 2 || !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY')) {
+  if (
+    decision.limit !== 1 ||
+    decision.chunks_per_act_limit !== 24 ||
+    !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY') ||
+    !decision.reason_codes.includes('STRONG_HEAD_ACT_CONSENSUS')
+  ) {
     throw new Error(
-      `Expected grounded structural single-act query to use compact within-act limit, got ${JSON.stringify(decision)}`
+      `Expected grounded structural single-act query with strong head evidence to use one-act fanout, got ${JSON.stringify(decision)}`
     );
   }
-  console.log('[OK] within-act expansion compacts grounded structural single-act queries');
+  console.log('[OK] within-act expansion collapses grounded structural single-act queries on strong head evidence');
 }
 
 function testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding(): void {
@@ -1262,6 +1296,38 @@ function testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding(): 
     );
   }
   console.log('[OK] within-act expansion keeps explicit act-scope queries alive even without exact grounding');
+}
+
+function testWithinActExpansionCollapsesExplicitActScopeOnStrongHeadConsensus(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors(
+      'Яким розпорядженням закрито дисциплінарне провадження і хто прийняв це рішення?'
+    ),
+    entities: [],
+    explicitActScopeCue: true,
+    goalType: 'definition',
+    goalReasonCodes: ['same_act_bundle_compaction', 'act_metadata_bundle_compaction'],
+    mustHaveSignalsCount: 0,
+    groundedActHitCount: 0,
+    queryTokenCount: 10,
+    chunkEvidenceActCount: 1,
+    topChunkEvidenceHitCount: 3,
+    topChunkEvidenceMatchesLeadingAct: true,
+    weakLimit: 5,
+  });
+  if (
+    decision.limit !== 1 ||
+    decision.chunks_per_act_limit !== 24 ||
+    !decision.reason_codes.includes('EXPLICIT_ACT_SCOPE_QUERY') ||
+    !decision.reason_codes.includes('STRONG_HEAD_ACT_CONSENSUS')
+  ) {
+    throw new Error(
+      `Expected strong explicit act-scope query to collapse to one-act fanout, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] within-act expansion collapses strong explicit act-scope queries');
 }
 
 function testAuditBestProbeUsesNregInsteadOfWeakShortAlias(): void {
@@ -6019,6 +6085,221 @@ function testSelectedActsRequireEvidenceForPrimaryLawSupportTail(): void {
   console.log('[OK] selected_acts requires retrieval evidence before adding extra primary-law tail acts');
 }
 
+function testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle(): void {
+  const ok = hasStrongGoalSupportedMultiPrimaryCoverage({
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.66,
+        max_score: 0.72,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2,
+        max_ordering_score: 0.77,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.61,
+        max_score: 0.65,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.81,
+        max_ordering_score: 0.62,
+      },
+    ],
+    actCandidatesTop: [
+      { rada_nreg: '2341-14', category: 'criminal' },
+      { rada_nreg: '4651-17', category: 'criminal_procedure' },
+    ],
+  });
+  if (!ok) {
+    throw new Error('Expected strong goal-supported multi-primary coverage to be recognized');
+  }
+  console.log('[OK] multi-goal confidence helper recognizes legitimate mixed primary-law coverage');
+}
+
+function testStrongGoalSupportedMultiPrimaryCoverageRequiresFullGoalCoverage(): void {
+  const ok = hasStrongGoalSupportedMultiPrimaryCoverage({
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set()],
+    ]),
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.66,
+        max_score: 0.72,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2,
+        max_ordering_score: 0.77,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.61,
+        max_score: 0.65,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.81,
+        max_ordering_score: 0.62,
+      },
+    ],
+    actCandidatesTop: [
+      { rada_nreg: '2341-14', category: 'criminal' },
+      { rada_nreg: '4651-17', category: 'criminal_procedure' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect confidence helper to pass without full goal coverage');
+  }
+  console.log('[OK] multi-goal confidence helper requires full goal coverage');
+}
+
+function testSkipMultiGoalVariantSearchOnStrongPerGoalCoverage(): void {
+  const ok = shouldSkipMultiGoalVariantSearch({
+    goalsSummary: [
+      { goal_id: 'goal_0', hits_count: 9, top_score: 0.58, required_categories: ['criminal'] },
+      { goal_id: 'goal_1', hits_count: 8, top_score: 0.53, required_categories: ['criminal_procedure'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    supportedActs: [
+      { rada_nreg: '2341-14', act_kind: 'PRIMARY_LAW', category: 'criminal' },
+      { rada_nreg: '4651-17', act_kind: 'PRIMARY_LAW', category: 'criminal_procedure' },
+    ],
+  });
+  if (!ok) {
+    throw new Error('Expected multi-goal variant search to be skipped when per-goal coverage is already strong');
+  }
+  console.log('[OK] multi-goal variant search is skipped on strong per-goal coverage');
+}
+
+function testSkipMultiGoalVariantSearchRequiresMaterialCoverage(): void {
+  const ok = shouldSkipMultiGoalVariantSearch({
+    goalsSummary: [
+      { goal_id: 'goal_0', hits_count: 9, top_score: 0.58, required_categories: ['criminal'] },
+      { goal_id: 'goal_1', hits_count: 2, top_score: 0.31, required_categories: ['criminal_procedure'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    supportedActs: [
+      { rada_nreg: '2341-14', act_kind: 'PRIMARY_LAW', category: 'criminal' },
+      { rada_nreg: '4651-17', act_kind: 'PRIMARY_LAW', category: 'criminal_procedure' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect multi-goal variant search skip without material per-goal coverage');
+  }
+  console.log('[OK] multi-goal variant search still runs when a goal remains weak');
+}
+
+function testSkipMultiGoalVariantSearchRequiresPrimaryLawCoverage(): void {
+  const ok = shouldSkipMultiGoalVariantSearch({
+    goalsSummary: [
+      { goal_id: 'goal_0', hits_count: 9, top_score: 0.58, required_categories: ['criminal'] },
+      { goal_id: 'goal_1', hits_count: 8, top_score: 0.53, required_categories: ['criminal_procedure'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['995_004', new Set(['goal_1'])],
+    ]),
+    supportedActs: [
+      { rada_nreg: '2341-14', act_kind: 'PRIMARY_LAW', category: 'criminal' },
+      { rada_nreg: '995_004', act_kind: 'INTERNATIONAL_TREATY', category: 'international_treaty' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect multi-goal variant search skip when one goal is covered only by non-primary law');
+  }
+  console.log('[OK] multi-goal variant search requires primary-law goal coverage');
+}
+
+function testSkipMultiGoalVariantSearchRequiresCategoryAlignment(): void {
+  const ok = shouldSkipMultiGoalVariantSearch({
+    goalsSummary: [
+      { goal_id: 'goal_0', hits_count: 9, top_score: 0.58, required_categories: ['criminal'] },
+      { goal_id: 'goal_1', hits_count: 8, top_score: 0.53, required_categories: ['criminal_procedure'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['1618-15', new Set(['goal_1'])],
+    ]),
+    supportedActs: [
+      { rada_nreg: '2341-14', act_kind: 'PRIMARY_LAW', category: 'criminal' },
+      { rada_nreg: '1618-15', act_kind: 'PRIMARY_LAW', category: 'civil_procedure' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect multi-goal variant search skip when procedural coverage is off-family');
+  }
+  console.log('[OK] multi-goal variant search requires category-aligned goal coverage');
+}
+
+function testSkipMultiGoalVariantSearchRequiresExplicitGoalCategories(): void {
+  const ok = shouldSkipMultiGoalVariantSearch({
+    goalsSummary: [
+      { goal_id: 'goal_0', hits_count: 9, top_score: 0.58 },
+      { goal_id: 'goal_1', hits_count: 8, top_score: 0.53, required_categories: ['criminal_procedure'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    supportedActs: [
+      { rada_nreg: '2341-14', act_kind: 'PRIMARY_LAW', category: 'criminal' },
+      { rada_nreg: '4651-17', act_kind: 'PRIMARY_LAW', category: 'criminal_procedure' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect multi-goal variant search skip without explicit categories for every goal');
+  }
+  console.log('[OK] multi-goal variant search requires explicit categories for every goal');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -6072,6 +6353,7 @@ async function main(): Promise<void> {
   testReferenceExpansionDoesNotSkipOnExplicitSelectors();
   testExtractActSearchNregsFromHitsUsesOnlyActSearchHits();
   testExtractChunkEvidenceNregsFromHitsRanksByRepeatedChunkEvidence();
+  testSummarizeChunkEvidenceActsCapturesStrongHeadConsensus();
   testBuildWithinActPoolPrefersTaxonomyWhenHintsExist();
   testBuildWithinActPoolCanPreferChunkEvidenceOnStrongRuns();
   testBuildWithinActPoolPrioritizesGroundedSingleAct();
@@ -6093,6 +6375,7 @@ async function main(): Promise<void> {
   testWithinActExpansionSupportsGroundedSingleActQueriesWithoutStructuralSelectors();
   testWithinActExpansionCompactsGroundedStructuralSingleActQueries();
   testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding();
+  testWithinActExpansionCollapsesExplicitActScopeOnStrongHeadConsensus();
   testAuditBestProbeUsesNregInsteadOfWeakShortAlias();
   testAuditBestProbeUsesNregInsteadOfWeakShortCuedNumberAlias();
   testAuditBestProbeKeepsStrongCodeAlias();
@@ -6196,6 +6479,13 @@ async function main(): Promise<void> {
   testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
   testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal();
   testSelectedActsRequireEvidenceForPrimaryLawSupportTail();
+  testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle();
+  testStrongGoalSupportedMultiPrimaryCoverageRequiresFullGoalCoverage();
+  testSkipMultiGoalVariantSearchOnStrongPerGoalCoverage();
+  testSkipMultiGoalVariantSearchRequiresMaterialCoverage();
+  testSkipMultiGoalVariantSearchRequiresPrimaryLawCoverage();
+  testSkipMultiGoalVariantSearchRequiresCategoryAlignment();
+  testSkipMultiGoalVariantSearchRequiresExplicitGoalCategories();
   console.log('\nAll RAG unit tests passed.');
 }
 
