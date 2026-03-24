@@ -92,12 +92,37 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
     (input.groundedActHitCount ?? 0) > 0 ||
     (input.metadataGroundedActCount ?? 0) > 0;
   const lowSelectionConfidence = (input.selectedActsConfidence ?? 0) < 0.55;
+  const borderlineLowSelectionConfidence = (input.selectedActsConfidence ?? 0) <= 0.55;
   const noStableSelectedActs = input.selectedActsCount === 0 || lowSelectionConfidence;
   const hasPrimarySelectedAct = (input.selectedActKinds ?? []).some((kind) => kind === 'PRIMARY_LAW');
   const nonPrimaryOrEmptySelection =
     input.selectedActsCount === 0 || (!hasPrimarySelectedAct && (input.selectedActKinds?.length ?? 0) > 0);
+  const indexedSinglePrimarySelection =
+    hasIndexedActGroundingSignal &&
+    input.selectedActsCount === 1 &&
+    hasPrimarySelectedAct &&
+    !nonPrimaryOrEmptySelection;
   const weakTopScore = (input.topScore ?? 0) < 0.42;
   const sparseOrWeakHits = input.hitsCount <= 5 || weakTopScore;
+
+  if (
+    indexedSinglePrimarySelection &&
+    input.mixedProcedureAndNonProcedureGoals !== true &&
+    reasonCodes.has('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')
+  ) {
+    return 'weak_evidence';
+  }
+
+  if (
+    looksLegallySpecific(input) &&
+    !hasIndexedActGroundingSignal &&
+    nonPrimaryOrEmptySelection &&
+    borderlineLowSelectionConfidence &&
+    reasonCodes.has('NON_PRIMARY_ONLY_WEAK_CONFIDENCE') &&
+    reasonCodes.has('NO_PRIMARY_LAW_EVIDENCE')
+  ) {
+    return 'likely_missing_act';
+  }
 
   if (looksLegallySpecific(input) && lowSelectionConfidence && hasExplicitMissingTaxonomySignal) {
     return 'likely_missing_act';
@@ -124,6 +149,7 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
   }
   if (
     looksLegallySpecific(input) &&
+    !hasIndexedActGroundingSignal &&
     nonPrimaryOrEmptySelection &&
     noStableSelectedActs &&
     hasWeakEvidenceSignal &&

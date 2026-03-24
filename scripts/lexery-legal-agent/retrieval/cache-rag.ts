@@ -76,9 +76,15 @@ import { deriveCoverageGap } from './coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
 import { buildSingleGoalDegradedTrace } from './single-goal-degraded-trace.js';
 import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
-import { buildGoalSupportByActFromGoalsSummary, serializeGoalSupportMap } from './goal-support.js';
+import {
+  buildGoalSupportByActFromGoalsSummary,
+  buildGoalSupportByActFromHits,
+  preferEvidenceBackedGoalSupport,
+  serializeGoalSupportMap,
+} from './goal-support.js';
 import {
   hasStrongGoalSupportedMultiPrimaryCoverage,
+  shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
 } from './multi-goal-confidence.js';
 import {
@@ -1175,18 +1181,22 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     // QR variants for multi-goal: additional chunk searches for substantive acts missed by per-goal
     // subquery embeddings. E.g. procedural query → КПК dominates; variant "ст.121 КК тяжке тілесне
     // ушкодження" surfaces ккУ chunks that goal.subquery embedding misses.
-    const goalSupportByAct = buildGoalSupportByActFromGoalsSummary(goalsSummary);
+    const goalSupportByActFromSummary = buildGoalSupportByActFromGoalsSummary(goalsSummary);
+    const goalSupportByActForVariantGate = preferEvidenceBackedGoalSupport(
+      buildGoalSupportByActFromHits(multiHits),
+      goalSupportByActFromSummary
+    );
     const supportedActsForVariantGate = await Promise.all(
-      [...goalSupportByAct.entries()]
+      [...goalSupportByActForVariantGate.entries()]
         .filter(([, goalIds]) => goalIds.size > 0)
         .map(async ([rada_nreg]) => {
           const meta = await getActMeta(rada_nreg);
           return {
             rada_nreg,
             act_kind: classifyActKind(
+              meta?.title ?? undefined,
               meta?.document_type ?? undefined,
               meta?.category ?? undefined,
-              meta?.title ?? undefined,
               meta?.document_type_slug ?? undefined
             ),
             category: meta?.category ?? undefined,
@@ -1195,7 +1205,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     );
     const skipMultiGoalVariantSearch = shouldSkipMultiGoalVariantSearch({
       goalsSummary,
-      goalSupportByAct,
+      goalSupportByAct: goalSupportByActForVariantGate,
       supportedActs: supportedActsForVariantGate,
     });
     if (skipMultiGoalVariantSearch) {
@@ -1245,6 +1255,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     }
 
     const mergedMulti = dedupeHits(multiHits);
+    const goalSupportByAct = preferEvidenceBackedGoalSupport(
+      buildGoalSupportByActFromHits(mergedMulti),
+      goalSupportByActFromSummary
+    );
     const fused = applyCoverageFusion(
       mergedMulti,
       goalSplit.goals,
@@ -1271,10 +1285,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       chunksEvidenceMulti.map((item) => [item.rada_nreg, item] as const)
     );
     const goalSupportByNreg = new Map<string, number>();
-    for (const summary of goalsSummary) {
-      for (const nreg of summary.act_candidates_top3 ?? []) {
-        goalSupportByNreg.set(nreg, (goalSupportByNreg.get(nreg) ?? 0) + 1);
-      }
+    for (const [nreg, goalIds] of goalSupportByAct.entries()) {
+      goalSupportByNreg.set(nreg, goalIds.size);
     }
     const mergedNregs = [
       ...new Set([
@@ -1362,8 +1374,18 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       goalsSummary.length >= 2 &&
       selected_acts_multi.length > goalsSummary.length &&
       multiFamilyMismatchSignals;
+    const ungroundedMultiGoalFallback = shouldFlagUngroundedMultiGoalFallback({
+      domainHint,
+      goalsSummary,
+      selectedActs: selected_acts_multi,
+      goalSupportByAct,
+      selectedActsSourcesBreakdown: selectedActsMulti.selected_acts_sources_breakdown,
+      topScore: topScoreMulti,
+      mismatchSignalsPresent: multiFamilyMismatchSignals,
+    });
     const relaxFamilyConflictLowConfidence =
       multiGoalStrongPrimaryCoverage &&
+      !multiFamilyMismatchSignals &&
       topLevelQuerySelectors.explicitSelectorCount === 0 &&
       !topLevelQuerySelectors.noteMentioned;
     if (relaxFamilyConflictLowConfidence) {
@@ -1374,6 +1396,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       (familyEvidenceMulti.family_conflict && !relaxFamilyConflictLowConfidence) ||
       multiPrimaryCoverageWeak ||
       multiWeakTailWithFamilyMismatch ||
+      ungroundedMultiGoalFallback ||
       multiReasonCodesFinal.some((code) =>
         [
           'GOAL_ACT_POOL_WEAK',
@@ -1398,6 +1421,10 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     }
     if (multiWeakTailWithFamilyMismatch) {
       multiReasonCodesFinal.push('MULTI_GOAL_FAMILY_MISMATCH_TAIL');
+      multiReasonCodesFinal.push('LOW_EVIDENCE');
+    }
+    if (ungroundedMultiGoalFallback) {
+      multiReasonCodesFinal.push('UNGROUNDED_MULTI_GOAL_FALLBACK');
       multiReasonCodesFinal.push('LOW_EVIDENCE');
     }
     if (multiLowConfidence && selected_acts_multi.length > 2) {
@@ -1436,6 +1463,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selectedActsCount: selected_acts_multi.length,
       selectedActsConfidence: selectedActsMulti.selected_acts_confidence,
       selectedActKinds: selected_acts_multi.map((act) => act.act_kind ?? 'UNKNOWN'),
+      exactActHitCount: taxonomyResultEarly?.exact_act_hit_count ?? 0,
+      groundedActHitCount: taxonomyResultEarly?.grounded_act_hit_count ?? 0,
       mixedProcedureAndNonProcedureGoals,
       proceduralOnlySelection,
       hitsCount: finalMulti.length,

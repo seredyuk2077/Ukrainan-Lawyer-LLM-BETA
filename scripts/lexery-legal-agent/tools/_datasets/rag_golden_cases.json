@@ -1297,5 +1297,19 @@
     "expected_coverage_gap": ["weak_evidence", "likely_missing_act"],
     "max_selected_acts": 2,
     "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_missing_act_cyber_critical_registry_order_v1",
+    "bucket": "ood / corpus-gap",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Які вимоги до кіберзахисту операторів державних хмарних реєстрів за новим спеціальним порядком для критичної цифрової інфраструктури, ухваленим нещодавно?",
+    "description": "Legally specific likely-missing-act query: when LLDBI has only weak unrelated subordinate-act tails and no grounded indexed act, retrieval should stay in honest low-confidence mode and expose `likely_missing_act` instead of pretending the broad non-primary noise is enough.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": "likely_missing_act",
+    "max_selected_acts": 2,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
   }
 ]
