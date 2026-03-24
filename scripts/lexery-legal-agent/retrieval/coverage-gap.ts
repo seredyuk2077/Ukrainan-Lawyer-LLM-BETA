@@ -113,6 +113,10 @@ export function deriveCoverageGap(input: DeriveCoverageGapInput): CoverageGap {
     return 'weak_evidence';
   }
 
+  if (looksLegallySpecific(input) && reasonCodes.has('UNGROUNDED_MULTI_GOAL_FALLBACK')) {
+    return hasIndexedActGroundingSignal ? 'weak_evidence' : 'likely_missing_act';
+  }
+
   if (
     looksLegallySpecific(input) &&
     !hasIndexedActGroundingSignal &&

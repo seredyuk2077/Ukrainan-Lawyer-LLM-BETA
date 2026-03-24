@@ -83,6 +83,7 @@ import {
   shouldFlagProceduralPrimaryWithoutActGrounding,
 } from '../../retrieval/single-goal-honesty.js';
 import {
+  finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
   shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
@@ -4965,6 +4966,49 @@ function testCoverageGapKeepsGroundedSparseNonPrimarySelectionAsWeakEvidence(): 
   console.log('[OK] coverage-gap keeps grounded sparse non-primary selection as weak_evidence');
 }
 
+function testCoverageGapUsesUngroundedMultiGoalFallbackForLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['UNGROUNDED_MULTI_GOAL_FALLBACK', 'LOW_EVIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW', 'PRIMARY_LAW'],
+    hitsCount: 14,
+    topScore: 0.57,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected ungrounded multi-goal fallback to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes ungrounded multi-goal fallback to likely_missing_act');
+}
+
+function testCoverageGapKeepsMetadataGroundedMultiGoalFallbackAsWeakEvidence(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['UNGROUNDED_MULTI_GOAL_FALLBACK', 'LOW_EVIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW', 'SECONDARY_ORDER'],
+    metadataGroundedActCount: 1,
+    hitsCount: 16,
+    topScore: 0.57,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected metadata-grounded multi-goal fallback to stay weak_evidence, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap keeps metadata-grounded multi-goal fallback as weak_evidence');
+}
+
 function testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -6838,6 +6882,159 @@ function testSelectedActsRequireEvidenceForPrimaryLawSupportTail(): void {
   console.log('[OK] selected_acts requires retrieval evidence before adding extra primary-law tail acts');
 }
 
+function testFinalizeMultiGoalSelectedActsRecomputesConfidenceAfterTailTrim(): void {
+  const result = finalizeMultiGoalSelectedActs({
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+      },
+    ],
+    originalSelectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '80731-10',
+        act_title: 'Кодекс України про адміністративні правопорушення',
+        act_kind: 'PRIMARY_LAW',
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+      },
+    ],
+    baseSelectedActsConfidence: 0.5,
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['2341-14', '4651-17', '80731-10'],
+    },
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.66,
+        max_score: 0.72,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2,
+        max_ordering_score: 0.77,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.61,
+        max_score: 0.65,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.81,
+        max_ordering_score: 0.62,
+      },
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.42,
+        max_score: 0.47,
+        best_rank_in_top30: 18,
+        rank_mass_top30: 0.07,
+        max_ordering_score: 0.29,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+      ['80731-10', new Set()],
+    ]),
+  });
+  if (result.selectedActsConfidence < 0.75) {
+    throw new Error(`Expected tail-trimmed strong bundle to recover confidence, got ${result.selectedActsConfidence}`);
+  }
+  if ((result.selectedActsKindsCount.PRIMARY_LAW ?? 0) !== 2) {
+    throw new Error(`Expected final kinds count to reflect trimmed primary-law bundle, got ${JSON.stringify(result.selectedActsKindsCount)}`);
+  }
+  if (
+    JSON.stringify(result.selectedActsSourcesBreakdown.from_chunks_evidence.sort()) !==
+    JSON.stringify(['2341-14', '4651-17'])
+  ) {
+    throw new Error(`Expected final chunks-only breakdown to drop trimmed tail, got ${JSON.stringify(result.selectedActsSourcesBreakdown)}`);
+  }
+  console.log('[OK] multi-goal finalizer recomputes confidence and breakdown after tail trim');
+}
+
+function testFinalizeMultiGoalSelectedActsKeepsOnlyFinalMetadataGrounding(): void {
+  const result = finalizeMultiGoalSelectedActs({
+    selectedActs: [
+      {
+        rada_nreg: '19-2026-р',
+        act_title: 'Про закриття дисциплінарного провадження',
+        act_kind: 'SECONDARY_ORDER',
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+      },
+    ],
+    originalSelectedActs: [
+      {
+        rada_nreg: '19-2026-р',
+        act_title: 'Про закриття дисциплінарного провадження',
+        act_kind: 'SECONDARY_ORDER',
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+      },
+    ],
+    baseSelectedActsConfidence: 0.5,
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['19-2026-р', '435-15'],
+      from_acts_search: ['19-2026-р'],
+      from_chunks_evidence: ['435-15'],
+    },
+    chunksEvidenceTopActs: [],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    goalSupportByAct: new Map([
+      ['19-2026-р', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_1'])],
+    ]),
+  });
+  if (result.metadataGroundedActCount !== 1) {
+    throw new Error(`Expected final metadata grounding count to reflect only surviving act, got ${result.metadataGroundedActCount}`);
+  }
+  if (JSON.stringify(result.selectedActsSourcesBreakdown.from_taxonomy) !== JSON.stringify(['19-2026-р'])) {
+    throw new Error(`Expected final taxonomy breakdown to keep only surviving act, got ${JSON.stringify(result.selectedActsSourcesBreakdown)}`);
+  }
+  console.log('[OK] multi-goal finalizer keeps only final metadata grounding signals');
+}
+
 function testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle(): void {
   const ok = hasStrongGoalSupportedMultiPrimaryCoverage({
     selectedActs: [
@@ -7345,6 +7542,8 @@ async function main(): Promise<void> {
   testCoverageGapUsesUngroundedNonPrimaryOnlyWeakSelectionForLikelyMissingAct();
   testCoverageGapKeepsGroundedNonPrimaryOnlyWeakSelectionAsWeakEvidence();
   testCoverageGapKeepsGroundedSparseNonPrimarySelectionAsWeakEvidence();
+  testCoverageGapUsesUngroundedMultiGoalFallbackForLikelyMissingAct();
+  testCoverageGapKeepsMetadataGroundedMultiGoalFallbackAsWeakEvidence();
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
   testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
@@ -7391,6 +7590,8 @@ async function main(): Promise<void> {
   testSelectedActsFallbackDoesNotReAddBlockedNoiseAct();
   testSelectedActsTrimWeakOffFamilyPrimaryLawInSingleGoal();
   testSelectedActsRequireEvidenceForPrimaryLawSupportTail();
+  testFinalizeMultiGoalSelectedActsRecomputesConfidenceAfterTailTrim();
+  testFinalizeMultiGoalSelectedActsKeepsOnlyFinalMetadataGrounding();
   testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle();
   testStrongGoalSupportedMultiPrimaryCoverageRequiresFullGoalCoverage();
   testShouldFlagUngroundedMultiGoalFallbackOnChunksOnlyBroadPrimarySelection();
