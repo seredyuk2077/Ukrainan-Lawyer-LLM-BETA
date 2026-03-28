@@ -28,6 +28,7 @@ import {
   shouldSkipApproximateActReferenceGrounding,
 } from '../../retrieval/act-taxonomy-store.js';
 import { extractEntities } from '../../classify/entity-extractor.js';
+import { tagLegalDomain } from '../../classify/legal-domain-tagger.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
 import { selectActPlannerTier } from '../../retrieval/act-planner.js';
 import {
@@ -2928,6 +2929,38 @@ function testGoalSplitCompactsErdrComplaintBundle(): void {
     throw new Error(`Expected procedural_bundle_compaction for ЄРДР complaint bundle, got ${JSON.stringify(r.reason_codes)}`);
   }
   console.log('[OK] heuristicGoalSplit compacts ЄРДР complaint bundle into one procedural goal');
+}
+
+function testGoalSplitCompactsErdrCourtDeadlineBundle(): void {
+  const q =
+    'До якого суду і в який строк скаржаться на невнесення відомостей до ЄРДР після заяви про злочин?';
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected ЄРДР court/deadline bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (r.goals[0]?.goal_type !== 'procedure') {
+    throw new Error(`Expected compacted ЄРДР court/deadline goal to be procedural, got ${r.goals[0]?.goal_type}`);
+  }
+  if (!r.reason_codes.includes('procedural_bundle_compaction')) {
+    throw new Error(
+      `Expected procedural_bundle_compaction for ЄРДР court/deadline bundle, got ${JSON.stringify(r.reason_codes)}`
+    );
+  }
+  if (!r.goals[0]?.must_have_signals?.includes('початок досудового розслідування')) {
+    throw new Error(
+      `Expected compacted ЄРДР court/deadline goal to preserve procedural concept signal, got ${JSON.stringify(r.goals[0]?.must_have_signals)}`
+    );
+  }
+  console.log('[OK] heuristicGoalSplit compacts ЄРДР court/deadline bundle into one procedural goal');
+}
+
+function testTagLegalDomainTreatsErdrAsCriminalCue(): void {
+  const q = 'До якого суду і в який строк скаржаться на невнесення відомостей до ЄРДР після заяви про злочин?';
+  const got = tagLegalDomain(q);
+  if (got !== 'criminal') {
+    throw new Error(`Expected ЄРДР structural cue to map to criminal domain, got ${got}`);
+  }
+  console.log('[OK] tagLegalDomain maps ЄРДР structural cue to criminal domain');
 }
 
 function testSingleGoalSelectedActsTailTrim(): void {
@@ -7048,6 +7081,403 @@ async function testResolveSingleGoalSelectedActsPrefersEarlyRankMassLawOverCover
   console.log('[OK] soft special-law locator prefers early rank-mass leader over generic primary-law coverage tail');
 }
 
+async function testResolveSingleGoalSelectedActsRecoversInterrogativePrimaryLawLocatorAfterLowConfidenceNarrowing(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: "Який профільний закон регулює дозвіл на будівництво та класи наслідків об'єктів будівництва?",
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '3038-17',
+        r2_key: 'r2://3038/32',
+        json_path: '$.chunks[32]',
+        score: 0.587,
+        ordering_score: 0.592,
+        title: 'Про регулювання містобудівної діяльності',
+        article_number: '32',
+      },
+      {
+        rada_nreg: '3038-17',
+        r2_key: 'r2://3038/34',
+        json_path: '$.chunks[34]',
+        score: 0.514,
+        ordering_score: 0.446,
+        title: 'Про регулювання містобудівної діяльності',
+        article_number: '34',
+      },
+      {
+        rada_nreg: '2518-20',
+        r2_key: 'r2://2518/5',
+        json_path: '$.chunks[5]',
+        score: 0.451,
+        ordering_score: 0.414,
+        title: "Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому",
+        article_number: '5',
+      },
+      {
+        rada_nreg: '2518-20',
+        r2_key: 'r2://2518/2',
+        json_path: '$.chunks[2]',
+        score: 0.442,
+        ordering_score: 0.413,
+        title: "Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому",
+        article_number: '2',
+      },
+      {
+        rada_nreg: '3038-17',
+        r2_key: 'r2://3038/37',
+        json_path: '$.chunks[37]',
+        score: 0.562,
+        ordering_score: 0.371,
+        title: 'Про регулювання містобудівної діяльності',
+        article_number: '37',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '2518-20',
+        title: "Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому",
+        score: 3.8,
+        category: 'property_real_estate',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'topic_match', 'summary_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '3038-17',
+        title: 'Про регулювання містобудівної діяльності',
+        score: 2.9,
+        category: 'property_real_estate',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['summary_match', 'keyword_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['2518-20', '3038-17']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Закон'],
+    taxonomyActCount: 2,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.587,
+    avgScore: 0.47,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '3038-17',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.554,
+        max_score: 0.587,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.409,
+        max_ordering_score: 0.592,
+      },
+      {
+        rada_nreg: '2518-20',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.446,
+        max_score: 0.451,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.827,
+        max_ordering_score: 0.414,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        '2518-20': {
+          title: "Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому",
+          category: 'property_real_estate',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '3038-17': {
+          title: 'Про регулювання містобудівної діяльності',
+          category: 'property_real_estate',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected soft interrogative primary-law locator to recover confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected soft interrogative primary-law locator to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '3038-17') {
+    throw new Error(`Expected soft interrogative primary-law locator to keep 3038-17 selected, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('INTERROGATIVE_PRIMARY_LAW_LOCATOR_CONFIRMED')) {
+    throw new Error(`Expected interrogative primary-law locator confirmation reason, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE')) {
+    throw new Error(`Expected soft interrogative primary-law locator to avoid explicit act-scope no-convergence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] soft interrogative primary-law locator recovers after low-confidence narrowing');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsCalendarScopedRecurringActWithoutUniqueConvergence(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким актом Національного банку України на 26 березня 2026 року встановлено офіційний курс гривні щодо іноземних валют?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500/7',
+        json_path: '$.chunks[7]',
+        score: 0.557,
+        ordering_score: 0.516,
+        title: 'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        unit_number: '7',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500/27',
+        json_path: '$.chunks[27]',
+        score: 0.563,
+        ordering_score: 0.507,
+        title: 'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        unit_number: '27',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'n0031500-26',
+        r2_key: 'r2://n0031500/1',
+        json_path: '$.chunks[1]',
+        score: 0.747,
+        ordering_score: 0.423,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+      {
+        rada_nreg: 'n0029500-26',
+        r2_key: 'r2://n0029500/1',
+        json_path: '$.chunks[1]',
+        score: 0.746,
+        ordering_score: 0.423,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        r2_key: 'r2://n0123500/1',
+        json_path: '$.chunks[1]',
+        score: 0.744,
+        ordering_score: 0.422,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: 'v0001500-19',
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        score: 3.4,
+        category: 'banking_currency',
+        document_type: 'Постанова',
+        document_type_slug: 'resolution',
+        reasons: ['summary_match', 'keyword_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'n0031500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.1,
+        category: 'banking_currency',
+        document_type: 'Постанова',
+        document_type_slug: 'resolution',
+        reasons: ['title_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'n0029500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.05,
+        category: 'banking_currency',
+        document_type: 'Постанова',
+        document_type_slug: 'resolution',
+        reasons: ['title_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3,
+        category: 'banking_currency',
+        document_type: 'Постанова',
+        document_type_slug: 'resolution',
+        reasons: ['title_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['v0001500-19', 'n0031500-26', 'n0029500-26', 'n0123500-26']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Постанова'],
+    taxonomyActCount: 4,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.557,
+    avgScore: 0.49,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: 'v0001500-19',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.56,
+        max_score: 0.563,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.45,
+        max_ordering_score: 0.516,
+      },
+      {
+        rada_nreg: 'n0031500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.747,
+        max_score: 0.747,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.42,
+        max_ordering_score: 0.423,
+      },
+      {
+        rada_nreg: 'n0029500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.746,
+        max_score: 0.746,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.42,
+        max_ordering_score: 0.423,
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.744,
+        max_score: 0.744,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.41,
+        max_ordering_score: 0.422,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        'v0001500-19': {
+          title:
+            'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+          category: 'banking_currency',
+          document_type: 'Постанова',
+          document_type_slug: 'resolution',
+          storage_category: null,
+        },
+        'n0031500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Постанова',
+          document_type_slug: 'resolution',
+          storage_category: null,
+        },
+        'n0029500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Постанова',
+          document_type_slug: 'resolution',
+          storage_category: null,
+        },
+        'n0123500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Постанова',
+          document_type_slug: 'resolution',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected calendar-scoped recurring-act locator without unique convergence to stay low-confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected calendar-scoped recurring-act locator to surface likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 0) {
+    throw new Error(`Expected calendar-scoped recurring-act locator to clear selected acts, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE')) {
+    throw new Error(`Expected calendar-scoped recurring-act locator to mark explicit scope no convergence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected calendar-scoped recurring-act locator to avoid evidence scope confirmation, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] calendar-scoped recurring-act locator stays honest without unique convergence');
+}
+
 async function testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle(): Promise<void> {
   const result = await resolveSingleGoalSelectedActs({
     query:
@@ -9253,6 +9683,7 @@ function testProceduralPrimaryWithoutGroundingRequiresActSignals(): void {
   const shouldFlag = shouldFlagProceduralPrimaryWithoutActGrounding({
     proceduralOnlyPrimarySelection: true,
     explicitActScopeCue: true,
+    interrogativePrimaryLawLocatorQuery: false,
     structuredActIdentifiersCount: 0,
     documentTypeHintsCount: 1,
     anchorsCount: 0,
@@ -9267,6 +9698,7 @@ function testProceduralPrimaryWithoutGroundingRequiresActSignals(): void {
   const shouldNotFlagGenericProcedure = shouldFlagProceduralPrimaryWithoutActGrounding({
     proceduralOnlyPrimarySelection: true,
     explicitActScopeCue: false,
+    interrogativePrimaryLawLocatorQuery: false,
     structuredActIdentifiersCount: 0,
     documentTypeHintsCount: 0,
     anchorsCount: 0,
@@ -9277,6 +9709,21 @@ function testProceduralPrimaryWithoutGroundingRequiresActSignals(): void {
   });
   if (shouldNotFlagGenericProcedure) {
     throw new Error('Expected generic procedural-code query without act-scope signals to remain eligible for grounded success');
+  }
+  const shouldNotFlagSoftLocatorProcedure = shouldFlagProceduralPrimaryWithoutActGrounding({
+    proceduralOnlyPrimarySelection: true,
+    explicitActScopeCue: true,
+    interrogativePrimaryLawLocatorQuery: true,
+    structuredActIdentifiersCount: 0,
+    documentTypeHintsCount: 1,
+    anchorsCount: 0,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedPrimaryActsCount: 0,
+    leadSelectedMetadataGrounded: false,
+  });
+  if (shouldNotFlagSoftLocatorProcedure) {
+    throw new Error('Expected soft interrogative primary-law locator to stay eligible for dominant-evidence recovery');
   }
   console.log('[OK] procedural-primary honesty guard only fires when act-level grounding is expected');
 }
@@ -13286,6 +13733,8 @@ async function main(): Promise<void> {
   testGoalSplitCompactsSameActNormBundle();
   testGoalSplitAddsErdrProceduralSignal();
   testGoalSplitCompactsErdrComplaintBundle();
+  testGoalSplitCompactsErdrCourtDeadlineBundle();
+  testTagLegalDomainTreatsErdrAsCriminalCue();
   testActPlannerTierSkipsSingleGoalWhenTaxonomySignalExists();
   testActPlannerTierUsesTierOneWhenSignalsAreMissing();
   testActPlannerTierKeepsTierTwoForMultiGoal();
@@ -13411,6 +13860,8 @@ async function main(): Promise<void> {
   await testResolveSingleActScopeSelectionRecoversGroundedRepealOrderWithTrustedDateNumberIdentity();
   await testResolveSingleGoalSelectedActsPrefersDominantEvidenceOverSemanticNeighborMetadataScope();
   await testResolveSingleGoalSelectedActsPrefersEarlyRankMassLawOverCoverageTailForSoftLocator();
+  await testResolveSingleGoalSelectedActsRecoversInterrogativePrimaryLawLocatorAfterLowConfidenceNarrowing();
+  await testResolveSingleGoalSelectedActsRejectsCalendarScopedRecurringActWithoutUniqueConvergence();
   await testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle();
   await testResolveSingleGoalSelectedActsRejectsSupportOnlySecondaryActForAbsentExplicitLawTitle();
   await testResolveSingleGoalSelectedActsRejectsSemanticNeighborForAbsentExplicitLawTitle();

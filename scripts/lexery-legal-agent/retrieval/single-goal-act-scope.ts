@@ -77,6 +77,7 @@ export interface ResolveSingleActScopeSelectionOutput {
   metadataSingleActConverged: boolean;
   evidenceSingleActConverged: boolean;
   evidenceSingleActNreg: string | null;
+  calendarScopedRecurringActAmbiguous: boolean;
   topActCandidate?: ActCandidateInput;
 }
 
@@ -745,6 +746,42 @@ function sortEvidenceByCoverageWeighted(
     });
 }
 
+const UKRAINIAN_MONTH_GENITIVE_REGEX =
+  /(?:січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)/iu;
+
+function queryHasExplicitCalendarDate(query: string): boolean {
+  return (
+    /\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b/u.test(query) ||
+    new RegExp(`\\b\\d{1,2}\\s+${UKRAINIAN_MONTH_GENITIVE_REGEX.source}\\s+\\d{4}(?:\\s*р(?:оку)?\\b)?`, 'iu').test(query)
+  );
+}
+
+function collectCalendarScopedAlignedEvidence(input: {
+  rankedEvidence: BuildSelectedActsOutput['chunks_evidence_top_acts'];
+  actCandidatesTopHydrated: ActCandidateInput[];
+  query: string;
+}): Array<{
+  evidence: BuildSelectedActsOutput['chunks_evidence_top_acts'][number];
+  candidate: ActCandidateInput;
+}> {
+  if (!queryHasExplicitCalendarDate(input.query)) return [];
+  const out: Array<{
+    evidence: BuildSelectedActsOutput['chunks_evidence_top_acts'][number];
+    candidate: ActCandidateInput;
+  }> = [];
+  for (const evidence of input.rankedEvidence) {
+    if (!evidence?.rada_nreg) continue;
+    const candidate = input.actCandidatesTopHydrated.find((item) =>
+      sameRadaNreg(item.rada_nreg, evidence.rada_nreg)
+    );
+    if (!candidate) continue;
+    if (!candidateMatchesStrictExplicitActScopeQuery(candidate, input.query)) continue;
+    if (!hasActTitleSupportOverlap(input.query, candidate.title, candidate.document_type)) continue;
+    out.push({ evidence, candidate });
+  }
+  return out;
+}
+
 function shouldPreferRelevanceLeaderForSpecializedPrimaryLawLocator(input: {
   coverageLeader: BuildSelectedActsOutput['chunks_evidence_top_acts'][number] | undefined;
   relevanceLeader: BuildSelectedActsOutput['chunks_evidence_top_acts'][number] | undefined;
@@ -862,6 +899,14 @@ function deriveEvidenceSingleActConvergence(input: {
   const topEvidence = rankedEvidence[0];
   const runnerUpEvidence = rankedEvidence[1];
   if (!topEvidence?.rada_nreg) return null;
+  const calendarScopedAlignedEvidence = collectCalendarScopedAlignedEvidence({
+    rankedEvidence,
+    actCandidatesTopHydrated: input.actCandidatesTopHydrated,
+    query: input.query,
+  });
+  if (queryHasExplicitCalendarDate(input.query) && calendarScopedAlignedEvidence.length > 1) {
+    return null;
+  }
   const topEvidenceCandidate = input.actCandidatesTopHydrated.find((candidate) =>
     sameRadaNreg(candidate.rada_nreg, topEvidence.rada_nreg)
   );
@@ -1247,6 +1292,13 @@ export async function resolveSingleActScopeSelection(
           metadataGroundingReasonCodes,
         })
       : null;
+  const calendarScopedRecurringActAmbiguous =
+    queryHasExplicitCalendarDate(query) &&
+    collectCalendarScopedAlignedEvidence({
+      rankedEvidence: sortEvidenceByCoverageWeighted(chunksEvidenceTopActs),
+      actCandidatesTopHydrated,
+      query,
+    }).length > 1;
   const metadataSingleActConverged =
     (explicitActScopeCueQuery || compactTitleFragmentQuery) &&
     !exactSingleActConverged &&
@@ -1826,6 +1878,7 @@ export async function resolveSingleActScopeSelection(
     metadataSingleActConverged,
     evidenceSingleActConverged,
     evidenceSingleActNreg,
+    calendarScopedRecurringActAmbiguous,
     topActCandidate: metadataScopeActCandidate ?? topActCandidate,
   };
 }

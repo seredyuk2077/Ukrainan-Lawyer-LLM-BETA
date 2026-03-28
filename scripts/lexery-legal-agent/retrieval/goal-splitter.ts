@@ -7,6 +7,12 @@ import type { EvidenceGoal, EvidenceGoalType, GoalSplitResult } from './goals.js
 import type { RoutingFlags } from '../classify/types.js';
 import { config } from '../lib/config.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
+import { extractQuotedActTitleFragments, extractStructuredActIdentifiers } from './act-taxonomy-store.js';
+import {
+  hasInterrogativeActLocatorCue,
+  looksLikeCompactActTitleFragmentQuery,
+} from './descriptive-act-title.js';
+export { hasInterrogativeActLocatorCue, looksLikeCompactActTitleFragmentQuery } from './descriptive-act-title.js';
 
 const GOALS_MAX = config.u4GoalsMax;
 
@@ -59,8 +65,11 @@ const CATEGORY_SPLIT_MIN_RATIO = 0.3;
 
 /** Taxonomy input for category-cluster split (from getTaxonomyCandidates). */
 export type TaxonomyInputForSplit = {
+  rada_nreg_candidates?: string[];
   alias_hits: Array<{ rada_nreg: string; category?: string | null }>;
   category_hints: string[];
+  exact_act_hit_count?: number;
+  grounded_act_hit_count?: number;
 };
 
 /** Structure-only: multiple "?" or conjunction "і"/"та" before second question. No topic/domain inference. */
@@ -100,6 +109,7 @@ const PROCEDURE_GOAL_PATTERNS = [
   /внес\p{L}*\s+відомост/iu,
   /єрдр/iu,
   /куди/iu,
+  /до\s+якого\s+суд/iu,
   /хто/iu,
   /коли/iu,
 ];
@@ -111,12 +121,110 @@ const LIABILITY_GOAL_PATTERNS = [
   /штраф/iu,
 ];
 
+const ACT_METADATA_FOLLOW_UP_PATTERNS = [
+  /(?:^|[\s,])хто\s+(?:(?:це|цей|ця|ці|його|її|їх|воно|вона|вони)\s+)?(?:прийняв|ухвалив|затвердив|видав|підписав)(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])ким\s+(?:(?:це|цей|ця|ці|його|її|їх|воно|вона|вони)\s+)?(?:прийнято|прийняте|ухвалено|затверджено|видано|підписано)(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])яким\s+органом(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])з\s+якого\s+моменту(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])з\s+якої\s+дати(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])коли\s+(?:(?:це|цей|ця|ці|його|її|їх|воно|вона|вони)\s+)?(?:прийнято|ухвалено|затверджено|видано|підписано|набрало\s+чинності|втратило\s+чинність|припинилося)(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])хто\s+прийняв\s+це\s+рішення(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])коли\s+це\s+(?:рішення|розпорядження|постанова|наказ|указ)(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])ї(?:ї|х)\s+застосуван/iu,
+];
+
+const STRONG_SELECTOR_PROCEDURAL_SPLIT_PATTERNS = [
+  /підслід/iu,
+  /підсуд/iu,
+  /розсліду/iu,
+  /оскарж/iu,
+  /апеляц/iu,
+  /касац/iu,
+  /скарг/iu,
+  /єрдр/iu,
+  /внес\p{L}*\s+відомост/iu,
+  /документ\p{L}*\s+пода(?:ти|ння|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu,
+  /(?:^|[\s,])куди\s+пода(?:ти|вати|ється|ються|є|ють|ючи)(?=$|[^\p{L}\p{N}])/iu,
+];
+
 function normalizeSubqueryForSemantics(subquery: string): string {
   return subquery
     .normalize('NFC')
     .replace(/\?+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function hasStrongSelectorProceduralSplitCue(query: string): boolean {
+  const normalized = query.normalize('NFC');
+  return STRONG_SELECTOR_PROCEDURAL_SPLIT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function splitDistinctBundleClauses(query: string): [string, string] | null {
+  const normalized = query.normalize('NFC').trim();
+  if (!normalized) return null;
+
+  const questionParts = normalized.split(/\s*\?\s*/u).map((part) => part.trim()).filter(Boolean);
+  if (questionParts.length >= 2) {
+    return [questionParts[0] ?? '', questionParts.slice(1).join(' ').trim()];
+  }
+
+  const andMatch =
+    normalized.match(/^(.+?)\s+і\s+(.+)$/iu) || normalized.match(/^(.+?)\s+та\s+(.+)$/iu);
+  if (andMatch) {
+    return [andMatch[1]?.trim() ?? '', andMatch[2]?.trim() ?? ''];
+  }
+
+  const commaAMatch = normalized.match(/^(.+?),\s*а\s+(.+)$/iu);
+  if (commaAMatch) {
+    return [commaAMatch[1]?.trim() ?? '', commaAMatch[2]?.trim() ?? ''];
+  }
+
+  const semicolonMatch = normalized.match(/^(.+?);\s*(.+)$/u);
+  if (semicolonMatch) {
+    return [semicolonMatch[1]?.trim() ?? '', semicolonMatch[2]?.trim() ?? ''];
+  }
+
+  return null;
+}
+
+function clausesSupportStrongProceduralMixedBundle(left: string, right: string): boolean {
+  const leftGoalType = inferGoalType(left, false);
+  const rightGoalType = inferGoalType(right, false);
+  const hasProcedure = leftGoalType === 'procedure' || rightGoalType === 'procedure';
+  const hasNonProcedure = leftGoalType !== 'procedure' || rightGoalType !== 'procedure';
+  if (!hasProcedure || !hasNonProcedure) return false;
+  if (leftGoalType === 'procedure' && hasStrongSelectorProceduralSplitCue(left)) return true;
+  if (rightGoalType === 'procedure' && hasStrongSelectorProceduralSplitCue(right)) return true;
+  return false;
+}
+
+export function hasDistinctProceduralSupportBundleCue(query: string): boolean {
+  const clauses = splitDistinctBundleClauses(query);
+  if (!clauses) return false;
+  const [left, right] = clauses;
+  if (!left || !right) return false;
+  return clausesSupportStrongProceduralMixedBundle(left, right);
+}
+
+function hasDominantSoftSingleActConvergence(taxonomy: TaxonomyInputForSplit): boolean {
+  const topCandidate = taxonomy.rada_nreg_candidates?.[0]?.trim();
+  if (!topCandidate) return false;
+
+  const supportByNreg = new Map<string, number>();
+  for (const hit of taxonomy.alias_hits ?? []) {
+    const radaNreg = hit.rada_nreg?.trim();
+    if (!radaNreg) continue;
+    supportByNreg.set(radaNreg, (supportByNreg.get(radaNreg) ?? 0) + 1);
+  }
+
+  const topSupport = supportByNreg.get(topCandidate) ?? 0;
+  if (topSupport < 2) return false;
+  const secondSupport = [...supportByNreg.entries()]
+    .filter(([radaNreg]) => radaNreg !== topCandidate)
+    .map(([, support]) => support)
+    .sort((left, right) => right - left)[0] ?? 0;
+  return topSupport > secondSupport;
 }
 
 function uniqueSignals(signals: string[]): string[] {
@@ -210,11 +318,17 @@ function buildGoalMustHaveSignals(subquery: string, goalType: EvidenceGoalType):
 /** Structure-only: query has two segments separated by " і " or " та " (min length each). Used to trigger planner for multi-clause. */
 export function hasMultiClauseStructure(query: string, minSegmentLength = 5): boolean {
   const q = query.normalize('NFC').trim();
+  if (looksLikeCompactActTitleFragmentQuery(q)) return false;
+  const split = findTopLevelConjunctionSplit(q);
+  if (!split) return false;
+  const [left, right] = split;
+  if (left.length < minSegmentLength || right.length < minSegmentLength) return false;
+  if (shouldSkipStructuralSplitForSingleActScopeQuery(q, left, right)) return false;
   const selectors = extractQueryCitationSelectors(q);
-  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) return false;
-  const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
-  if (!andMatch) return false;
-  return andMatch[1].trim().length >= minSegmentLength && andMatch[2].trim().length >= minSegmentLength;
+  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) {
+    return clausesSupportStrongProceduralMixedBundle(left, right);
+  }
+  return true;
 }
 
 function injectSharedTailIntoSplit(left: string, right: string): [string, string] {
@@ -233,10 +347,54 @@ function injectSharedTailIntoSplit(left: string, right: string): [string, string
   return [leftWithTail, `${rightHead} ${sharedTail}`.trim()];
 }
 
+function maskQuotedFragmentsForClauseSplit(value: string): string {
+  return value.replace(/[«"]([^»"\n]{1,220})[»"]/gu, (fragment) =>
+    fragment.replace(/[^\s«»"]/gu, 'x')
+  );
+}
+
+function findTopLevelConjunctionSplit(query: string): [string, string] | null {
+  const normalized = query.normalize('NFC').trim();
+  if (!normalized) return null;
+  const masked = maskQuotedFragmentsForClauseSplit(normalized);
+  const match = /^(.*?)\s+(і|та)\s+(.+)$/iu.exec(masked);
+  if (!match) return null;
+  const left = normalized.slice(0, match[1]?.length ?? 0).trim();
+  const separatorMatch = /^\s+(?:і|та)\s+/iu.exec(masked.slice(match[1]?.length ?? 0));
+  const rightStart = (match[1]?.length ?? 0) + (separatorMatch?.[0].length ?? 0);
+  const right = normalized.slice(rightStart).trim();
+  if (!left || !right) return null;
+  return [left, right];
+}
+
+function shouldSkipStructuralSplitForSingleActScopeQuery(
+  query: string,
+  left: string,
+  right: string
+): boolean {
+  if (clausesSupportStrongProceduralMixedBundle(left, right)) return false;
+  const leftLocator = looksLikeActMetadataLocatorGoal(left);
+  const rightLocator = looksLikeActMetadataLocatorGoal(right);
+  if ((leftLocator && hasStrongSelectorProceduralSplitCue(right)) || (rightLocator && hasStrongSelectorProceduralSplitCue(left))) {
+    return false;
+  }
+  const explicitSingleActScopeCue =
+    extractStructuredActIdentifiers(query).length === 1 ||
+    extractQuotedActTitleFragments(query).length === 1 ||
+    countStrongActScopeCues(query) === 1;
+  if (!explicitSingleActScopeCue) return false;
+  const selectors = extractQueryCitationSelectors(query);
+  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) {
+    return !clausesSupportStrongProceduralMixedBundle(left, right);
+  }
+  return true;
+}
+
 /** Split query into subqueries by "?" or by conjunctions "і" / "та" before second question. */
 function splitIntoSubqueries(query: string): string[] {
   const q = query.normalize('NFC').trim();
   if (!q) return [q];
+  if (looksLikeCompactActTitleFragmentQuery(q)) return [q];
 
   const parts: string[] = [];
   const byQuestion = q.split(/\s*\?\s*/).map((s) => s.trim()).filter(Boolean);
@@ -250,11 +408,25 @@ function splitIntoSubqueries(query: string): string[] {
   }
 
   const selectors = extractQueryCitationSelectors(q);
-  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) return [q];
-
-  const andMatch = q.match(/^(.+?)\s+і\s+(.+)$/i) || q.match(/^(.+?)\s+та\s+(.+)$/i);
-  if (andMatch && andMatch[1].length >= 5 && andMatch[2].length >= 5) {
-    const [left, right] = injectSharedTailIntoSplit(andMatch[1], andMatch[2]);
+  const conjunctionSplit = findTopLevelConjunctionSplit(q);
+  if (
+    conjunctionSplit &&
+    shouldSkipStructuralSplitForSingleActScopeQuery(q, conjunctionSplit[0], conjunctionSplit[1])
+  ) {
+    return [q];
+  }
+  if (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) {
+    if (conjunctionSplit && conjunctionSplit[0].length >= 5 && conjunctionSplit[1].length >= 5) {
+      const [left, right] = conjunctionSplit;
+      if (clausesSupportStrongProceduralMixedBundle(left, right)) {
+        const [splitLeft, splitRight] = injectSharedTailIntoSplit(left, right);
+        return injectSharedSubjectIntoQuestionParts([splitLeft, splitRight]).slice(0, GOALS_MAX);
+      }
+    }
+    return [q];
+  }
+  if (conjunctionSplit && conjunctionSplit[0].length >= 5 && conjunctionSplit[1].length >= 5) {
+    const [left, right] = injectSharedTailIntoSplit(conjunctionSplit[0], conjunctionSplit[1]);
     return injectSharedSubjectIntoQuestionParts([left, right]).slice(0, GOALS_MAX);
   }
 
@@ -376,6 +548,47 @@ function hasProceduralBundleReference(query: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
+function looksLikeActMetadataFollowUp(subquery: string): boolean {
+  const normalized = normalizeSubqueryForSemantics(subquery);
+  return ACT_METADATA_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function looksLikeActMetadataLocatorGoal(subquery: string): boolean {
+  return hasInterrogativeActLocatorCue(subquery.normalize('NFC'));
+}
+
+function looksLikeActMetadataBundleQuery(query: string): boolean {
+  const normalized = query.normalize('NFC');
+  return hasInterrogativeActLocatorCue(normalized) && ACT_METADATA_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function tryCompactActMetadataBundleGoals(
+  query: string,
+  goals: EvidenceGoal[],
+  domainHint: string | undefined,
+  isComplianceContext: boolean
+): EvidenceGoal[] | null {
+  if (goals.length < 2) return null;
+  if (!looksLikeActMetadataBundleQuery(query)) return null;
+  if (countStrongActScopeCues(query) > 1) return null;
+  if (goals.some((goal) => goal.goal_type === 'liability')) return null;
+  if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
+  const locatorGoals = goals.filter((goal) => looksLikeActMetadataLocatorGoal(goal.subquery));
+  if (locatorGoals.length !== 1) return null;
+  const metadataFollowUpGoals = goals.filter((goal) => !looksLikeActMetadataLocatorGoal(goal.subquery));
+  if (metadataFollowUpGoals.length === 0) return null;
+  if (!metadataFollowUpGoals.every((goal) => looksLikeActMetadataFollowUp(goal.subquery))) return null;
+
+  return [
+    {
+      id: 'goal_0',
+      goal_type: isComplianceContext ? 'compliance_check' : 'definition',
+      subquery: query.slice(0, 4000),
+      domain_hint: domainHint,
+    },
+  ];
+}
+
 function mergeGoalSignals(goals: EvidenceGoal[]): string[] | undefined {
   const merged = [
     ...new Set(
@@ -388,6 +601,17 @@ function mergeGoalSignals(goals: EvidenceGoal[]): string[] | undefined {
   return merged.length > 0 ? merged : undefined;
 }
 
+function hasActLocatorProceduralRemedyBundle(goals: EvidenceGoal[]): boolean {
+  const locatorGoals = goals.filter((goal) => looksLikeActMetadataLocatorGoal(goal.subquery));
+  if (locatorGoals.length !== 1) return false;
+  return goals.some(
+    (goal) =>
+      !looksLikeActMetadataLocatorGoal(goal.subquery) &&
+      goal.goal_type === 'procedure' &&
+      hasStrongSelectorProceduralSplitCue(goal.subquery)
+  );
+}
+
 function tryCompactProceduralBundleGoals(
   query: string,
   goals: EvidenceGoal[],
@@ -397,6 +621,11 @@ function tryCompactProceduralBundleGoals(
   if (goals.length < 2) return null;
   if (!goals.every((goal) => goal.goal_type === 'procedure')) return null;
   if (!hasProceduralBundleReference(query)) return null;
+  const explicitActScopeCue = hasExplicitActScopeCue(query);
+  const strongActScopeCueCount = countStrongActScopeCues(query);
+  if (strongActScopeCueCount > 1) return null;
+  if (explicitActScopeCue && strongActScopeCueCount !== 1) return null;
+  if (strongActScopeCueCount === 1 && hasActLocatorProceduralRemedyBundle(goals)) return null;
   return [
     {
       id: 'goal_0',
@@ -426,14 +655,42 @@ function looksLikeNormLocatorBundle(query: string, goals: EvidenceGoal[]): boole
 
 export function hasExplicitActScopeCue(query: string): boolean {
   const normalized = query.normalize('NFC');
+  if (extractStructuredActIdentifiers(query).length > 0) return true;
+  if (hasInterrogativeActLocatorCue(normalized)) return true;
   return [
-    /(?:^|[\s,])за\s+законом\s+про\s+/iu,
-    /(?:^|[\s,])законом?\s+про\s+/iu,
-    /(?:^|[\s,])відповідно\s+до\s+(?:закону|кодексу|порядку|правил|положення)/iu,
-    /(?:^|[\s,])згідно\s+із?\s+(?:законом|кодексом|порядком|правилами|положенням)/iu,
-    /(?:^|[\s,])передбачен\p{L}*\s+(?:законом|кодексом|порядком|правилами|положенням)/iu,
+    /(?:^|[\s,])за\s+законом(?:\s+україни)?\s+[«"“”„]?\s*про\s+/iu,
+    /(?:^|[\s,])законом?(?:\s+україни)?\s+[«"“”„]?\s*про\s+/iu,
+    /(?:^|[\s,])за\s+(?:конвенцією|міжнародним\s+договором|угодою|статутом)\s+/iu,
+    /(?:^|[\s,])(?:конвенція|міжнародний\s+договір|угода|статут)\s+[«"“”„]?[^\n,.?!;:]{4,160}/iu,
+    /(?:^|[\s,])(?:постанова|наказ|розпорядження|указ|рішення)\s+про\s+[^\n,.?!;:]{6,160}/iu,
+    /(?:^|[\s,])відповідно\s+до\s+(?:закону|кодексу|порядку|правил|положення|постанови|наказу|розпорядження|указу|рішення|інструкції)/iu,
+    /(?:^|[\s,])згідно\s+із?\s+(?:законом|кодексом|порядком|правилами|положенням|постановою|наказом|розпорядженням|указом|рішенням|інструкцією)/iu,
+    /(?:^|[\s,])(?:відповідно\s+до|згідно\s+із?)\s+(?:конвенції|міжнародного\s+договору|угоди|статуту)/iu,
+    /(?:^|[\s,])передбачен\p{L}*\s+(?:законом|кодексом|порядком|правилами|положенням|постановою|наказом|розпорядженням|указом|рішенням|інструкцією)/iu,
     /(?:^|[\s,])кодекс(?:ом|у|і)?\s+україни/iu,
+    /(?:^|[\s,])(?:постанова|наказ|розпорядження|указ|рішення|положення|правила|порядок|інструкція)\s+№\s*[\p{L}\d./-]{2,}/iu,
+    /(?:^|[\s,])(?:постанова|наказ|розпорядження|указ|рішення)\s+[^\n,.?!;:]{0,40}№\s*[\p{L}\d./-]{2,}/iu,
+    /(?:^|[\s,])за\s+(?:постановою|наказом|розпорядженням|указом|рішенням|положенням|правилами|порядком|інструкцією)\s+№\s*[\p{L}\d./-]{2,}/iu,
   ].some((pattern) => pattern.test(normalized));
+}
+
+export function countStrongActScopeCues(query: string): number {
+  const structuredIdentifiers = extractStructuredActIdentifiers(query);
+  if (structuredIdentifiers.length > 0) return structuredIdentifiers.length;
+  const normalized = query.normalize('NFC');
+  const patterns = [
+    /(?:^|[\s,?!.])я(?:ким|кою|ке|кий|ка|кі|кого|кої|кому|кими|ких)(?:\s+саме)?\s+(?:(?:(?:спеціальн|профільн|урядов|підзаконн|нормативн|нормативно-правов|відомч|галузев|банківськ|регуляторн)\p{L}*\s+){0,2})(?:акт\p{L}*|закон\p{L}*|кодекс\p{L}*|постанов\p{L}*|наказ\p{L}*|розпоряджен\p{L}*|указ\p{L}*|рішен\p{L}*)\s+[^\n,.?!;:]{3,200}/giu,
+    /(?:^|[\s,])(?:постанов\p{L}*|наказ\p{L}*|розпоряджен\p{L}*|указ\p{L}*|рішен\p{L}*|положенн\p{L}*|правил\p{L}*|поряд\p{L}*|інструкц\p{L}*)(?:\s+[^\n,.?!;:]{0,40})?\s+№\s*[\p{L}\d./-]{2,}/giu,
+    /(?:^|[\s,])(?:постанов\p{L}*|наказ\p{L}*|розпоряджен\p{L}*|указ\p{L}*|рішен\p{L}*)\s+про\s+[^\n,.?!;:]{6,160}/giu,
+    /(?:^|[\s,])(?:за\s+)?закон\p{L}*(?:\s+україни)?\s+[«"“”„]?\s*про\s+[^\n,.?!;:]{4,80}/giu,
+    /(?:^|[\s,])кодекс\p{L}*\s+україни/giu,
+    /(?:^|[\s,])(?:за\s+)?(?:конвенц\p{L}*|міжнародн\p{L}*\s+договор\p{L}*|угод\p{L}*|статут\p{L}*)\s+[«"“”„]?[^\n,.?!;:]{4,120}/giu,
+  ];
+  return patterns.reduce((count, pattern) => count + [...normalized.matchAll(pattern)].length, 0);
+}
+
+export function hasSingleStrongActScopeCue(query: string): boolean {
+  return countStrongActScopeCues(query) === 1;
 }
 
 function tryCompactSameActBundleGoals(
@@ -445,11 +702,14 @@ function tryCompactSameActBundleGoals(
 ): EvidenceGoal[] | null {
   if (goals.length < 2) return null;
   if (!reasonCodes.includes('multi_clause_structure')) return null;
-  const explicitActScopeCue = hasExplicitActScopeCue(query);
+  const strongActScopeCueCount = countStrongActScopeCues(query);
+  const strongSingleActScopeCue = strongActScopeCueCount === 1;
+  if (strongActScopeCueCount > 1) return null;
   const questionMarks = (query.match(/\?/g) || []).length;
-  if (reasonCodes.includes('multi_question') && questionMarks >= 2 && !explicitActScopeCue) return null;
+  if (reasonCodes.includes('multi_question') && questionMarks >= 2 && !strongSingleActScopeCue) return null;
   if (reasonCodes.includes('contrastive_liability_split')) return null;
-  if (!looksLikeNormLocatorBundle(query, goals) && !explicitActScopeCue) return null;
+  if (!looksLikeNormLocatorBundle(query, goals) && !strongSingleActScopeCue) return null;
+  if (strongSingleActScopeCue && hasActLocatorProceduralRemedyBundle(goals)) return null;
   if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
   const distinctGoalDomains = new Set(
     goals
@@ -461,7 +721,18 @@ function tryCompactSameActBundleGoals(
   const mergedSignals = mergeGoalSignals(goals);
   const hasProcedure = goals.some((goal) => goal.goal_type === 'procedure');
   const hasLiability = goals.some((goal) => goal.goal_type === 'liability');
-  if (hasProcedure && hasLiability && !explicitActScopeCue) return null;
+  const distinctGoalTypes = new Set(
+    goals.map((goal) => goal.goal_type).filter((goalType): goalType is EvidenceGoalType => Boolean(goalType))
+  );
+  if (
+    hasProcedure &&
+    [...distinctGoalTypes].some((goalType) => goalType !== 'procedure') &&
+    extractQueryCitationSelectors(query).explicitSelectorCount > 0 &&
+    hasStrongSelectorProceduralSplitCue(query)
+  ) {
+    return null;
+  }
+  if (hasProcedure && hasLiability) return null;
   const compactedGoalType = hasProcedure && !hasLiability
     ? 'procedure'
     : hasLiability && !hasProcedure
@@ -493,6 +764,10 @@ export function heuristicGoalSplit(
   const inputLikeTable = !!routingFlags?.input_looks_like_table;
   const inputIsLarge = !!routingFlags?.input_is_large;
 
+  const topLevelConjunctionSplit = findTopLevelConjunctionSplit(query);
+  const singleActScopeCompacted =
+    !!topLevelConjunctionSplit &&
+    shouldSkipStructuralSplitForSingleActScopeQuery(query, topLevelConjunctionSplit[0], topLevelConjunctionSplit[1]);
   const multiQ = detectMultiQuestion(query);
   const multiClause = hasMultiClauseStructure(query);
   const { domains } = getDomainsFromHint(domainHint);
@@ -513,14 +788,24 @@ export function heuristicGoalSplit(
     (inputLikeContract && query.length > 100);
 
   if (!useMultiGoal || subqueries.length === 0) {
+    const compactedActMetadataBundle =
+      singleActScopeCompacted && looksLikeActMetadataBundleQuery(query);
+    const singleGoalType = compactedActMetadataBundle
+      ? 'definition'
+      : inputLikeContract
+        ? 'compliance_check'
+        : inferGoalType(query, false);
+    const singleReasonCodes: string[] = [];
+    if (singleActScopeCompacted) singleReasonCodes.push('same_act_bundle_compaction');
+    if (compactedActMetadataBundle) singleReasonCodes.push('act_metadata_bundle_compaction');
     const single: EvidenceGoal = {
       id: 'goal_0',
-      goal_type: inputLikeContract ? 'compliance_check' : inferGoalType(query, false),
+      goal_type: singleGoalType,
       subquery: query.slice(0, 4000),
       domain_hint: domainHint,
-      must_have_signals: buildGoalMustHaveSignals(query, inputLikeContract ? 'compliance_check' : inferGoalType(query, false)),
+      must_have_signals: compactedActMetadataBundle ? undefined : buildGoalMustHaveSignals(query, singleGoalType),
     };
-    return { goals: [single], used_heuristic: true, used_llm_planner: false, reason_codes: [] };
+    return { goals: [single], used_heuristic: true, used_llm_planner: false, reason_codes: singleReasonCodes };
   }
 
   const capped = subqueries.slice(0, GOALS_MAX);
@@ -549,6 +834,21 @@ export function heuristicGoalSplit(
       used_heuristic: true,
       used_llm_planner: false,
       reason_codes: [...reasonCodes, 'procedural_bundle_compaction'],
+    };
+  }
+
+  const compactedActMetadataGoals = tryCompactActMetadataBundleGoals(
+    query,
+    goals,
+    domainHint,
+    inputLikeContract
+  );
+  if (compactedActMetadataGoals) {
+    return {
+      goals: compactedActMetadataGoals,
+      used_heuristic: true,
+      used_llm_planner: false,
+      reason_codes: [...reasonCodes, 'same_act_bundle_compaction', 'act_metadata_bundle_compaction'],
     };
   }
 
@@ -594,6 +894,18 @@ export function tryCategoryClusterSplitV2(
   _routingFlags?: RoutingFlags | null
 ): GoalSplitResult | null {
   if (isDirectCitation(query)) return null;
+  if (countStrongActScopeCues(query) === 1) {
+    return null;
+  }
+  if ((taxonomy.exact_act_hit_count ?? 0) === 1 || (taxonomy.grounded_act_hit_count ?? 0) === 1) {
+    return null;
+  }
+  if (
+    looksLikeCompactActTitleFragmentQuery(query) &&
+    hasDominantSoftSingleActConvergence(taxonomy)
+  ) {
+    return null;
+  }
   const hits = taxonomy.alias_hits ?? [];
   if (hits.length === 0) return null;
 

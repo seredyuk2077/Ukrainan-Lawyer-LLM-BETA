@@ -7,6 +7,7 @@ import type { LegalDomain } from './types.js';
 // Structural only: act abbrevs (ККУ, ЦКУ, ПКУ, …), article ref (ст. N). No "договір", "позов", "трудовий", etc.
 const DOMAIN_RULES: { pattern: RegExp; domain: LegalDomain }[] = [
   { pattern: /(?:^|[\s\W])(ККУ|КК\s+України|КПК)(?:[\s\W]|$)/i, domain: 'criminal' },
+  { pattern: /(?:^|[\s\W])ЄРДР(?:[\s\W]|$)/iu, domain: 'criminal' },
   { pattern: /(?:^|[\s\W])ЦКУ(?:[\s\W]|$)/i, domain: 'civil' },
   { pattern: /(?:^|[\s\W])КЗпП(?:[\s\W]|$)/i, domain: 'labor' },
   { pattern: /(?:^|[\s\W])ПКУ(?:[\s\W]|$)/i, domain: 'tax' },
