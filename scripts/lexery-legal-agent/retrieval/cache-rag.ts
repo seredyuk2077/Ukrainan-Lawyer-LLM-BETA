@@ -17,6 +17,7 @@ import {
   getProcedureCategoryEnvelope,
   isProcedureCategory,
   hasExplicitActScopeCue,
+  looksLikeCompactActTitleFragmentQuery,
 } from './goal-splitter.js';
 import { callLlmRetrievalPlanner, type LlmPlannerResult } from './llm-planner.js';
 import {
@@ -33,6 +34,10 @@ import {
   getActMeta,
   findActByTitleFragment,
   findActByAlias,
+  buildTaxonomyQuerySignals,
+  extractActReferenceSignals,
+  extractQuotedActTitleFragments,
+  scoreActCandidate,
   type TaxonomyCandidatesResult,
   type TaxonomyHintsUsed,
 } from './act-taxonomy-store.js';
@@ -85,8 +90,11 @@ import {
 import {
   finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
+  resolveExplicitPrimaryActMultiGoalSelection,
   shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
+  trimLowConfidenceMultiGoalSelection,
+  trimUngroundedMultiGoalFallbackSelection,
 } from './multi-goal-confidence.js';
 import {
   buildSingleGoalFirstPassPlan,
@@ -274,6 +282,17 @@ async function hydrateActCandidatesMeta<T extends CandidateMetaHydratable>(candi
 
 type EvidenceActLike = { rada_nreg: string };
 
+function buildChunkEvidenceCandidateQuerySignals(query: string): string[] {
+  const { tokens, phrases } = buildTaxonomyQuerySignals(query);
+  return uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+    ...phrases,
+    ...tokens,
+  ]);
+}
+
 async function backfillChunkEvidenceCandidates<
   T extends CandidateMetaHydratable & {
     score?: number;
@@ -281,23 +300,36 @@ async function backfillChunkEvidenceCandidates<
     why_tag?: string;
     source_tier?: 'ACTS_1' | 'ACTS_2';
   },
->(candidates: T[], evidenceActs: EvidenceActLike[]): Promise<T[]> {
+>(
+  candidates: T[],
+  evidenceActs: EvidenceActLike[],
+  input: { query: string; domainHint?: string }
+): Promise<T[]> {
   const existing = new Set(candidates.map((candidate) => candidate.rada_nreg));
   const missingNregs = [...new Set(evidenceActs.map((act) => act.rada_nreg).filter((nreg) => !existing.has(nreg)))];
   if (missingNregs.length === 0) return hydrateActCandidatesMeta(candidates);
+  const querySignals = buildChunkEvidenceCandidateQuerySignals(input.query);
 
   const additions = await Promise.all(
     missingNregs.map(async (rada_nreg) => {
-      const meta = await getActMeta(rada_nreg);
+      const [meta, scoredCandidate] = await Promise.all([
+        getActMeta(rada_nreg),
+        querySignals.length > 0
+          ? scoreActCandidate(rada_nreg, querySignals, input.domainHint)
+          : Promise.resolve({ score: 0, reasons: [] }),
+      ]);
       return {
         rada_nreg,
         title: meta?.title ?? undefined,
         category: meta?.category ?? undefined,
         document_type: meta?.document_type ?? undefined,
         document_type_slug: meta?.document_type_slug ?? undefined,
-        score: 0,
-        reasons: ['chunks_evidence_meta'],
-        why_tag: 'CHUNKS_EVIDENCE_META',
+        score: scoredCandidate.score,
+        reasons: uniqueStrings([...(scoredCandidate.reasons ?? []), 'chunks_evidence_meta']),
+        why_tag:
+          (scoredCandidate.reasons?.length ?? 0) > 0
+            ? 'CHUNKS_EVIDENCE_META_SCORED'
+            : 'CHUNKS_EVIDENCE_META',
         source_tier: 'ACTS_1' as const,
       } satisfies T;
     })
@@ -615,58 +647,38 @@ async function runOneGoal(
     }
   }
 
-  const stepsToRun: Array<{ kind: 'lldbi_chunks' | 'lldbi_acts'; collection: string }> = [];
-  if (steps?.length) {
-    for (const s of steps) {
-      if (s.kind === 'lldbi_chunks') stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-      else if (s.kind === 'lldbi_acts' && bootstrapActNregs.length === 0)
-        stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
-    }
-  }
-  if (stepsToRun.length === 0) {
-    stepsToRun.push({ kind: 'lldbi_chunks', collection: collections.chunks });
-    if (bootstrapActNregs.length === 0) stepsToRun.push({ kind: 'lldbi_acts', collection: collections.acts });
-  }
-  const rawPerStep: RawHit[] = [];
-  const stepResults = await Promise.allSettled(
-    stepsToRun.map(async ({ kind, collection }) => {
-      const stepStart = Date.now();
-      try {
-        const limit = kind === 'lldbi_chunks' ? topK : (searchPlan.thresholds?.top_k_acts ?? 10);
-        const res = await qdrantSearch({
-          collection,
-          vector,
-          limit,
-          timeoutMs: config.qdrantTimeoutSec * 1000,
-          callCounter,
-        });
-        const rawHits = res
-          .map((hit) => payloadToRawHit(hit, kind))
-          .filter((raw) => raw.r2_key && raw.json_path)
-          .map((raw) => ({
-            ...raw,
-            goal_id: goal.id,
-          }));
-        return {
-          collection,
-          latencyMs: Date.now() - stepStart,
-          rawHits,
-        };
-      } catch {
-        return {
-          collection,
-          latencyMs: Date.now() - stepStart,
-          rawHits: [] as RawHit[],
-        };
-      }
-    })
+  const firstPassPlan = buildSingleGoalFirstPassPlan({
+    steps,
+    collections,
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: taxonomyResult.rada_nreg_candidates?.length ?? 0,
+      alias_hit_count: taxonomyResult.alias_hits?.length ?? 0,
+      exact_act_hit_count: taxonomyResult.exact_act_hit_count ?? 0,
+      grounded_act_hit_count: taxonomyResult.grounded_act_hit_count ?? 0,
+      category_hint_count: goalCategoryHints.length,
+      document_type_hint_count: lldbiHints?.documentTypeHints?.length ?? 0,
+    },
+    descriptiveActTitleScope: looksLikeCompactActTitleFragmentQuery(goal.subquery),
+  });
+  const stepsToRun = firstPassPlan.stepsToRun.filter(
+    (step) => step.kind !== 'lldbi_acts' || bootstrapActNregs.length === 0
   );
-  for (const result of stepResults) {
-    if (result.status !== 'fulfilled') continue;
-    stepsLatencyMs.push(result.value.latencyMs);
-    collectionsUsed.push(result.value.collection);
-    rawPerStep.push(...result.value.rawHits);
-  }
+  const firstPassSearch = await runSingleGoalFirstPassSearch({
+    stepsToRun,
+    vectorsByQuery: [vector],
+    primaryVector: vector,
+    topKChunks: topK,
+    topKActs: searchPlan.thresholds?.top_k_acts ?? 10,
+    timeoutMs: config.qdrantTimeoutSec * 1000,
+    callCounter,
+  });
+  stepsLatencyMs.push(...firstPassSearch.stepsLatencyMs);
+  collectionsUsed.push(...firstPassSearch.collectionsUsed);
+  const rawPerStep: RawHit[] = firstPassSearch.rawPerStep.map((raw) => ({
+    ...raw,
+    goal_id: goal.id,
+  }));
   const aboveThreshold = rawPerStep.filter((h) => h.score >= minScore);
   const candidateHits = aboveThreshold.length === 0 && rawPerStep.length > 0 ? rawPerStep : aboveThreshold;
   candidateHits.sort(compareRawHitByScore);
@@ -697,6 +709,7 @@ async function runOneGoal(
     querySelectors,
     entities: entities ?? [],
     explicitActScopeCue: hasExplicitActScopeCue(goal.subquery),
+    descriptiveActTitleScope: looksLikeCompactActTitleFragmentQuery(goal.subquery),
     goalType: goal.goal_type,
     mustHaveSignalsCount: goal.must_have_signals?.length ?? 0,
     groundedActHitCount: taxonomyResult.grounded_act_hit_count ?? 0,
@@ -1043,7 +1056,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
 
   if (!searchPlan.sources.use_lldbi) {
     const reasonCodes: string[] = ['memory_only_mode'];
-    let mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
+    const mem = await fetchMemoryForRun({ query, user_id, tenant_id, run_id, conversation_id });
     const trace: RetrievalTrace = {
       version: 1,
       hits: [],
@@ -1323,7 +1336,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     multiActCandidatesTop.sort((a, b) => b.score - a.score);
     const multiActCandidatesTopHydrated = await backfillChunkEvidenceCandidates(
       multiActCandidatesTop,
-      chunksEvidenceMulti
+      chunksEvidenceMulti,
+      { query, domainHint }
     );
     const familyEvidenceMulti = await computeFamilyEvidence({
       chunks_evidence_top_acts: chunksEvidenceMulti,
@@ -1341,21 +1355,40 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       chunks_evidence_top_acts: chunksEvidenceMulti,
       familyEvidence: toFamilyEvidenceSummary(familyEvidenceMulti),
     });
+    let selectedActsSourcesBreakdownMulti = selectedActsMulti.selected_acts_sources_breakdown;
+    const selectedActsReasonCodesMulti = [...selectedActsMulti.selected_acts_reason_codes];
+    const explicitPrimaryActMultiGoalResolution = resolveExplicitPrimaryActMultiGoalSelection({
+      query,
+      documentTypeHints: documentTypeHints.length > 0 ? documentTypeHints : undefined,
+      selectedActs: selectedActsMulti.selected_acts,
+      selectedActsSourcesBreakdown: selectedActsSourcesBreakdownMulti,
+      actCandidatesTop: multiActCandidatesTopHydrated,
+      chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+      goalsSummary,
+    });
+    if (
+      explicitPrimaryActMultiGoalResolution.changed ||
+      explicitPrimaryActMultiGoalResolution.allowSingleActCoverage ||
+      explicitPrimaryActMultiGoalResolution.reasonCodes.length > 0
+    ) {
+      selectedActsSourcesBreakdownMulti = explicitPrimaryActMultiGoalResolution.selectedActsSourcesBreakdown;
+      selectedActsReasonCodesMulti.push(...explicitPrimaryActMultiGoalResolution.reasonCodes);
+    }
     let selected_acts_multi = await hydrateSelectedActsMeta(
-      selectedActsMulti.selected_acts,
+      explicitPrimaryActMultiGoalResolution.selectedActs,
       selectedActsMulti.selected_acts_confidence
     );
     const multiReasonCodesFinal = [
       ...new Set([
         ...multiReasonCodes,
-        ...selectedActsMulti.selected_acts_reason_codes,
+        ...selectedActsReasonCodesMulti,
         ...familyEvidenceMulti.reason_codes,
         ...noiseResultMulti.guardReasonCodes,
       ]),
     ];
-    const multiGoalSingleActCoverageAllowed = selectedActsMulti.selected_acts_reason_codes.includes(
-      'MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED'
-    );
+    const multiGoalSingleActCoverageAllowed =
+      selectedActsReasonCodesMulti.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED') ||
+      explicitPrimaryActMultiGoalResolution.allowSingleActCoverage;
     const multiGoalStrongPrimaryCoverage = hasStrongGoalSupportedMultiPrimaryCoverage({
       selectedActs: selected_acts_multi,
       goalsSummary,
@@ -1407,29 +1440,22 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       multiReasonCodesFinal.push('LOW_EVIDENCE');
     }
     if (multiLowConfidenceBeforeTrim && selected_acts_multi.length > 2) {
-      const multiEvidenceByNreg = new Map(
-        selectedActsMulti.chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
-      );
-      selected_acts_multi = [...selected_acts_multi]
-        .sort((left, right) => {
-          const leftEvidence = multiEvidenceByNreg.get(left.rada_nreg ?? '');
-          const rightEvidence = multiEvidenceByNreg.get(right.rada_nreg ?? '');
-          const rankMassDiff = (rightEvidence?.rank_mass_top30 ?? 0) - (leftEvidence?.rank_mass_top30 ?? 0);
-          if (rankMassDiff !== 0) return rankMassDiff;
-          const bestRankDiff =
-            (leftEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) -
-            (rightEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY);
-          if (bestRankDiff !== 0) return bestRankDiff;
-          return (right.score ?? 0) - (left.score ?? 0);
-        })
-        .slice(0, 2);
+      selected_acts_multi = trimLowConfidenceMultiGoalSelection({
+        selectedActs: selected_acts_multi,
+        chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+        maxActs: 2,
+        goalsSummary,
+        goalSupportByAct,
+        domainHint,
+        mismatchSignalsPresent: multiFamilyMismatchSignals,
+      });
       multiReasonCodesFinal.push('LOW_CONFIDENCE_TAIL_TRIMMED');
     }
-    const finalizedMultiSelectedActs = finalizeMultiGoalSelectedActs({
+    let finalizedMultiSelectedActs = finalizeMultiGoalSelectedActs({
       selectedActs: selected_acts_multi,
-      originalSelectedActs: selectedActsMulti.selected_acts,
+      originalSelectedActs: explicitPrimaryActMultiGoalResolution.selectedActs,
       baseSelectedActsConfidence: selectedActsMulti.selected_acts_confidence,
-      selectedActsSourcesBreakdown: selectedActsMulti.selected_acts_sources_breakdown,
+      selectedActsSourcesBreakdown: selectedActsSourcesBreakdownMulti,
       chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
       goalsSummary,
       goalSupportByAct,
@@ -1453,10 +1479,49 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selectedActsSourcesBreakdown: finalizedMultiSelectedActs.selectedActsSourcesBreakdown,
       topScore: topScoreMulti,
       mismatchSignalsPresent: multiFamilyMismatchSignals,
+      secondaryFamilySupportScore: familyEvidenceMulti.top2?.[1]?.support_score ?? 0,
+      exactActHitCount: taxonomyResultEarly?.exact_act_hit_count ?? 0,
+      groundedActHitCount: taxonomyResultEarly?.grounded_act_hit_count ?? 0,
+      metadataGroundedActCount: finalizedMultiSelectedActs.metadataGroundedActCount,
+      explicitActScopeCue: hasExplicitActScopeCue(query),
     });
     if (ungroundedMultiGoalFallback) {
       multiReasonCodesFinal.push('UNGROUNDED_MULTI_GOAL_FALLBACK');
       multiReasonCodesFinal.push('LOW_EVIDENCE');
+    }
+    const shouldNormalizeUngroundedMultiGoalFallbackSelection =
+      ungroundedMultiGoalFallback &&
+      selected_acts_multi.length >= 2 &&
+      finalizedMultiSelectedActs.metadataGroundedActCount === 0 &&
+      finalizedMultiSelectedActs.selectedActsSourcesBreakdown.from_chunks_evidence.length === selected_acts_multi.length;
+    if (shouldNormalizeUngroundedMultiGoalFallbackSelection) {
+      const normalizedMultiSelectedActs = trimUngroundedMultiGoalFallbackSelection({
+        selectedActs: selected_acts_multi,
+        chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+        maxActs: 2,
+        goalsSummary,
+        goalSupportByAct,
+        domainHint,
+        mismatchSignalsPresent: multiFamilyMismatchSignals,
+      });
+      const originalNormalizedNregs = [...new Set(selected_acts_multi.map((act) => act.rada_nreg))].sort();
+      const updatedNormalizedNregs = [...new Set(normalizedMultiSelectedActs.map((act) => act.rada_nreg))].sort();
+      const normalizedSelectionChanged =
+        originalNormalizedNregs.length !== updatedNormalizedNregs.length ||
+        originalNormalizedNregs.some((radaNreg, index) => radaNreg !== updatedNormalizedNregs[index]);
+      if (normalizedSelectionChanged) {
+        selected_acts_multi = normalizedMultiSelectedActs;
+        finalizedMultiSelectedActs = finalizeMultiGoalSelectedActs({
+          selectedActs: selected_acts_multi,
+          originalSelectedActs: explicitPrimaryActMultiGoalResolution.selectedActs,
+          baseSelectedActsConfidence: selectedActsMulti.selected_acts_confidence,
+          selectedActsSourcesBreakdown: selectedActsSourcesBreakdownMulti,
+          chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+          goalsSummary,
+          goalSupportByAct,
+        });
+        multiReasonCodesFinal.push('UNGROUNDED_MULTI_GOAL_TAIL_TRIMMED');
+      }
     }
     const multiLowConfidence =
       finalizedMultiSelectedActs.selectedActsConfidence < 0.6 ||
@@ -1500,6 +1565,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       documentTypeHintCount: documentTypeHints.length,
       entitiesCount: entities?.length ?? 0,
       anchorsCount: topLevelQuerySelectors.explicitSelectorCount + (topLevelQuerySelectors.noteMentioned ? 1 : 0),
+      explicitActScopeCue: hasExplicitActScopeCue(query),
     });
 
     const multiTrace: RetrievalTrace = {
@@ -1802,6 +1868,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     collections,
     goalsCount: goalSplit.goals.length,
     taxonomyStrength: singleGoalTaxonomyStrength,
+    descriptiveActTitleScope: looksLikeCompactActTitleFragmentQuery(query),
   });
   stepsRequested.push(...firstPassPlan.requestedStepKinds);
   const usedActsSearch = firstPassPlan.usedActsSearch;
@@ -1848,6 +1915,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     querySelectors,
     entities,
     explicitActScopeCue: hasExplicitActScopeCue(query),
+    descriptiveActTitleScope: looksLikeCompactActTitleFragmentQuery(query),
     goalType: goalSplit.goals[0]?.goal_type,
     goalReasonCodes: goalSplit.reason_codes,
     mustHaveSignalsCount: singleGoalGroundedQuery.appliedSignals.length,
@@ -2009,7 +2077,8 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
   const chunks_evidence_top_acts_pre = computeChunksEvidenceTopActs(finalHits);
   const actCandidatesTopHydrated = await backfillChunkEvidenceCandidates(
     actCandidatesTop,
-    chunks_evidence_top_acts_pre
+    chunks_evidence_top_acts_pre,
+    { query, domainHint }
   );
   const selectedActsResolution = await resolveSingleGoalSelectedActs({
     query,

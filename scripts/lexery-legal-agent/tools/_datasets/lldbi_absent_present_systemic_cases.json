@@ -1,0 +1,195 @@
+[
+  {
+    "case_id": "law_national_security_diverse",
+    "rada_nreg": "2469-19",
+    "title": "Про національну безпеку України",
+    "bucket": "national_security",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про національну безпеку України», хто затверджує Стратегію національної безпеки та які документи входять до системи планування у сфері національної безпеки і оборони?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про нацбезпеку хто затверджує Стратегію національної безпеки?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає систему планування національної безпеки та хто вводить у дію Стратегію національної безпеки України?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_advocacy_diverse",
+    "rada_nreg": "5076-17",
+    "title": "Про адвокатуру та адвокатську діяльність",
+    "bucket": "advocacy",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про адвокатуру та адвокатську діяльність», які види діяльності є несумісними зі статусом адвоката та що входить до адвокатської таємниці?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про адвокатуру що адвокату не можна поєднувати і що є адвокатською таємницею?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Які несумісності встановлені для адвоката і які відомості охоплює професійна таємниця за спеціальним законом про адвокатуру?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_electronic_communications_diverse",
+    "rada_nreg": "1089-20",
+    "title": "Про електронні комунікації",
+    "bucket": "electronic_communications",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про електронні комунікації», які права має кінцевий користувач при зміні постачальника послуг та коли оператор зобов'язаний забезпечити перенесення абонентського номера?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про електронні комунікації як працює перенесення номера до іншого оператора?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон гарантує користувачу porting номера і які обов'язки має провайдер при зміні постачальника електронних комунікаційних послуг?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_waste_management_diverse",
+    "rada_nreg": "2320-20",
+    "title": "Про управління відходами",
+    "bucket": "environmental_regulation",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про управління відходами», яка ієрархія управління відходами застосовується та які обов'язки мають органи місцевого самоврядування щодо організації збирання побутових відходів?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про управління відходами яка ієрархія поводження з відходами?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон встановлює waste hierarchy і що він покладає на громаду щодо збирання побутових відходів?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_finmonitoring_diverse",
+    "rada_nreg": "1702-18",
+    "title": "Про запобігання та протидію легалізації (відмиванню) доходів, одержаних злочинним шляхом, фінансуванню тероризму та фінансуванню розповсюдження зброї масового знищення",
+    "bucket": "financial_monitoring",
+    "acceptable_post_selected_acts": [
+      "361-20"
+    ],
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про запобігання та протидію легалізації (відмиванню) доходів...», коли суб'єкт первинного фінансового моніторингу зобов'язаний провести належну перевірку клієнта та як застосовуються заходи щодо політично значущих осіб?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про фінмоніторинг коли банк має перевіряти клієнта і що робити з PEP?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний AML-закон вимагає customer due diligence і посилені заходи до politically exposed persons?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

@@ -129,7 +129,6 @@ export async function fetchRecentMemory(
   let global_semantic_count = 0;
   let global_recent_count = 0;
   const fallbackConversationIds: string[] = [];
-  let supabase_latency_ms: number | undefined;
   let qdrant_latency_ms: number | undefined;
   let summaryText: string | undefined;
 
@@ -370,7 +369,7 @@ export async function fetchRecentMemory(
   } else {
     clearTimeout(timer);
   }
-  supabase_latency_ms = Date.now() - tSupabase;
+  const supabase_latency_ms = Date.now() - tSupabase;
 
   // Fill content_preview for refs that don't have it (e.g. semantic hits without r2_key — fetch from Supabase)
   const refsWithoutPreview = refs.filter((r) => !r.content_preview && r.id);

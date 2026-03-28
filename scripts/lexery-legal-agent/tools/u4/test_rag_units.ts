@@ -13,9 +13,11 @@ import {
 } from '../../retrieval/goal-splitter.js';
 import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
 import {
+  areActReferenceCuesCompatible,
   buildTaxonomyQuerySignals,
   extractCuedNumericActReferences,
   extractActReferenceSignals,
+  extractQuotedActTitleFragments,
   extractStructuredActIdentifiers,
   getActMeta,
   getTaxonomyCandidates,
@@ -23,6 +25,7 @@ import {
   queryLooksAmendmentFocused,
   scoreActCandidate,
   findActByTitleFragment,
+  shouldSkipApproximateActReferenceGrounding,
 } from '../../retrieval/act-taxonomy-store.js';
 import { extractEntities } from '../../classify/entity-extractor.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
@@ -45,6 +48,7 @@ import {
   compareHitsByOrderingScore,
   computeChunkStructuralScore,
 } from '../../retrieval/chunk-rerank.js';
+import { applyHybridOrdering } from '../../retrieval/hit-ranking.js';
 import { decideQueryRewritePolicy } from '../../retrieval/query-rewrite-policy.js';
 import {
   buildGroundedRetrievalQuery,
@@ -76,7 +80,11 @@ import {
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
 } from '../../retrieval/single-goal-selected-acts.js';
-import { isMetadataGroundedActCandidate } from '../../retrieval/single-goal-act-scope.js';
+import {
+  isInterrogativePrimaryLawLocatorQuery,
+  isMetadataGroundedActCandidate,
+  resolveSingleActScopeSelection,
+} from '../../retrieval/single-goal-act-scope.js';
 import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
@@ -85,12 +93,19 @@ import {
 import {
   finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
+  resolveExplicitPrimaryActMultiGoalSelection,
   shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
+  trimLowConfidenceMultiGoalSelection,
+  trimUngroundedMultiGoalFallbackSelection,
 } from '../../retrieval/multi-goal-confidence.js';
 import { preferEvidenceBackedGoalSupport } from '../../retrieval/goal-support.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 import { buildBestProbe } from './audit_lldbi_act_coverage.js';
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+}
 
 function testGoalSplitEmptyQuery(): void {
   const r = heuristicGoalSplit('', undefined, undefined);
@@ -176,7 +191,10 @@ function testFamilyGuardDoesNotInjectUnsupportedPrimaryLaw(): void {
         score: 0.79,
       },
     ],
-    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goals_summary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
     taxonomyNregs: new Set(['2341-14', '4651-17']),
     actsSearchNregs: [],
     familyEvidence: {
@@ -204,6 +222,13 @@ function testHasMultiClauseStructure(): void {
   if (!hasMultiClauseStructure('перший сегмент і другий сегмент')) throw new Error('Expected true for "X і Y"');
   if (hasMultiClauseStructure('що передбачено пунктом 12 Правил роздрібної торгівлі та які документи потрібні')) {
     throw new Error('Expected false for anchored structural citation query even with conjunction');
+  }
+  if (
+    hasMultiClauseStructure(
+      'За Законом України «Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом», між якими державами укладено угоду та який саме вид інформації вона охоплює?'
+    )
+  ) {
+    throw new Error('Expected quoted act title with internal conjunction to avoid multi_clause_structure');
   }
   if (hasMultiClauseStructure('a і b', 10)) throw new Error('Expected false when segments too short');
   if (hasMultiClauseStructure('single clause')) throw new Error('Expected false for single clause');
@@ -235,9 +260,63 @@ function testGoalSplitCarriesSharedTailAcrossClauses(): void {
   console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
 }
 
+function testGoalSplitKeepsAnchoredActTitleWithInternalConjunctionAsSingleGoal(): void {
+  const q = 'Указ Президента Про рішення Ради національної безпеки і оборони України від 25 січня 2015 року';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected anchored act-title query to stay single-goal, got ${JSON.stringify(r)}`);
+  }
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Expected anchored act-title query to avoid multi_clause_structure, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps anchored act title with internal conjunction as single goal');
+}
+
+function testGoalSplitKeepsCompactTitleFragmentWithInternalConjunctionAsSingleGoal(): void {
+  const q =
+    "Деякі питання здійснення заходів сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності";
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected compact title-fragment query to stay single-goal, got ${JSON.stringify(r)}`);
+  }
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Expected compact title-fragment query to avoid multi_clause_structure, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps compact title fragment with internal conjunction as single goal');
+}
+
+function testGoalSplitKeepsQuotedRatificationTitleWithInternalConjunctionAsSingleGoal(): void {
+  const q =
+    'За Законом України «Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом», між якими державами укладено угоду та який саме вид інформації вона охоплює?';
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected quoted ratification-title query to stay single-goal, got ${JSON.stringify(r)}`);
+  }
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Expected quoted ratification-title query to avoid multi_clause_structure, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps quoted ratification title with internal conjunction as single goal');
+}
+
+function testGoalSplitKeepsQuotedRatificationTitleSingleGoalWhenContractLike(): void {
+  const q =
+    'За Законом України «Про ратифікацію Угоди між Україною, з однієї сторони, та Європейським Союзом, з іншої сторони, про участь України у напрямі «Зайнятість та соціальні інновації» (EaSI) Європейського соціального фонду Плюс (ESF+)», у якому саме напрямі ESF+ бере участь Україна після ратифікації?';
+  const r = heuristicGoalSplit(q, undefined, { input_looks_like_contract: true } as never);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected quoted contract-like ratification query to stay single-goal, got ${JSON.stringify(r)}`);
+  }
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Expected quoted contract-like ratification query to avoid multi_clause_structure, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps quoted contract-like ratification title as single goal');
+}
+
 function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
   if (!hasExplicitActScopeCue('Які документи подаються за постановою № 1178?')) {
     throw new Error('Expected subordinate act number cue to count as explicit act scope');
+  }
+  if (!hasExplicitActScopeCue('За Законом України «Про електронні комунікації», коли постачальник має попередити абонента?')) {
+    throw new Error('Expected quoted law-title cue with "Законом України" to count as explicit act scope');
   }
   if (!hasExplicitActScopeCue('2811-20 які документи подаються для реєстрації?')) {
     throw new Error('Expected structured act identifier to count as explicit act scope');
@@ -247,6 +326,9 @@ function testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs(): void {
   }
   if (!hasExplicitActScopeCue('Яким розпорядженням закрито дисциплінарне провадження?')) {
     throw new Error('Expected interrogative subordinate-act locator to count as explicit act scope');
+  }
+  if (!hasExplicitActScopeCue('За Конвенцією про кіберзлочинність, які заходи щодо термінового збереження даних вона передбачає?')) {
+    throw new Error('Expected treaty/convention cue to count as explicit act scope');
   }
   if (hasExplicitActScopeCue('Який порядок реєстрації і які документи подаються?')) {
     throw new Error('Expected generic procedural query without grounded act cue to remain non-grounded');
@@ -258,11 +340,17 @@ function testStrongActScopeCueCountDistinguishesSingleAndMixedActScope(): void {
   if (countStrongActScopeCues('За постановою №1178 які документи подаються для участі?') !== 1) {
     throw new Error('Expected one strong act-scope cue for single subordinate-act query');
   }
+  if (countStrongActScopeCues('За Законом України «Про електронні комунікації», коли постачальник має попередити абонента?') !== 1) {
+    throw new Error('Expected one strong act-scope cue for quoted law-title query');
+  }
   if (countStrongActScopeCues('Що регулює Наказ про скасування Правил торгівлі транспортними засобами?') !== 1) {
     throw new Error('Expected one strong act-scope cue for descriptive subordinate-act title query');
   }
   if (countStrongActScopeCues('Яким наказом визнано таким, що втратив чинність, попередній порядок або інструкцію?') !== 1) {
     throw new Error('Expected one strong act-scope cue for interrogative repeal-order query');
+  }
+  if (countStrongActScopeCues('За Конвенцією про кіберзлочинність що таке термінове збереження даних?') !== 1) {
+    throw new Error('Expected one strong act-scope cue for treaty/convention query');
   }
   if (
     countStrongActScopeCues(
@@ -333,6 +421,28 @@ function testGoalSplitCompactsActMetadataBundleWithNeuterLocator(): void {
     throw new Error(`Expected same_act_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
   }
   console.log('[OK] heuristicGoalSplit compacts neuter interrogative act-metadata bundle');
+}
+
+function testGoalSplitCompactsProfileLawMetadataBundle(): void {
+  const q =
+    "Який профільний закон встановлює перелік спеціальних економічних та інших обмежувальних заходів і суб'єктів подання пропозицій про санкції?";
+  const r = heuristicGoalSplit(q, undefined, undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected profile-law metadata bundle to compact into 1 goal, got ${JSON.stringify(r)}`);
+  }
+  if (!hasExplicitActScopeCue(q)) {
+    throw new Error('Expected profile-law locator to count as explicit act scope cue');
+  }
+  if (countStrongActScopeCues(q) !== 1) {
+    throw new Error(`Expected exactly one strong act-scope cue, got ${countStrongActScopeCues(q)}`);
+  }
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Did not expect multi_clause_structure after single-act compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts profile-law locator bundle into one grounded act-scope goal');
 }
 
 function testGoalSplitCompactsRepealOrderMetadataBundle(): void {
@@ -540,6 +650,31 @@ function testCategoryClusterSplitSkipsDominantTitleFragmentSingleAct(): void {
   console.log('[OK] taxonomy cluster split skips dominant title-fragment single-act convergence');
 }
 
+function testCategoryClusterSplitSkipsQuotedExplicitLawTitleScope(): void {
+  const split = tryCategoryClusterSplitV2(
+    {
+      rada_nreg_candidates: ['2456-17', '2755-17', '984_011'],
+      alias_hits: [
+        { rada_nreg: '2456-17', category: 'finance_banking' },
+        { rada_nreg: '2456-17', category: 'finance_banking' },
+        { rada_nreg: '2755-17', category: 'tax_customs' },
+        { rada_nreg: '2755-17', category: 'tax_customs' },
+        { rada_nreg: '984_011', category: 'international' },
+      ],
+      category_hints: ['finance_banking'],
+      grounded_act_hit_count: 0,
+      exact_act_hit_count: 0,
+    },
+    'За Законом України «Про внесення змін до Бюджетного кодексу України щодо реалізації Угоди між Урядом України та Урядом Сполучених Штатів Америки про створення Американсько-Українського інвестиційного фонду відбудови», для реалізації якої саме угоди та якого фонду відбудови вносяться ці зміни?',
+    'general',
+    undefined
+  );
+  if (split != null) {
+    throw new Error(`Expected taxonomy cluster split to skip quoted explicit law-title scope, got ${JSON.stringify(split)}`);
+  }
+  console.log('[OK] taxonomy cluster split skips quoted explicit law-title scope');
+}
+
 function testGoalSplitMarksProceduralSingleGoal(): void {
   const q = 'Який строк оскарження податкового повідомлення-рішення?';
   const r = heuristicGoalSplit(q, 'tax_customs', undefined);
@@ -718,6 +853,33 @@ async function testTaxonomyGroundsRepealOrderByDerivedTitleAlias(): Promise<void
   console.log('[OK] taxonomy grounds repeal-order descriptive aliases by derived title pattern');
 }
 
+async function testTaxonomyPrefersInForceLogicalActSuccessorForTruncatedQuotedLawTitle(): Promise<void> {
+  const currentLaw = await getActMeta('361-20');
+  const historicalLaw = await getActMeta('1702-18');
+  if (!currentLaw || !historicalLaw) {
+    console.log('[SKIP] in-force logical successor grounding test (361-20/1702-18 missing in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'За Законом України «Про запобігання та протидію легалізації (відмиванню) доходів...», коли суб\'єкт первинного фінансового моніторингу зобов\'язаний провести належну перевірку клієнта та як застосовуються заходи щодо політично значущих осіб?';
+  const result = await getTaxonomyCandidates({
+    query,
+    entities: [{ type: 'law_title', value: query }],
+    category_hints: [],
+    document_type_hints: ['Закон України'],
+  });
+  if (result.grounded_act_hit_count !== 1) {
+    throw new Error(`Expected truncated quoted law title to ground one in-force act, got ${result.grounded_act_hit_count}`);
+  }
+  if (!result.grounded_act_nregs.includes('361-20')) {
+    throw new Error(`Expected truncated quoted law title to prefer 361-20, got ${JSON.stringify(result.grounded_act_nregs)}`);
+  }
+  if (result.grounded_act_nregs.includes('1702-18')) {
+    throw new Error(`Expected historical expired twin to stay out of grounded act hits, got ${JSON.stringify(result.grounded_act_nregs)}`);
+  }
+  console.log('[OK] taxonomy prefers in-force logical act successor for truncated quoted law titles');
+}
+
 function testStrongTaxonomySignalTreatsExactActHitAsStrong(): void {
   const strong = hasStrongSingleGoalTaxonomySignal({
     goals_count: 1,
@@ -840,6 +1002,34 @@ function testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak(): void {
     throw new Error(`Expected ACTS_SEARCH_ENABLED reason code, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
   }
   console.log('[OK] single-goal first-pass plan keeps acts search when taxonomy signal is weak');
+}
+
+function testSingleGoalFirstPassPlanKeepsActsSearchForDescriptiveActTitleScope(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: undefined,
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 2,
+      grounded_act_hit_count: 1,
+      alias_hit_count: 1,
+      category_hint_count: 1,
+      document_type_hint_count: 1,
+    },
+    descriptiveActTitleScope: true,
+  });
+  if (!result.usedActsSearch) {
+    throw new Error(`Expected descriptive act-title scope to keep acts search enabled, got ${JSON.stringify(result)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('DESCRIPTIVE_ACT_TITLE_SCOPE')) {
+    throw new Error(
+      `Expected DESCRIPTIVE_ACT_TITLE_SCOPE reason code, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`
+    );
+  }
+  console.log('[OK] single-goal first-pass plan keeps acts search for descriptive act-title scope');
 }
 
 function testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly(): void {
@@ -1377,6 +1567,35 @@ function testWithinActExpansionCollapsesExplicitActScopeOnStrongHeadConsensus():
     );
   }
   console.log('[OK] within-act expansion collapses strong explicit act-scope queries');
+}
+
+function testWithinActExpansionSupportsGroundedDescriptiveActTitleQueries(): void {
+  const decision = decideWithinActExpansion({
+    hasActCandidates: true,
+    needTwoStage: false,
+    querySelectors: extractQueryCitationSelectors(
+      "Деякі питання здійснення заходів сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності"
+    ),
+    entities: [],
+    descriptiveActTitleScope: true,
+    goalType: 'procedure',
+    goalReasonCodes: [],
+    mustHaveSignalsCount: 1,
+    groundedActHitCount: 1,
+    queryTokenCount: 18,
+    weakLimit: 5,
+  });
+  if (
+    decision.limit !== 2 ||
+    decision.chunks_per_act_limit !== 28 ||
+    !decision.reason_codes.includes('DESCRIPTIVE_ACT_TITLE_QUERY') ||
+    !decision.reason_codes.includes('GROUNDED_SINGLE_ACT_QUERY')
+  ) {
+    throw new Error(
+      `Expected grounded descriptive act-title query to keep compact act-anchored within-act fanout, got ${JSON.stringify(decision)}`
+    );
+  }
+  console.log('[OK] within-act expansion keeps grounded descriptive act-title queries act-anchored');
 }
 
 function testAuditBestProbeUsesNregInsteadOfWeakShortAlias(): void {
@@ -2082,7 +2301,10 @@ function testSelectedActsDoesNotDiversifyIntoNoiseWhenPrimaryLawAlreadySelected(
         source_tier: 'ACTS_1',
       },
     ],
-    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goals_summary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
     taxonomyNregs: new Set(['2341-14', 'v001p710-19']),
     actsSearchNregs: ['2341-14', 'v001p710-19'],
     chunks_evidence_top_acts: [
@@ -2251,6 +2473,79 @@ async function testFindActByTitleFragmentExport(): Promise<void> {
   console.log('[OK] findActByTitleFragment exported and returns arrays');
 }
 
+async function testFindActByTitleFragmentRecoversLongOfficialTitleVariant(): Promise<void> {
+  const targetMeta = await getActMeta('1127-2022-п');
+  if (!targetMeta) {
+    console.log('[SKIP] long official title fragment grounding test (1127-2022-п missing in current LLDBI snapshot)');
+    return;
+  }
+  const matches = await findActByTitleFragment(
+    "Деякі питання здійснення заходів сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності"
+  );
+  if (matches.length !== 1 || matches[0] !== '1127-2022-п') {
+    throw new Error(`Expected long official title fragment to ground 1127-2022-п, got ${JSON.stringify(matches)}`);
+  }
+  console.log('[OK] findActByTitleFragment recovers long official title variants with omitted stopwords/tail');
+}
+
+async function testQuotedActTitleFragmentsSupportGroundingSignals(): Promise<void> {
+  const query =
+    'За Законом України «Про електронні комунікації», коли постачальник має попередити абонента?';
+  const fragments = extractQuotedActTitleFragments(query);
+  if (!fragments.includes('Про електронні комунікації')) {
+    throw new Error(`Expected quoted act title fragment extraction, got ${JSON.stringify(fragments)}`);
+  }
+  const matches = await findActByTitleFragment(fragments[0]);
+  if (!Array.isArray(matches) || matches.length === 0) {
+    throw new Error(`Expected quoted title fragment to resolve indexed act, got ${JSON.stringify(matches)}`);
+  }
+  console.log('[OK] extractQuotedActTitleFragments supports title-fragment grounding');
+}
+
+function testQuotedActTitleFragmentsRemainStableAcrossCallsForShortLawTitles(): void {
+  const query =
+    "За Законом України «Про медіацію», які істотні умови має містити договір про проведення медіації?";
+  const first = extractQuotedActTitleFragments(query);
+  const second = extractQuotedActTitleFragments(query);
+  if (!first.includes('Про медіацію') || !second.includes('Про медіацію')) {
+    throw new Error(
+      `Expected quoted short law title fragment to stay stable across repeated calls, got first=${JSON.stringify(first)} second=${JSON.stringify(second)}`
+    );
+  }
+  console.log('[OK] extractQuotedActTitleFragments stays stable for short quoted law titles');
+}
+
+function testQuotedActTitleFragmentsPreserveOuterNestedQuotedLawTitles(): void {
+  const query =
+    'За Законом України «Про внесення змін до Закону України "Про наукову і науково-технічну діяльність" щодо питань дослідницької інфраструктури та підтримки молодих вчених», яких саме питань стосується цей закон про зміни?';
+  const fragments = extractQuotedActTitleFragments(query);
+  if (
+    !fragments.includes(
+      'Про внесення змін до Закону України "Про наукову і науково-технічну діяльність" щодо питань дослідницької інфраструктури та підтримки молодих вчених'
+    )
+  ) {
+    throw new Error(
+      `Expected outer nested quoted amendment title to be preserved, got ${JSON.stringify(fragments)}`
+    );
+  }
+  if (!fragments.includes('Про наукову і науково-технічну діяльність')) {
+    throw new Error(`Expected inner nested quoted title to stay available, got ${JSON.stringify(fragments)}`);
+  }
+  console.log('[OK] extractQuotedActTitleFragments preserves outer nested quoted law titles');
+}
+
+function testApproximateGroundingSkipsQuotedAnchoredActTitles(): void {
+  const quotedSignal =
+    'Законом України «Про електронну ідентифікацію та електронні довірчі послуги»';
+  if (!shouldSkipApproximateActReferenceGrounding(quotedSignal)) {
+    throw new Error('Expected quoted anchored act title signal to skip approximate grounding');
+  }
+  if (shouldSkipApproximateActReferenceGrounding('постанова КМУ № 1178')) {
+    throw new Error('Expected cued-number reference to keep approximate grounding path available');
+  }
+  console.log('[OK] approximate grounding skips unsafe quoted anchored act-title signals');
+}
+
 async function testDocsOnlyNoSemanticPlanIsNotMarkedDegraded(): Promise<void> {
   const result = await runCacheRag({
     query: 'Що сказано у моєму договорі про строк повернення гарантійного платежу?',
@@ -2336,6 +2631,46 @@ function testOrderingScoreBeatsRawVectorScore(): void {
     );
   }
   console.log('[OK] ordering score outranks raw vector score in post-rerank sorting');
+}
+
+function testHybridOrderingPrefersGroundedActSearchHitForTitleLocator(): void {
+  const query =
+    "Деякі питання здійснення заходів сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності";
+  const hits = [
+    {
+      r2_key: 'legislation/civil/435-15.json',
+      json_path: '$.content.chunks[11].text',
+      score: 0.74,
+      source: 'lldbi_chunks' as const,
+      rada_nreg: '435-15',
+      article_number: '432',
+      title: 'Цивільний кодекс України',
+      document_type: 'Кодекс',
+      category: 'civil',
+    },
+    {
+      r2_key: 'legislation/customs/1127-2022-п.json',
+      json_path: '$.title',
+      score: 0.63,
+      source: 'lldbi_acts' as const,
+      rada_nreg: '1127-2022-п',
+      title:
+        "Деякі питання здійснення заходів із сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності, які охороняються відповідно до закону",
+      document_type: 'Постанова',
+      category: 'tax_customs',
+    },
+  ];
+  const taxonomy = {
+    rada_nreg_candidates: ['1127-2022-п'],
+    alias_hits: [],
+    category_hints: [],
+    grounded_act_nregs: ['1127-2022-п'],
+  } as never;
+  applyHybridOrdering(hits as never, query, taxonomy, []);
+  if (hits[0]?.rada_nreg !== '1127-2022-п') {
+    throw new Error(`Expected grounded act-search hit to rank first for title locator, got ${hits[0]?.rada_nreg ?? 'none'}`);
+  }
+  console.log('[OK] hybrid ordering prefers grounded act-search hit for title locator query');
 }
 
 function testDiscriminativeStructuralScorePrefersMobilizationArticle(): void {
@@ -2831,6 +3166,56 @@ function testNormalizeSingleGoalLowConfidenceSelectionKeepsSingleDomainAlignedPr
   console.log('[OK] low-confidence normalization keeps one domain-aligned primary law instead of noisy tail');
 }
 
+function testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbackNoise(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        score: 0.53,
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '361-20',
+        act_title: 'Про фінансові послуги та фінансові компанії',
+        act_kind: 'PRIMARY_LAW',
+        category: 'finance',
+        score: 0.46,
+        document_type: 'Закон',
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.52,
+      selected_acts_confidence_pre_routing: 0.52,
+      selected_acts_decision_final: { confidence: 0.52, reason_codes: [] },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE'],
+    domainHint: 'commercial',
+    actCandidatesTopHydrated: [
+      { rada_nreg: '435-15', category: 'civil' },
+      { rada_nreg: '361-20', category: 'finance' },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '435-15', rank_mass_top30: 0.42, best_rank_in_top30: 4, max_ordering_score: 0.39 },
+      { rada_nreg: '361-20', rank_mass_top30: 0.24, best_rank_in_top30: 8, max_ordering_score: 0.36 },
+    ],
+  });
+  if (result.selectedActsFinal.length !== 0) {
+    throw new Error(`Expected explicit-scope no-convergence fallback noise to be cleared, got ${JSON.stringify(result.selectedActsFinal)}`);
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED')) {
+    throw new Error(`Expected explicit-scope clear reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] low-confidence normalization clears fallback selected acts for explicit missing-act scope');
+}
+
 function testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivilBundle(): void {
   const result = normalizeSingleGoalLowConfidenceSelection({
     lowConfidence: true,
@@ -2880,6 +3265,224 @@ function testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivil
     throw new Error(`Expected LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] low-confidence normalization preserves strong family+civil two-act bundle');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionPreservesTaxonomyBackedCivilBundle(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        score: 0.58,
+        document_type: 'Кодекс',
+        source_tags: ['CHUNKS_EVIDENCE'],
+      },
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        score: 0.41,
+        document_type: 'Закон',
+        source_tags: ['TAXONOMY'],
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.52,
+      selected_acts_confidence_pre_routing: 0.52,
+      selected_acts_decision_final: { confidence: 0.52, reason_codes: [] },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['1023-12'],
+      from_acts_search: [],
+      from_chunks_evidence: ['435-15'],
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'UNGROUNDED_PRIMARY_FALLBACK'],
+    domainHint: 'civil',
+    actCandidatesTopHydrated: [
+      { rada_nreg: '435-15', category: 'civil', score: 0.35, reasons: ['category_hint', 'validity_in_force'] },
+      {
+        rada_nreg: '1023-12',
+        category: 'civil',
+        score: 1.6,
+        reasons: ['keyword_match', 'category_hint', 'validity_in_force'],
+      },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '435-15', rank_mass_top30: 0.86, best_rank_in_top30: 1, max_ordering_score: 0.57 },
+      { rada_nreg: '1023-12', rank_mass_top30: 0.09, best_rank_in_top30: 18, max_ordering_score: 0.18 },
+    ],
+  });
+  const selectedNregs = result.selectedActsFinal.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['435-15', '1023-12'])) {
+    throw new Error(
+      `Expected taxonomy-backed civil bundle to survive low-confidence narrowing, got ${JSON.stringify(selectedNregs)}`
+    );
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED')) {
+    throw new Error(`Expected LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] low-confidence normalization preserves taxonomy-backed same-family civil bundle');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionRecoversCompanionFromActCandidates(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        score: 0.49,
+        document_type: 'Кодекс',
+        source_tags: ['CHUNKS_EVIDENCE'],
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.55,
+      selected_acts_confidence_pre_routing: 0.55,
+      selected_acts_decision_final: {
+        confidence: 0.55,
+        reason_codes: ['LOW_CONFIDENCE_SELECTED_ACTS_NARROWED'],
+      },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['435-15', 'z1257-07'],
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'UNGROUNDED_PRIMARY_FALLBACK', 'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED'],
+    domainHint: 'civil',
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1023-12',
+        title: 'Про захист прав споживачів',
+        category: 'civil',
+        score: 2.04,
+        reasons: ['keyword_match', 'category_hint', 'validity_in_force', 'hits_evidence'],
+        document_type: 'Закон',
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        category: 'civil',
+        score: 1.18,
+        reasons: ['category_hint', 'validity_in_force', 'hits_evidence'],
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        title: 'Про затвердження особливостей здійснення публічних закупівель',
+        category: 'procurement',
+        score: 1.39,
+        reasons: ['title_match', 'summary_match', 'validity_in_force'],
+        document_type: 'Постанова КМУ',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '435-15', rank_mass_top30: 1.42, best_rank_in_top30: 1, max_ordering_score: 0.49 },
+      { rada_nreg: '1023-12', rank_mass_top30: 0.11, best_rank_in_top30: 9, max_ordering_score: 0.37 },
+      { rada_nreg: 'z1257-07', rank_mass_top30: 0.14, best_rank_in_top30: 10, max_ordering_score: 0.29 },
+    ],
+  });
+  const selectedNregs = result.selectedActsFinal.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['435-15', '1023-12'])) {
+    throw new Error(
+      `Expected companion recovery from strong act candidates, got ${JSON.stringify(selectedNregs)}`
+    );
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_COMPANION_ACT_RECOVERED')) {
+    throw new Error(
+      `Expected LOW_CONFIDENCE_COMPANION_ACT_RECOVERED, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] low-confidence normalization recovers compatible companion act from strong act candidates');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionNarrowsMetadataCompanionFallback(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+        score: 0.58,
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+        score: 0.55,
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.55,
+      selected_acts_confidence_pre_routing: 0.55,
+      selected_acts_decision_final: {
+        confidence: 0.55,
+        reason_codes: ['LOW_CONFIDENCE_SELECTED_ACTS_NARROWED'],
+      },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['435-15'],
+      from_acts_search: ['435-15'],
+      from_chunks_evidence: ['1023-12'],
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'UNGROUNDED_PRIMARY_COMPANION_FALLBACK'],
+    domainHint: 'general',
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1023-12',
+        title: 'Про захист прав споживачів',
+        category: 'civil',
+        score: 1.18,
+        document_type: 'Закон',
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        category: 'civil',
+        score: 0.92,
+        document_type: 'Кодекс',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '1023-12', rank_mass_top30: 0.44, best_rank_in_top30: 1, max_ordering_score: 0.58 },
+      { rada_nreg: '435-15', rank_mass_top30: 0.08, best_rank_in_top30: 7, max_ordering_score: 0.55 },
+    ],
+  });
+  const selectedNregs = result.selectedActsFinal.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['1023-12'])) {
+    throw new Error(`Expected metadata-companion fallback to narrow to strongest single act, got ${JSON.stringify(selectedNregs)}`);
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED')) {
+    throw new Error(`Expected LOW_CONFIDENCE_SELECTED_ACTS_NARROWED, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('LOW_CONFIDENCE_COMPANION_ACT_RECOVERED')) {
+    throw new Error(`Did not expect companion recovery after strict narrowing, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] low-confidence normalization narrows metadata-companion fallback instead of preserving the pair');
 }
 
 async function testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope(): Promise<void> {
@@ -4742,6 +5345,2702 @@ async function testResolveSingleGoalSelectedActsFlagsUngroundedGeneralMultiFamil
   console.log('[OK] single-goal finalizer flags ungrounded general multi-family primary-law fallback as weak evidence');
 }
 
+async function testResolveSingleGoalSelectedActsRecoversEvidenceDominantExplicitActScope(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'За законом про адміністративну процедуру який строк на оскарження індивідуального акта?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '2073-20',
+        r2_key: 'r2://2073/92',
+        json_path: '$.chunks[92]',
+        score: 0.578,
+        ordering_score: 0.553,
+        title: 'Про адміністративну процедуру',
+        article_number: '92',
+      },
+      {
+        rada_nreg: '2073-20',
+        r2_key: 'r2://2073/93',
+        json_path: '$.chunks[93]',
+        score: 0.56,
+        ordering_score: 0.543,
+        title: 'Про адміністративну процедуру',
+        article_number: '93',
+      },
+      {
+        rada_nreg: '2073-20',
+        r2_key: 'r2://2073/70',
+        json_path: '$.chunks[70]',
+        score: 0.539,
+        ordering_score: 0.541,
+        title: 'Про адміністративну процедуру',
+        article_number: '70',
+      },
+      {
+        rada_nreg: '2073-20',
+        r2_key: 'r2://2073/88',
+        json_path: '$.chunks[88]',
+        score: 0.541,
+        ordering_score: 0.537,
+        title: 'Про адміністративну процедуру',
+        article_number: '88',
+      },
+      {
+        rada_nreg: '2073-20',
+        r2_key: 'r2://2073/34',
+        json_path: '$.chunks[34]',
+        score: 0.547,
+        ordering_score: 0.483,
+        title: 'Про адміністративну процедуру',
+        article_number: '34',
+      },
+      {
+        rada_nreg: '1697-18',
+        r2_key: 'r2://1697/50',
+        json_path: '$.chunks[50]',
+        score: 0.47,
+        ordering_score: 0.445,
+        title: 'Про прокуратуру',
+        article_number: '50',
+      },
+      {
+        rada_nreg: '2747-15',
+        r2_key: 'r2://2747/289',
+        json_path: '$.chunks[289]',
+        score: 0.537,
+        ordering_score: 0.437,
+        title: 'Кодекс адміністративного судочинства України',
+        article_number: '289',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 1.4,
+        category: 'judiciary_justice',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 1.2,
+        category: 'judiciary_justice',
+        document_type: 'Закон України',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '2073-20',
+        title: 'Про адміністративну процедуру',
+        score: 0.8,
+        category: 'administrative',
+        document_type: 'Закон України',
+        document_type_slug: 'law',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.5775986,
+    avgScore: 0.54,
+    categoryHintsCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '2073-20',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.55,
+        max_score: 0.578,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.15,
+        max_ordering_score: 0.553,
+      },
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.49,
+        max_score: 0.537,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.37,
+        max_ordering_score: 0.437,
+      },
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.45,
+        max_score: 0.47,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.29,
+        max_ordering_score: 0.445,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '2073-20': {
+          title: 'Про адміністративну процедуру',
+          category: 'administrative',
+          document_type: 'Закон України',
+          document_type_slug: 'law',
+          storage_category: 'administrative',
+        },
+        '2747-15': {
+          title: 'Кодекс адміністративного судочинства України',
+          category: 'judiciary_justice',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '1697-18': {
+          title: 'Про прокуратуру',
+          category: 'judiciary_justice',
+          document_type: 'Закон України',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected evidence-dominant explicit act scope to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected evidence-dominant explicit act scope to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '2073-20') {
+    throw new Error(`Expected evidence-dominant explicit act scope to keep 2073-20 selected, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected EVIDENCE_ACT_SCOPE_CONFIRMED reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE')) {
+    throw new Error(`Expected evidence-dominant explicit act scope to avoid false no-convergence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers explicit act scope from dominant chunks evidence');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversSpecialLawLocatorFromCoverageWeightedEvidence(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'Який спеціальний закон визначає процедури defense procurement і підстави для закриття інформації про таку закупівлю?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '922-19',
+        r2_key: 'r2://922/13',
+        json_path: '$.chunks[13]',
+        score: 0.537,
+        ordering_score: 0.614,
+        title: 'Про публічні закупівлі',
+        article_number: '13',
+      },
+      {
+        rada_nreg: '922-19',
+        r2_key: 'r2://922/40',
+        json_path: '$.chunks[40]',
+        score: 0.562,
+        ordering_score: 0.537,
+        title: 'Про публічні закупівлі',
+        article_number: '40',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/21',
+        json_path: '$.chunks[21]',
+        score: 0.54,
+        ordering_score: 0.523,
+        title: 'Про оборонні закупівлі',
+        article_number: '21',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/18',
+        json_path: '$.chunks[18]',
+        score: 0.567,
+        ordering_score: 0.5,
+        title: 'Про оборонні закупівлі',
+        article_number: '18',
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        r2_key: 'r2://1178/81',
+        json_path: '$.chunks[81]',
+        score: 0.537,
+        ordering_score: 0.482,
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+        unit_type: 'point',
+        unit_number: '81',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/27',
+        json_path: '$.chunks[27]',
+        score: 0.556,
+        ordering_score: 0.479,
+        title: 'Про оборонні закупівлі',
+        article_number: '27',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/30',
+        json_path: '$.chunks[30]',
+        score: 0.585,
+        ordering_score: 0.479,
+        title: 'Про оборонні закупівлі',
+        article_number: '30',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/28',
+        json_path: '$.chunks[28]',
+        score: 0.565,
+        ordering_score: 0.471,
+        title: 'Про оборонні закупівлі',
+        article_number: '28',
+      },
+      {
+        rada_nreg: '922-19',
+        r2_key: 'r2://922/34',
+        json_path: '$.chunks[34]',
+        score: 0.549,
+        ordering_score: 0.462,
+        title: 'Про публічні закупівлі',
+        article_number: '34',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/16',
+        json_path: '$.chunks[16]',
+        score: 0.553,
+        ordering_score: 0.456,
+        title: 'Про оборонні закупівлі',
+        article_number: '16',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/34',
+        json_path: '$.chunks[34]',
+        score: 0.545,
+        ordering_score: 0.453,
+        title: 'Про оборонні закупівлі',
+        article_number: '34',
+      },
+      {
+        rada_nreg: '808-20',
+        r2_key: 'r2://808/4',
+        json_path: '$.chunks[4]',
+        score: 0.56,
+        ordering_score: 0.453,
+        title: 'Про оборонні закупівлі',
+        article_number: '4',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '4801-20',
+        title: 'Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом',
+        score: 6.24,
+        category: 'international_eu',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'topic_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'v020p710-10',
+        title:
+          'Рішення Конституційного Суду України у справі за конституційним поданням 252 народних депутатів України щодо відповідності Конституції України (конституційності) Закону України "Про внесення змін до Конституції України" від 8 грудня 2004 року N 2222-IV (справа про додержання процедури внесення змін до Конституції України)',
+        score: 6.18,
+        category: 'constitutional',
+        document_type: 'Рішення КСУ',
+        document_type_slug: 'ccu_decision',
+        reasons: ['keyword_match', 'topic_match', 'title_match', 'summary_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '1402-19',
+        title: 'Про судоустрій і статус суддів',
+        score: 4.71,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'title_match', 'summary_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 4.56,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'topic_match', 'title_match', 'summary_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        score: 2.25,
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+        reasons: ['keyword_match', 'summary_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '922-19',
+        title: 'Про публічні закупівлі',
+        score: 5.34,
+        category: 'procurement',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'topic_match', 'validity_in_force', 'chunks_evidence_meta'],
+      },
+      {
+        rada_nreg: '808-20',
+        title: 'Про оборонні закупівлі',
+        score: 3.09,
+        category: 'defense_mobilization',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'validity_in_force', 'chunks_evidence_meta'],
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+        score: 0.94,
+        category: 'procurement',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['title_match', 'validity_in_force', 'chunks_evidence_meta'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['4801-20', 'v020p710-10', '1402-19', '1697-18', '1618-15']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Закон'],
+    taxonomyActCount: 5,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.5852038,
+    avgScore: 0.55,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '922-19',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.548,
+        max_score: 0.562,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.716,
+        max_ordering_score: 0.614,
+      },
+      {
+        rada_nreg: '808-20',
+        count_in_top30: 11,
+        avg_score_in_top30: 0.554,
+        max_score: 0.585,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 1.399,
+        max_ordering_score: 0.523,
+      },
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.338,
+        max_score: 0.36,
+        best_rank_in_top30: 13,
+        rank_mass_top30: 0.493,
+        max_ordering_score: 0.412,
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.537,
+        max_score: 0.537,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.2,
+        max_ordering_score: 0.482,
+      },
+      {
+        rada_nreg: '1402-19',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.348,
+        max_score: 0.37,
+        best_rank_in_top30: 17,
+        rank_mass_top30: 0.186,
+        max_ordering_score: 0.385,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        '4801-20': {
+          title: 'Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом',
+          category: 'international_eu',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        'v020p710-10': {
+          title:
+            'Рішення Конституційного Суду України у справі за конституційним поданням 252 народних депутатів України щодо відповідності Конституції України (конституційності) Закону України "Про внесення змін до Конституції України" від 8 грудня 2004 року N 2222-IV (справа про додержання процедури внесення змін до Конституції України)',
+          category: 'constitutional',
+          document_type: 'Рішення КСУ',
+          document_type_slug: 'ccu_decision',
+          storage_category: null,
+        },
+        '1402-19': {
+          title: 'Про судоустрій і статус суддів',
+          category: 'judiciary_justice',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '1697-18': {
+          title: 'Про прокуратуру',
+          category: 'judiciary_justice',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '1618-15': {
+          title: 'Цивільний процесуальний кодекс України',
+          category: 'civil_procedure',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '922-19': {
+          title: 'Про публічні закупівлі',
+          category: 'procurement',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '808-20': {
+          title: 'Про оборонні закупівлі',
+          category: 'defense_mobilization',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '1178-2022-п': {
+          title:
+            'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+          category: 'procurement',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(
+      `Expected semantic special-law locator to recover from coverage-weighted evidence, got low_confidence with ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(
+      `Expected semantic special-law locator to keep coverage_gap=none after evidence recovery, got ${result.coverageGap}`
+    );
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '808-20') {
+    throw new Error(
+      `Expected semantic special-law locator to recover 808-20, got ${JSON.stringify(result.selected_acts_final)}`
+    );
+  }
+  if (
+    !result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_RECOVERED') ||
+    !result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(
+      `Expected coverage-weighted special-law recovery reason codes, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] single-goal finalizer recovers semantic special-law locator from coverage-weighted evidence');
+}
+
+async function testResolveSingleGoalSelectedActsKeepsShortExplicitLawTitleWhenMetadataAndChunksConverge(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'За законом про знаки коли можна подати заперечення проти ТМ?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/8',
+        json_path: '$.chunks[8]',
+        score: 0.539,
+        ordering_score: 0.465,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '8',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/11',
+        json_path: '$.chunks[11]',
+        score: 0.566,
+        ordering_score: 0.399,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '11',
+      },
+      {
+        rada_nreg: '1697-18',
+        r2_key: 'r2://1697/62',
+        json_path: '$.chunks[62]',
+        score: 0.351,
+        ordering_score: 0.392,
+        title: 'Про прокуратуру',
+        article_number: '62',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/22',
+        json_path: '$.chunks[22]',
+        score: 0.534,
+        ordering_score: 0.385,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '22',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/15',
+        json_path: '$.chunks[15]',
+        score: 0.521,
+        ordering_score: 0.379,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '15',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/6',
+        json_path: '$.chunks[6]',
+        score: 0.521,
+        ordering_score: 0.379,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '6',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/16',
+        json_path: '$.chunks[16]',
+        score: 0.519,
+        ordering_score: 0.378,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '16',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/21',
+        json_path: '$.chunks[21]',
+        score: 0.515,
+        ordering_score: 0.377,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '21',
+      },
+      {
+        rada_nreg: '3689-12',
+        r2_key: 'r2://3689/7',
+        json_path: '$.chunks[7]',
+        score: 0.515,
+        ordering_score: 0.376,
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        article_number: '7',
+      },
+      {
+        rada_nreg: '5207-17',
+        r2_key: 'r2://5207/4',
+        json_path: '$.chunks[4]',
+        score: 0.357,
+        ordering_score: 0.372,
+        title: 'Про засади запобігання та протидії дискримінації в Україні',
+        article_number: '4',
+      },
+      {
+        rada_nreg: '5207-17',
+        r2_key: 'r2://5207/3',
+        json_path: '$.chunks[3]',
+        score: 0.332,
+        ordering_score: 0.371,
+        title: 'Про засади запобігання та протидії дискримінації в Україні',
+        article_number: '3',
+      },
+      {
+        rada_nreg: '5207-17',
+        r2_key: 'r2://5207/16',
+        json_path: '$.chunks[16]',
+        score: 0.332,
+        ordering_score: 0.365,
+        title: 'Про засади запобігання та протидії дискримінації в Україні',
+        article_number: '16',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '3689-12',
+        title: 'Про охорону прав на знаки для товарів і послуг',
+        score: 2.2,
+        category: 'business_corporate',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '5207-17',
+        title: 'Про засади запобігання та протидії дискримінації в Україні',
+        score: 1.8541,
+        category: 'civil',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '995_096',
+        title: "Конвенція Організації Об'єднаних Націй про боротьбу проти незаконного обігу наркотичних засобів і психотропних речовин",
+        score: 1.39,
+        category: 'international_eu',
+        document_type: 'Міжнародний договір',
+        document_type_slug: 'international_treaty',
+        reasons: ['title_match', 'summary_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '1697-18',
+        title: 'Про прокуратуру',
+        score: 0.6276,
+        category: 'judiciary_justice',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['validity_in_force', 'hits_evidence'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['3689-12', '5207-17', '995_096', '1697-18']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 4,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['CHUNKS_FAMILY_MISMATCH_DEMOTED', 'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT', 'DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: ['STRONG_TAXONOMY_SIGNAL'] },
+    topScore: 0.5691354,
+    avgScore: 0.45,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '3689-12',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.521,
+        max_score: 0.5655,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.6746,
+        max_ordering_score: 0.4645,
+      },
+      {
+        rada_nreg: '5207-17',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.315,
+        max_score: 0.3574,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.6073,
+        max_ordering_score: 0.3718,
+      },
+      {
+        rada_nreg: '1697-18',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.379,
+        max_score: 0.4157,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.4898,
+        max_ordering_score: 0.3922,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '3689-12': {
+          title: 'Про охорону прав на знаки для товарів і послуг',
+          category: 'business_corporate',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '5207-17': {
+          title: 'Про засади запобігання та протидії дискримінації в Україні',
+          category: 'civil',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '1697-18': {
+          title: 'Про прокуратуру',
+          category: 'judiciary_justice',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected short explicit law-title query with dominant grounded evidence to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected short explicit law-title query with dominant grounded evidence to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '3689-12') {
+    throw new Error(`Expected short explicit law-title query to keep 3689-12 selected, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') &&
+    !result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected short explicit law-title query to confirm act scope, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('LOW_CONFIDENCE_SELECTED_ACTS_CLEARED')) {
+    throw new Error(`Expected short explicit law-title query to avoid low-confidence clearing, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] short explicit law-title queries stay grounded when metadata and chunks converge on one act');
+}
+
+async function testResolveSingleActScopeSelectionRecoversAnchorWhenOnlyHintedSupportActRemains(): Promise<void> {
+  const result = await resolveSingleActScopeSelection({
+    query:
+      'За Законом України «Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні», діяльність якого саме банку в Україні врегульовується цією угодою?',
+    domainHint: 'general',
+    documentTypeHints: ['Закон'],
+    selectedActsFinal: [
+      {
+        rada_nreg: 'z0841-01',
+        act_title: 'Про діяльність Bank Gospodarstwa Krajowego в Україні',
+        act_kind: 'SECONDARY_ORDER',
+        document_type: 'Положення',
+        category: 'banking',
+        score: 0.82,
+      },
+    ],
+    selectedActsSourcesBreakdownFinal: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['z0841-01'],
+    },
+    selectedActsFinalMeta: {
+      selected_acts_final: [
+        {
+          rada_nreg: 'z0841-01',
+          act_title: 'Про діяльність Bank Gospodarstwa Krajowego в Україні',
+          act_kind: 'SECONDARY_ORDER',
+          document_type: 'Положення',
+          category: 'banking',
+          score: 0.82,
+        },
+      ],
+      selected_acts_confidence_final: 0.82,
+      selected_acts_confidence_pre_routing: 0.82,
+      selected_acts_decision_final: {
+        policy_version: 1,
+        included_from_chunks_evidence: true,
+        reason_codes: ['SELECTED_ACTS_FROM_CHUNKS_EVIDENCE'],
+      },
+      selected_acts_kinds_count_final: { SECONDARY_ORDER: 1 },
+      selected_acts_document_types_top_final: ['Положення'],
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    reasonCodes: [],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: 'z0841-01',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.61,
+        max_score: 0.7,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.4,
+        max_ordering_score: 0.62,
+      },
+      {
+        rada_nreg: '4800-20',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.53,
+        max_score: 0.53,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.2,
+        max_ordering_score: 0.45,
+      },
+    ],
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '4800-20',
+        title: 'Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні',
+        score: 4.6,
+        category: 'international_eu',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'z0841-01',
+        title: 'Про діяльність Bank Gospodarstwa Krajowego в Україні',
+        score: 1.6,
+        category: 'banking',
+        document_type: 'Положення',
+        document_type_slug: 'regulation',
+        reasons: ['title_match', 'summary_match', 'validity_in_force'],
+      },
+    ],
+    exactActNregs: [],
+    groundedActNregs: ['4800-20'],
+    topScore: 0.7,
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '4800-20': {
+          title: 'Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні',
+          category: 'international_eu',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        'z0841-01': {
+          title: 'Про діяльність Bank Gospodarstwa Krajowego в Україні',
+          category: 'banking',
+          document_type: 'Положення',
+          document_type_slug: 'regulation',
+          storage_category: null,
+        },
+      };
+      const entry = byNreg[rada_nreg];
+      return entry
+        ? {
+            rada_nreg,
+            ...entry,
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    metadataGroundingReasonCodes: new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match']),
+    nonPrimaryAuthoritativeKinds: new Set(['SECONDARY_ORDER', 'KSU_DECISION', 'CASELAW_OPINION']),
+  });
+  if (!result.selectedActsFinal.some((act) => act.rada_nreg === '4800-20')) {
+    throw new Error(
+      `Expected grounded scope recovery to reinsert 4800-20 when only hinted support act survived, got ${JSON.stringify(result.selectedActsFinal)}`
+    );
+  }
+  if (result.selectedActsFinal[0]?.rada_nreg !== '4800-20') {
+    throw new Error(
+      `Expected grounded scope anchor to stay first after recovery, got ${JSON.stringify(result.selectedActsFinal)}`
+    );
+  }
+  if (!result.reasonCodes.includes('GROUNDED_ACT_SCOPE_RECOVERED')) {
+    throw new Error(
+      `Expected grounded scope recovery reason code after reinserting anchor act, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] single-act scope recovery reinserts grounded anchor before hinted support act');
+}
+
+async function testResolveSingleActScopeSelectionRejectsUntrustedGroundedPersonnelOrder(): Promise<void> {
+  const result = await resolveSingleActScopeSelection({
+    query:
+      "Яким розпорядженням Кабінету Міністрів України тимчасово покладено виконання обов'язків Голови Національної соціальної сервісної служби України на Ільченка І.О.?",
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order'],
+    selectedActsFinal: [
+      {
+        rada_nreg: '5-2026-р',
+        act_title:
+          "Про тимчасове покладення виконання обов'язків Голови Державної служби України з лікарських засобів та контролю за наркотиками на Короленка В.В.",
+        act_kind: 'SECONDARY_ORDER',
+        document_type: 'Розпорядження КМУ',
+        category: 'administrative',
+        score: 0.7,
+      },
+    ],
+    selectedActsSourcesBreakdownFinal: {
+      from_taxonomy: ['5-2026-р'],
+      from_acts_search: [],
+      from_chunks_evidence: ['5-2026-р'],
+    },
+    selectedActsFinalMeta: {
+      selected_acts_final: [
+        {
+          rada_nreg: '5-2026-р',
+          act_title:
+            "Про тимчасове покладення виконання обов'язків Голови Державної служби України з лікарських засобів та контролю за наркотиками на Короленка В.В.",
+          act_kind: 'SECONDARY_ORDER',
+          document_type: 'Розпорядження КМУ',
+          category: 'administrative',
+          score: 0.7,
+        },
+      ],
+      selected_acts_confidence_final: 0.72,
+      selected_acts_confidence_pre_routing: 0.72,
+      selected_acts_decision_final: {
+        policy_version: 1,
+        included_from_chunks_evidence: true,
+        reason_codes: ['SELECTED_ACTS_FROM_CHUNKS_EVIDENCE'],
+      },
+      selected_acts_kinds_count_final: { SECONDARY_ORDER: 1 },
+      selected_acts_document_types_top_final: ['Розпорядження КМУ'],
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    reasonCodes: [],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '5-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.591,
+        max_score: 0.591,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.5,
+        max_ordering_score: 0.305,
+      },
+      {
+        rada_nreg: '44/2026',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.531,
+        max_score: 0.531,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.2,
+        max_ordering_score: 0.328,
+      },
+    ],
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '5-2026-р',
+        title:
+          "Про тимчасове покладення виконання обов'язків Голови Державної служби України з лікарських засобів та контролю за наркотиками на Короленка В.В.",
+        score: 4.4,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '44/2026',
+        title: "Про тимчасове виконання обов'язків голови Волинської обласної державної адміністрації",
+        score: 2.2,
+        category: 'administrative',
+        document_type: 'Указ Президента',
+        document_type_slug: 'president_decree',
+        reasons: ['summary_match'],
+      },
+    ],
+    exactActNregs: [],
+    groundedActNregs: ['5-2026-р'],
+    topScore: 0.79,
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '5-2026-р': {
+          title:
+            "Про тимчасове покладення виконання обов'язків Голови Державної служби України з лікарських засобів та контролю за наркотиками на Короленка В.В.",
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '44/2026': {
+          title: "Про тимчасове виконання обов'язків голови Волинської обласної державної адміністрації",
+          category: 'administrative',
+          document_type: 'Указ Президента',
+          document_type_slug: 'president_decree',
+          storage_category: null,
+        },
+      };
+      const entry = byNreg[rada_nreg];
+      return entry
+        ? {
+            rada_nreg,
+            ...entry,
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    metadataGroundingReasonCodes: new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match']),
+    nonPrimaryAuthoritativeKinds: new Set(['SECONDARY_ORDER', 'KSU_DECISION', 'CASELAW_OPINION']),
+  });
+  if (result.groundedSingleActConverged) {
+    throw new Error(`Expected wrong grounded personnel-order anchor to be rejected, got ${JSON.stringify(result.groundedActNregSet ? [...result.groundedActNregSet] : [])}`);
+  }
+  if (result.reasonCodes.some((code) => code.startsWith('GROUNDED_ACT_SCOPE_'))) {
+    throw new Error(`Expected untrusted grounded personnel-order anchor not to emit grounded scope recovery codes, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-act scope rejects grounded personnel-order anchors that fail explicit identity matching');
+}
+
+async function testResolveSingleActScopeSelectionRecoversGroundedRepealOrderWithTrustedDateNumberIdentity(): Promise<void> {
+  const result = await resolveSingleActScopeSelection({
+    query:
+      'Яким розпорядженням Кабінету Міністрів України визнано таким, що втратило чинність, розпорядження від 25 лютого 2026 р. № 177?',
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order'],
+    selectedActsFinal: [],
+    selectedActsSourcesBreakdownFinal: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: [],
+    },
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.52,
+      selected_acts_confidence_pre_routing: 0.52,
+      selected_acts_decision_final: {
+        policy_version: 1,
+        included_from_chunks_evidence: true,
+        reason_codes: ['SELECTED_ACTS_FROM_CHUNKS_EVIDENCE'],
+      },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: [],
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    reasonCodes: [],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '1898-2010-р',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.6897,
+        max_score: 0.7269,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.1309,
+        max_ordering_score: 0.6872,
+      },
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 16,
+        avg_score_in_top30: 0.5881,
+        max_score: 0.6711,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 1.1462,
+        max_ordering_score: 0.6639,
+      },
+      {
+        rada_nreg: '262-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.7071,
+        max_score: 0.7071,
+        best_rank_in_top30: 16,
+        rank_mass_top30: 0.0625,
+        max_ordering_score: 0.5261,
+      },
+    ],
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '4-2026-р',
+        title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 24 грудня 2025 р. № 1479',
+        score: 35.03,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'alias_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '15-2026-р',
+        title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 19 листопада 2025 р. № 1292',
+        score: 35.02,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'alias_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '262-2026-р',
+        title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 25 лютого 2026 р. № 177',
+        score: 34.55,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'alias_match', 'validity_in_force', 'hits_evidence'],
+      },
+    ],
+    exactActNregs: [],
+    groundedActNregs: ['262-2026-р'],
+    topScore: 0.727,
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '4-2026-р': {
+          title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 24 грудня 2025 р. № 1479',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '15-2026-р': {
+          title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 19 листопада 2025 р. № 1292',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '262-2026-р': {
+          title: 'Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 25 лютого 2026 р. № 177',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+      };
+      const entry = byNreg[rada_nreg];
+      return entry
+        ? {
+            rada_nreg,
+            ...entry,
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    metadataGroundingReasonCodes: new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match']),
+    nonPrimaryAuthoritativeKinds: new Set(['SECONDARY_ORDER', 'KSU_DECISION', 'CASELAW_OPINION']),
+  });
+  if (!result.groundedSingleActConverged) {
+    throw new Error(`Expected repeal-order query with exact date+number identity to keep grounded single-act convergence, got ${JSON.stringify([...result.groundedActNregSet])}`);
+  }
+  if (result.selectedActsFinal[0]?.rada_nreg !== '262-2026-р') {
+    throw new Error(`Expected grounded repeal-order anchor to be recovered into selected acts, got ${JSON.stringify(result.selectedActsFinal)}`);
+  }
+  if (!result.reasonCodes.includes('GROUNDED_ACT_SCOPE_RECOVERED')) {
+    throw new Error(`Expected grounded repeal-order recovery to emit GROUNDED_ACT_SCOPE_RECOVERED, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-act scope recovers grounded repeal-order anchors when date+number identity matches the explicit query');
+}
+
+async function testResolveSingleGoalSelectedActsPrefersDominantEvidenceOverSemanticNeighborMetadataScope(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      "Який спеціальний закон вимагає food traceability від операторів ринку та розкриття даних на запит компетентного органу?",
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '771/97-вр',
+        r2_key: 'r2://771/8',
+        json_path: '$.chunks[8]',
+        score: 0.5701,
+        ordering_score: 0.549,
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        article_number: '8',
+      },
+      {
+        rada_nreg: '771/97-вр',
+        r2_key: 'r2://771/20',
+        json_path: '$.chunks[20]',
+        score: 0.558,
+        ordering_score: 0.537,
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        article_number: '20',
+      },
+      {
+        rada_nreg: '771/97-вр',
+        r2_key: 'r2://771/22',
+        json_path: '$.chunks[22]',
+        score: 0.567,
+        ordering_score: 0.399,
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        article_number: '22',
+      },
+      {
+        rada_nreg: '771/97-вр',
+        r2_key: 'r2://771/23',
+        json_path: '$.chunks[23]',
+        score: 0.546,
+        ordering_score: 0.39,
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        article_number: '23',
+      },
+      {
+        rada_nreg: '771/97-вр',
+        r2_key: 'r2://771/25',
+        json_path: '$.chunks[25]',
+        score: 0.544,
+        ordering_score: 0.389,
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        article_number: '25',
+      },
+      {
+        rada_nreg: '2297-17',
+        r2_key: 'r2://2297/7',
+        json_path: '$.chunks[7]',
+        score: 0.396,
+        ordering_score: 0.385,
+        title: 'Про захист персональних даних',
+        article_number: '7',
+      },
+      {
+        rada_nreg: '2297-17',
+        r2_key: 'r2://2297/9',
+        json_path: '$.chunks[9]',
+        score: 0.398,
+        ordering_score: 0.383,
+        title: 'Про захист персональних даних',
+        article_number: '9',
+      },
+      {
+        rada_nreg: '2297-17',
+        r2_key: 'r2://2297/11',
+        json_path: '$.chunks[11]',
+        score: 0.398,
+        ordering_score: 0.381,
+        title: 'Про захист персональних даних',
+        article_number: '11',
+      },
+      {
+        rada_nreg: '2297-17',
+        r2_key: 'r2://2297/1',
+        json_path: '$.chunks[1]',
+        score: 0.39,
+        ordering_score: 0.381,
+        title: 'Про захист персональних даних',
+        article_number: '1',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '2297-17',
+        title: 'Про захист персональних даних',
+        score: 8.1,
+        category: 'civil',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'summary_match', 'topic_match', 'title_match', 'document_type_match'],
+      },
+      {
+        rada_nreg: '771/97-вр',
+        title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+        score: 5.9,
+        category: 'agriculture_food',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'summary_match', 'topic_match', 'document_type_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['2297-17', '771/97-вр']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 2,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.5701,
+    avgScore: 0.47,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '771/97-вр',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.557,
+        max_score: 0.5701,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.264,
+        max_ordering_score: 0.549,
+      },
+      {
+        rada_nreg: '2297-17',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.396,
+        max_score: 0.398,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.92,
+        max_ordering_score: 0.385,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        '771/97-вр': {
+          title: 'Про основні принципи та вимоги до безпечності та якості харчових продуктів',
+          category: 'agriculture_food',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '2297-17': {
+          title: 'Про захист персональних даних',
+          category: 'civil',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(
+      `Expected dominant-evidence special-law locator query to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(
+      `Expected dominant-evidence special-law locator query to keep coverage_gap=none, got ${result.coverageGap}`
+    );
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '771/97-вр') {
+    throw new Error(
+      `Expected dominant-evidence special-law locator query to keep 771/97-вр selected, got ${JSON.stringify(result.selected_acts_final)}`
+    );
+  }
+  if (!result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(
+      `Expected dominant-evidence special-law locator query to confirm evidence act scope, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(
+      `Expected dominant-evidence special-law locator query to avoid semantic-neighbor metadata confirmation, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] dominant chunk evidence beats semantic-neighbor metadata scope for special-law locator queries');
+}
+
+async function testResolveSingleGoalSelectedActsPrefersEarlyRankMassLawOverCoverageTailForSoftLocator(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'Який спеціальний закон регулює transfer of state and communal property objects та пакет документів для такої передачі?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/3',
+        json_path: '$.chunks[3]',
+        score: 0.568,
+        ordering_score: 0.476,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '3',
+      },
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/7',
+        json_path: '$.chunks[7]',
+        score: 0.549,
+        ordering_score: 0.465,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '7',
+      },
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/1',
+        json_path: '$.chunks[1]',
+        score: 0.579,
+        ordering_score: 0.463,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '1',
+      },
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/5',
+        json_path: '$.chunks[5]',
+        score: 0.519,
+        ordering_score: 0.451,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '5',
+      },
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/4',
+        json_path: '$.chunks[4]',
+        score: 0.501,
+        ordering_score: 0.444,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '4',
+      },
+      {
+        rada_nreg: '147/98-вр',
+        r2_key: 'r2://147/71',
+        json_path: '$.chunks[71]',
+        score: 0.535,
+        ordering_score: 0.385,
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        article_number: '71',
+      },
+      {
+        rada_nreg: '1861-17',
+        r2_key: 'r2://1861/91',
+        json_path: '$.chunks[91]',
+        score: 0.334,
+        ordering_score: 0.443,
+        title: 'Про Регламент Верховної Ради України',
+        article_number: '91',
+      },
+      {
+        rada_nreg: '1861-17',
+        r2_key: 'r2://1861/194',
+        json_path: '$.chunks[194]',
+        score: 0.329,
+        ordering_score: 0.437,
+        title: 'Про Регламент Верховної Ради України',
+        article_number: '194',
+      },
+      {
+        rada_nreg: '1861-17',
+        r2_key: 'r2://1861/127',
+        json_path: '$.chunks[127]',
+        score: 0.299,
+        ordering_score: 0.403,
+        title: 'Про Регламент Верховної Ради України',
+        article_number: '127',
+      },
+      {
+        rada_nreg: '1861-17',
+        r2_key: 'r2://1861/71',
+        json_path: '$.chunks[71]',
+        score: 0.331,
+        ordering_score: 0.379,
+        title: 'Про Регламент Верховної Ради України',
+        article_number: '71',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1861-17',
+        title: 'Про Регламент Верховної Ради України',
+        score: 4.71,
+        category: 'constitutional',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['keyword_match', 'topic_match', 'title_match', 'summary_match', 'validity_in_force', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '147/98-вр',
+        title: "Про передачу об'єктів права державної та комунальної власності",
+        score: 3.54,
+        category: 'property_real_estate',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'validity_in_force', 'chunks_evidence_meta'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['1861-17', '147/98-вр']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Закон'],
+    taxonomyActCount: 2,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.579,
+    avgScore: 0.454,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '147/98-вр',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.5418,
+        max_score: 0.579,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2909,
+        max_ordering_score: 0.4755,
+      },
+      {
+        rada_nreg: '1861-17',
+        count_in_top30: 13,
+        avg_score_in_top30: 0.3168,
+        max_score: 0.3747,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.9041,
+        max_ordering_score: 0.4429,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        '147/98-вр': {
+          title: "Про передачу об'єктів права державної та комунальної власності",
+          category: 'property_real_estate',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '1861-17': {
+          title: 'Про Регламент Верховної Ради України',
+          category: 'constitutional',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(
+      `Expected soft special-law locator with dominant early evidence to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(
+      `Expected soft special-law locator with dominant early evidence to keep coverage_gap=none, got ${result.coverageGap}`
+    );
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '147/98-вр') {
+    throw new Error(
+      `Expected soft special-law locator to prefer 147/98-вр over generic coverage tail, got ${JSON.stringify(result.selected_acts_final)}`
+    );
+  }
+  if (!result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(
+      `Expected soft special-law locator to confirm evidence act scope, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  console.log('[OK] soft special-law locator prefers early rank-mass leader over generic primary-law coverage tail');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'За Законом України «Про фінансовий лізинг», чи може лізингодавець відмовитися від договору через прострочення лізингових платежів?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/806',
+        json_path: '$.chunks[806]',
+        score: 0.665,
+        ordering_score: 0.584,
+        title: 'Цивільний кодекс України',
+        article_number: '806',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/8091',
+        json_path: '$.chunks[8091]',
+        score: 0.666,
+        ordering_score: 0.582,
+        title: 'Цивільний кодекс України',
+        article_number: '809-1',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/809',
+        json_path: '$.chunks[809]',
+        score: 0.628,
+        ordering_score: 0.558,
+        title: 'Цивільний кодекс України',
+        article_number: '809',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/807',
+        json_path: '$.chunks[807]',
+        score: 0.609,
+        ordering_score: 0.557,
+        title: 'Цивільний кодекс України',
+        article_number: '807',
+      },
+      {
+        rada_nreg: '80731-10',
+        r2_key: 'r2://80731/18829',
+        json_path: '$.chunks[18829]',
+        score: 0.603,
+        ordering_score: 0.503,
+        title: 'Кодекс України про адміністративні правопорушення',
+        article_number: '188-29',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 1.5,
+        category: 'civil',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.9,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'civil',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.66565,
+    avgScore: 0.62,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.63,
+        max_score: 0.666,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.94,
+        max_ordering_score: 0.584,
+      },
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.58,
+        max_score: 0.603,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.31,
+        max_ordering_score: 0.503,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '435-15': {
+          title: 'Цивільний кодекс України',
+          category: 'civil',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '80731-10': {
+          title: 'Кодекс України про адміністративні правопорушення',
+          category: 'administrative_offenses',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected absent explicit law-title query to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected absent explicit law-title query to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (!result.reasonCodes.includes('EXPLICIT_ACT_SCOPE_NO_CONVERGENCE')) {
+    throw new Error(`Expected EXPLICIT_ACT_SCOPE_NO_CONVERGENCE reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected absent explicit law-title query to avoid fake evidence act-scope confirmation, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer rejects domain-aligned primary fallback for absent explicit law-title queries');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsSupportOnlySecondaryActForAbsentExplicitLawTitle(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'За Законом України «Про національну безпеку України», хто затверджує Стратегію національної безпеки та які документи входять до системи планування у сфері національної безпеки і оборони?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '392/2020',
+        r2_key: 'r2://392/2',
+        json_path: '$.chunks[2]',
+        score: 0.67,
+        ordering_score: 0.63,
+        title: 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '392/2020',
+        r2_key: 'r2://392/4',
+        json_path: '$.chunks[4]',
+        score: 0.65,
+        ordering_score: 0.61,
+        title: 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '392/2020',
+        r2_key: 'r2://392/1',
+        json_path: '$.chunks[1]',
+        score: 0.63,
+        ordering_score: 0.58,
+        title: 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        unit_type: 'point',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '392/2020',
+        title: 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        score: 2.4,
+        category: 'national_security',
+        document_type: 'Указ Президента',
+        document_type_slug: 'presidential_decree',
+        reasons: ['title_match', 'summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.67,
+    avgScore: 0.65,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '392/2020',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.65,
+        max_score: 0.67,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.73,
+        max_ordering_score: 0.63,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      if (rada_nreg !== '392/2020') return null;
+      return {
+        rada_nreg,
+        title: 'Про рішення Ради національної безпеки і оборони України від 14 вересня 2020 року "Про Стратегію національної безпеки України"',
+        category: 'national_security',
+        document_type: 'Указ Президента',
+        document_type_slug: 'presidential_decree',
+        storage_category: null,
+        summary: null,
+        aliases: [],
+        validity_status: 'in_force',
+      };
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected support-only secondary act fallback for explicit law title to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected support-only secondary act fallback to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected explicit law-title query not to confirm support-only non-primary scope, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] explicit law-title queries do not treat support-only secondary acts as grounded success');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsSemanticNeighborForAbsentExplicitLawTitle(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'За Законом України «Про захист населення від інфекційних хвороб», чи можуть працівників окремих професій відсторонити від роботи через відмову від обов\'язкових щеплень?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '322-08',
+        r2_key: 'r2://322/27',
+        json_path: '$.chunks[27]',
+        score: 0.736,
+        ordering_score: 0.692,
+        title: 'Про забезпечення санітарного та епідемічного благополуччя населення',
+        article_number: '27',
+      },
+      {
+        rada_nreg: '322-08',
+        r2_key: 'r2://322/26',
+        json_path: '$.chunks[26]',
+        score: 0.721,
+        ordering_score: 0.674,
+        title: 'Про забезпечення санітарного та епідемічного благополуччя населення',
+        article_number: '26',
+      },
+      {
+        rada_nreg: '322-08',
+        r2_key: 'r2://322/7',
+        json_path: '$.chunks[7]',
+        score: 0.703,
+        ordering_score: 0.661,
+        title: 'Про забезпечення санітарного та епідемічного благополуччя населення',
+        article_number: '7',
+      },
+      {
+        rada_nreg: '2341-14',
+        r2_key: 'r2://2341/325',
+        json_path: '$.chunks[325]',
+        score: 0.624,
+        ordering_score: 0.541,
+        title: 'Кримінальний кодекс України',
+        article_number: '325',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '322-08',
+        title: 'Про забезпечення санітарного та епідемічного благополуччя населення',
+        score: 1.72,
+        category: 'health',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['title_match'],
+      },
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 0.96,
+        category: 'criminal',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['law'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.736,
+    avgScore: 0.68,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '322-08',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.71,
+        max_score: 0.736,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.64,
+        max_ordering_score: 0.692,
+      },
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.62,
+        max_score: 0.624,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.29,
+        max_ordering_score: 0.541,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '322-08': {
+          title: 'Про забезпечення санітарного та епідемічного благополуччя населення',
+          category: 'health',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '2341-14': {
+          title: 'Кримінальний кодекс України',
+          category: 'criminal',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected absent explicit law-title semantic-neighbor query to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected absent explicit law-title semantic-neighbor query to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED') || result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected absent explicit law-title semantic-neighbor query to avoid fake act-scope confirmation, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer rejects semantic-neighbor fallback for absent explicit law-title queries');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsBaseOrderFallbackForAbsentExplicitAmendmentOrder(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'За постановою Кабінету Міністрів України «Про внесення зміни до пункту 14 Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин», порядок закупівлі яких саме засобів і виробів змінюється цією постановою?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '955-2010-п',
+        r2_key: 'r2://955/14',
+        json_path: '$.chunks[14]',
+        score: 0.838,
+        ordering_score: 0.79,
+        title:
+          'Про затвердження Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '955-2010-п',
+        r2_key: 'r2://955/9',
+        json_path: '$.chunks[9]',
+        score: 0.802,
+        ordering_score: 0.76,
+        title:
+          'Про затвердження Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '907-2015-п',
+        r2_key: 'r2://907/1',
+        json_path: '$.chunks[1]',
+        score: 0.74,
+        ordering_score: 0.69,
+        title: 'Про затвердження Порядку використання коштів для закупівлі безпілотних систем',
+        unit_type: 'point',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '955-2010-п',
+        title:
+          'Про затвердження Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин',
+        score: 2.9,
+        category: 'procurement',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '907-2015-п',
+        title: 'Про затвердження Порядку використання коштів для закупівлі безпілотних систем',
+        score: 1.4,
+        category: 'procurement',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['cmu_resolution'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.838,
+    avgScore: 0.793,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '955-2010-п',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.81,
+        max_score: 0.838,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.94,
+        max_ordering_score: 0.79,
+      },
+      {
+        rada_nreg: '907-2015-п',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.74,
+        max_score: 0.74,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.28,
+        max_ordering_score: 0.69,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '955-2010-п': {
+          title:
+            'Про затвердження Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин',
+          category: 'procurement',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '907-2015-п': {
+          title: 'Про затвердження Порядку використання коштів для закупівлі безпілотних систем',
+          category: 'procurement',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected absent amendment-order query to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected absent amendment-order query to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (
+    result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected absent amendment-order query not to confirm a neighboring base order, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer rejects base-order fallback for absent amendment-order queries');
+}
+
+async function testResolveSingleGoalSelectedActsRejectsPersonnelOrderNeighborForAbsentExplicitDismissalOrder(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким розпорядженням Кабінету Міністрів України звільнено Мироненка Ю.М. з посади заступника Міністра оборони України?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '50-2026-р',
+        r2_key: 'r2://50/1',
+        json_path: '$.chunks[1]',
+        score: 0.625,
+        ordering_score: 0.37,
+        title: 'Про звільнення Шевцова М.М. з посади заступника Міністра оборони України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '49-2026-р',
+        r2_key: 'r2://49/1',
+        json_path: '$.chunks[1]',
+        score: 0.613,
+        ordering_score: 0.365,
+        title: 'Про звільнення Козенка О.В. з посади заступника Міністра оборони України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '32-2026-р',
+        r2_key: 'r2://32/1',
+        json_path: '$.chunks[1]',
+        score: 0.571,
+        ordering_score: 0.346,
+        title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '32-2026-р',
+        title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+        score: 3.2,
+        category: 'defense_mobilization',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '50-2026-р',
+        title: 'Про звільнення Шевцова М.М. з посади заступника Міністра оборони України',
+        score: 1.0,
+        category: 'defense_mobilization',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '49-2026-р',
+        title: 'Про звільнення Козенка О.В. з посади заступника Міністра оборони України',
+        score: 0.9,
+        category: 'defense_mobilization',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order'],
+    taxonomyActCount: 0,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.831,
+    avgScore: 0.603,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '32-2026-р',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.571,
+        max_score: 0.571,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.14,
+        max_ordering_score: 0.346,
+      },
+      {
+        rada_nreg: '50-2026-р',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.625,
+        max_score: 0.625,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.22,
+        max_ordering_score: 0.37,
+      },
+      {
+        rada_nreg: '49-2026-р',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.613,
+        max_score: 0.613,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.15,
+        max_ordering_score: 0.365,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '32-2026-р': {
+          title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+          category: 'defense_mobilization',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '50-2026-р': {
+          title: 'Про звільнення Шевцова М.М. з посади заступника Міністра оборони України',
+          category: 'defense_mobilization',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '49-2026-р': {
+          title: 'Про звільнення Козенка О.В. з посади заступника Міністра оборони України',
+          category: 'defense_mobilization',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected absent personnel-order query to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected absent personnel-order query to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.some((act) => act.rada_nreg === '32-2026-р')) {
+    throw new Error(`Expected neighboring dismissal order to be cleared from selected acts, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected absent personnel-order query not to confirm neighboring dismissal orders, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer rejects neighboring personnel-order fallback for absent explicit dismissal query');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversExplicitPersonnelOrderWithMatchingIdentity(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким розпорядженням Кабінету Міністрів України звільнено Клочка А.О. з посади заступника Міністра оборони України?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '2469-19',
+        r2_key: 'r2://2469/8',
+        json_path: '$.chunks[8]',
+        score: 0.661,
+        ordering_score: 0.593,
+        title: 'Про соціальний і правовий захист військовослужбовців та членів їх сімей',
+        article_number: '8',
+      },
+      {
+        rada_nreg: '48-2026-р',
+        r2_key: 'r2://48/1',
+        json_path: '$.chunks[1]',
+        score: 0.647,
+        ordering_score: 0.436,
+        title: 'Про звільнення Клочка А.О. з посади заступника Міністра оборони України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '32-2026-р',
+        r2_key: 'r2://32/1',
+        json_path: '$.chunks[1]',
+        score: 0.643,
+        ordering_score: 0.371,
+        title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '32-2026-р',
+        title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+        score: 4.3,
+        category: 'defense_mobilization',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '48-2026-р',
+        title: 'Про звільнення Клочка А.О. з посади заступника Міністра оборони України',
+        score: 3.8,
+        category: 'defense_mobilization',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '2469-19',
+        title: 'Про соціальний і правовий захист військовослужбовців та членів їх сімей',
+        score: 1.7,
+        category: 'defense_mobilization',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['32-2026-р', '48-2026-р', '2469-19']),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order'],
+    taxonomyActCount: 3,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.661,
+    avgScore: 0.65,
+    categoryHintsCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '2469-19',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.648,
+        max_score: 0.661,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.93,
+        max_ordering_score: 0.593,
+      },
+      {
+        rada_nreg: '48-2026-р',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.647,
+        max_score: 0.647,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.35,
+        max_ordering_score: 0.436,
+      },
+      {
+        rada_nreg: '32-2026-р',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.643,
+        max_score: 0.643,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.31,
+        max_ordering_score: 0.371,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '32-2026-р': {
+          title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+          category: 'defense_mobilization',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '48-2026-р': {
+          title: 'Про звільнення Клочка А.О. з посади заступника Міністра оборони України',
+          category: 'defense_mobilization',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '2469-19': {
+          title: 'Про соціальний і правовий захист військовослужбовців та членів їх сімей',
+          category: 'defense_mobilization',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected present personnel-order query with matching identity to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected present personnel-order query with matching identity to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '48-2026-р') {
+    throw new Error(`Expected explicit personnel-order query to recover 48-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') &&
+    !result.reasonCodes.includes('GROUNDED_ACT_SCOPE_CONFIRMED') &&
+    !result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected explicit personnel-order query to confirm act scope, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer keeps only the personnel order with matching named identity under noisy same-family evidence');
+}
+
 async function testResolveSingleGoalSelectedActsFlagsUngroundedGeneralChunksOnlyPrimaryFallback(): Promise<void> {
   const result = await resolveSingleGoalSelectedActs({
     query: 'Які права має особа на видалення своїх персональних даних і які засоби захисту є при бездіяльності володільця?',
@@ -4872,6 +8171,413 @@ async function testResolveSingleGoalSelectedActsFlagsUngroundedGeneralChunksOnly
     throw new Error(`Expected UNGROUNDED_GENERAL_PRIMARY_FALLBACK reason code, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] single-goal finalizer flags chunks-only general primary fallback despite structural query detail');
+}
+
+async function testResolveSingleGoalSelectedActsFlagsUngroundedPrimaryCompanionFallback(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Хочу стерти свої персональні дані: які строки для відповіді і куди скаржитися, якщо мені відмовляють?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '1023-12',
+        r2_key: 'r2://1023/31',
+        json_path: '$.chunks[31]',
+        score: 0.586,
+        ordering_score: 0.0,
+        title: 'Про захист прав споживачів',
+        article_number: '31',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/200',
+        json_path: '$.chunks[200]',
+        score: 0.55,
+        ordering_score: 0.0,
+        title: 'Цивільний кодекс України',
+        article_number: '200',
+      },
+      {
+        rada_nreg: '80731-10',
+        r2_key: 'r2://80731/188',
+        json_path: '$.chunks[188]',
+        score: 0.549,
+        ordering_score: 0.0,
+        title: 'Кодекс України про адміністративні правопорушення',
+        article_number: '188-39',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '1023-12',
+        title: 'Про захист прав споживачів',
+        score: 0.826,
+        category: 'civil',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 0.67,
+        category: 'civil',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+        reasons: ['exact_title_match'],
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.669,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['435-15']),
+    actsSearchNregs: ['435-15'],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 1,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['CHUNKS_FAMILY_MISMATCH_DEMOTED', 'SUPPORT_FAMILY_MISMATCH_BLOCKED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.586,
+    avgScore: 0.57,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.57,
+        max_score: 0.586,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.45,
+        max_ordering_score: 0.0,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.55,
+        max_score: 0.55,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.06,
+        max_ordering_score: 0.0,
+      },
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.547,
+        max_score: 0.549,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.09,
+        max_ordering_score: 0.0,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        '1023-12': {
+          title: 'Про захист прав споживачів',
+          category: 'civil',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '435-15': {
+          title: 'Цивільний кодекс України',
+          category: 'civil',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '80731-10': {
+          title: 'Кодекс України про адміністративні правопорушення',
+          category: 'administrative_offenses',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(
+      `Expected metadata-companion primary fallback to be low confidence, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (!result.reasonCodes.includes('UNGROUNDED_PRIMARY_COMPANION_FALLBACK')) {
+    throw new Error(
+      `Expected metadata-companion fallback reason code, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  if (result.coverageGap !== 'weak_evidence') {
+    throw new Error(
+      `Expected metadata-companion primary fallback to stay weak_evidence after indexed grounding, got ${result.coverageGap}`
+    );
+  }
+  console.log('[OK] single-goal finalizer flags metadata-companion primary fallback as low confidence');
+}
+
+async function testResolveSingleGoalSelectedActsFlagsBroadSameFamilyChunksOnlyFallback(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Які права має особа на видалення своїх персональних даних і які засоби захисту є при бездіяльності володільця?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '80731-10',
+        r2_key: 'r2://80731/1',
+        json_path: '$.chunks[1]',
+        score: 0.533,
+        ordering_score: 0.533,
+        title: 'Кодекс України про адміністративні правопорушення',
+      },
+      {
+        rada_nreg: '580-19',
+        r2_key: 'r2://580/1',
+        json_path: '$.chunks[1]',
+        score: 0.531,
+        ordering_score: 0.531,
+        title: 'Про Національну поліцію',
+      },
+      {
+        rada_nreg: '1023-12',
+        r2_key: 'r2://1023/31',
+        json_path: '$.chunks[31]',
+        score: 0.524,
+        ordering_score: 0.524,
+        title: 'Про захист прав споживачів',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435/200',
+        json_path: '$.chunks[200]',
+        score: 0.553,
+        ordering_score: 0.520,
+        title: 'Цивільний кодекс України',
+      },
+      {
+        rada_nreg: '4651-17',
+        r2_key: 'r2://4651/1',
+        json_path: '$.chunks[1]',
+        score: 0.519,
+        ordering_score: 0.519,
+        title: 'Кримінальний процесуальний кодекс України',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        score: 0.874,
+        category: 'civil',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.733,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '580-19',
+        title: 'Про Національну поліцію',
+        score: 0.691,
+        category: 'administrative',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '1023-12',
+        title: 'Про захист прав споживачів',
+        score: 0.684,
+        category: 'civil',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 0.679,
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 3,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['CHUNKS_FAMILY_MISMATCH_DEMOTED', 'SUPPORT_FAMILY_MISMATCH_BLOCKED', 'ORDER_UNRELATED_BLOCKED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: true, used: true, not_used_reason_codes: [] },
+    topScore: 0.57,
+    avgScore: 0.52,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.52,
+        max_score: 0.533,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.44,
+        max_ordering_score: 0.533,
+      },
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.516,
+        max_score: 0.524,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.64,
+        max_ordering_score: 0.524,
+      },
+      {
+        rada_nreg: '580-19',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.514,
+        max_score: 0.531,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.54,
+        max_ordering_score: 0.531,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.508,
+        max_score: 0.554,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.44,
+        max_ordering_score: 0.520,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.513,
+        max_score: 0.519,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.41,
+        max_ordering_score: 0.519,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<string, { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }> = {
+        '1023-12': {
+          title: 'Про захист прав споживачів',
+          category: 'civil',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '435-15': {
+          title: 'Цивільний кодекс України',
+          category: 'civil',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '80731-10': {
+          title: 'Кодекс України про адміністративні правопорушення',
+          category: 'administrative_offenses',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+        '580-19': {
+          title: 'Про Національну поліцію',
+          category: 'administrative',
+          document_type: 'Закон',
+          document_type_slug: 'law',
+          storage_category: null,
+        },
+        '4651-17': {
+          title: 'Кримінальний процесуальний кодекс України',
+          category: 'criminal_procedure',
+          document_type: 'Кодекс',
+          document_type_slug: 'code',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected broad same-family chunks-only fallback to be low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (!result.reasonCodes.includes('UNGROUNDED_GENERAL_PRIMARY_FALLBACK')) {
+    throw new Error(`Expected UNGROUNDED_GENERAL_PRIMARY_FALLBACK, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'weak_evidence' && result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected broad same-family chunks-only fallback to map to non-none coverage gap, got ${result.coverageGap}`);
+  }
+  console.log('[OK] single-goal finalizer flags broad same-family chunks-only fallback when taxonomy never converges');
 }
 
 function testCoverageGapUsesSpecificDomainHintForLikelyMissingAct(): void {
@@ -5073,6 +8779,107 @@ function testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActI
   console.log('[OK] coverage-gap keeps explicit-act-scope no-convergence as weak_evidence when the act is already grounded');
 }
 
+function testCoverageGapTreatsMetadataOnlyExplicitActScopeMissAsLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['EXPLICIT_ACT_SCOPE_NO_CONVERGENCE', 'NO_STRONG_ACT_EVIDENCE'],
+    selectedActsCount: 0,
+    selectedActsConfidence: 0.4,
+    selectedActKinds: [],
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedActCount: 1,
+    explicitActScopeCue: true,
+    hitsCount: 91,
+    topScore: 0.69,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(
+      `Expected explicit-act-scope no-convergence with metadata-only neighbor grounding to map to likely_missing_act, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap treats metadata-only explicit-act-scope miss as likely_missing_act');
+}
+
+function testCoverageGapUsesExplicitActScopeForLikelyMissingActWithoutGrounding(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['LOW_EVIDENCE', 'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED'],
+    selectedActsCount: 0,
+    selectedActsConfidence: 0.4,
+    selectedActKinds: [],
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedActCount: 0,
+    explicitActScopeCue: true,
+    hitsCount: 24,
+    topScore: 0.59,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected explicit act-scope low-confidence run without grounding to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap uses explicit act scope to signal likely missing act without grounding');
+}
+
+function testCoverageGapPrefersLikelyMissingActOverOutOfScopeForExplicitActScope(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['OUT_OF_SCOPE', 'LOW_EVIDENCE', 'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE'],
+    selectedActsCount: 0,
+    selectedActsConfidence: 0.4,
+    selectedActKinds: [],
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedActCount: 0,
+    explicitActScopeCue: true,
+    hitsCount: 12,
+    topScore: 0.47,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected explicit act-scope miss to stay likely_missing_act instead of out_of_scope, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap prefers likely_missing_act over out_of_scope for explicit act-scope misses');
+}
+
+function testCoverageGapPromotesSpecificNonPrimaryOnlyWeakSelectionToLikelyMissingAct(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['NON_PRIMARY_ONLY_WEAK_CONFIDENCE', 'FAMILY_GUARD_NO_EVIDENCE', 'ACT_SELECTION_LOW_CONFIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.55,
+    selectedActKinds: ['INTERNATIONAL_TREATY', 'SECONDARY_ORDER'],
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedActCount: 0,
+    hitsCount: 14,
+    topScore: 0.56,
+    domainHint: 'environmental',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected specific non-primary-only weak selection to map to likely_missing_act, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap promotes specific non-primary-only weak selection to likely_missing_act');
+}
+
 function testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -5118,6 +8925,168 @@ function testCoverageGapKeepsGroundedSinglePrimaryProceduralBundleAsWeakEvidence
     throw new Error(`Expected grounded same-act procedural bundle to stay weak_evidence, got ${coverageGap}`);
   }
   console.log('[OK] coverage-gap keeps grounded single-primary procedural bundles as weak_evidence');
+}
+
+function testCoverageGapKeepsUngroundedSinglePrimaryProceduralBundleAsWeakEvidence(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED', 'MULTI_GOAL_PRIMARY_COVERAGE_WEAK', 'LOW_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: false,
+    proceduralOnlySelection: true,
+    hitsCount: 18,
+    topScore: 0.58,
+    domainHint: 'civil',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(`Expected same-act procedural bundle without act grounding to stay weak_evidence, got ${coverageGap}`);
+  }
+  console.log('[OK] coverage-gap keeps ungrounded same-act procedural bundles as weak_evidence');
+}
+
+function testCoverageGapKeepsProceduralSinglePrimaryBundleWeakEvenWhenUngroundedFallbackFires(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: [
+      'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED',
+      'UNGROUNDED_MULTI_GOAL_FALLBACK',
+      'LOW_EVIDENCE',
+    ],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: false,
+    proceduralOnlySelection: true,
+    hitsCount: 30,
+    topScore: 0.61,
+    domainHint: 'civil',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(
+      `Expected same-act procedural bundle with ungrounded fallback to stay weak_evidence, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap keeps same-act procedural bundle weak even when ungrounded fallback fires');
+}
+
+function testCoverageGapKeepsProceduralSinglePrimaryFallbackWeakWithoutBlockedReason(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['UNGROUNDED_MULTI_GOAL_FALLBACK', 'LOW_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: false,
+    proceduralOnlySelection: true,
+    hitsCount: 30,
+    topScore: 0.6,
+    domainHint: 'civil',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(
+      `Expected single-primary procedural fallback without blocked reason to stay weak_evidence, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap keeps single-primary procedural fallback weak without blocked reason');
+}
+
+function testCoverageGapUsesLikelyMissingActForMixedProceduralFallbackWithOnlyMetadataGrounding(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: [
+      'UNGROUNDED_MULTI_GOAL_FALLBACK',
+      'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED',
+      'LOW_EVIDENCE',
+    ],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.52,
+    selectedActKinds: ['PRIMARY_LAW'],
+    metadataGroundedActCount: 1,
+    mixedProcedureAndNonProcedureGoals: true,
+    proceduralOnlySelection: true,
+    hitsCount: 30,
+    topScore: 0.61,
+    domainHint: 'administrative',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(
+      `Expected mixed-goal procedural fallback with only metadata grounding to map to likely_missing_act, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap promotes mixed-goal procedural fallback with metadata-only grounding to likely_missing_act');
+}
+
+function testCoverageGapUsesLikelyMissingActForMixedProceduralFallbackWithFamilyMismatchTail(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: [
+      'UNGROUNDED_MULTI_GOAL_FALLBACK',
+      'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED',
+      'MULTI_GOAL_FAMILY_MISMATCH_TAIL',
+      'LOW_EVIDENCE',
+    ],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.52,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: true,
+    proceduralOnlySelection: true,
+    hitsCount: 30,
+    topScore: 0.61,
+    domainHint: 'general',
+    categoryHintCount: 0,
+    documentTypeHintCount: 1,
+    entitiesCount: 0,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'likely_missing_act') {
+    throw new Error(
+      `Expected mixed-goal procedural fallback with family mismatch tail to map to likely_missing_act, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap promotes mixed-goal procedural fallback with family mismatch tail to likely_missing_act');
+}
+
+function testCoverageGapKeepsStrongSingleActProceduralSurfaceAsWeakEvidenceEvenWhenGoalTypesLookMixed(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED', 'LOW_EVIDENCE'],
+    selectedActsCount: 1,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW'],
+    mixedProcedureAndNonProcedureGoals: true,
+    proceduralOnlySelection: true,
+    hitsCount: 30,
+    topScore: 0.63,
+    domainHint: 'civil',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 1,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(
+      `Expected strong same-act procedural surface to stay weak_evidence even with mixed goal labels, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap keeps strong same-act procedural surface as weak_evidence even when goal types look mixed');
 }
 
 function testCoverageGapUsesGroundedActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded(): void {
@@ -5363,12 +9332,165 @@ function testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers(): void 
   console.log('[OK] buildTaxonomyQuerySignals preserves structured act identifiers');
 }
 
+function testBuildTaxonomyQuerySignalsCanonicalizesInflectedLawCuePhrase(): void {
+  const signals = buildTaxonomyQuerySignals('За законом про нацбезпеку хто затверджує Стратегію національної безпеки?');
+  if (!signals.phrases.includes('закон нацбезпеку')) {
+    throw new Error(`Expected cue-canonicalized phrase for inflected law-title query, got ${JSON.stringify(signals.phrases)}`);
+  }
+  console.log('[OK] buildTaxonomyQuerySignals canonicalizes inflected act-cue phrases');
+}
+
+function testBuildTaxonomyQuerySignalsStripsPrimaryLawLocatorEnvelope(): void {
+  const signals = buildTaxonomyQuerySignals(
+    'Який профільний закон визначає підстави відрахування з університету та право здобувача на академічну мобільність?'
+  );
+  if (signals.tokens.includes('профільний') || signals.tokens.includes('закон') || signals.tokens.includes('визначає')) {
+    throw new Error(`Expected primary-law locator envelope tokens to be stripped, got ${JSON.stringify(signals.tokens)}`);
+  }
+  if (signals.phrases.includes('профільний закон') || signals.phrases.includes('закон визначає')) {
+    throw new Error(`Expected primary-law locator envelope phrases to be stripped, got ${JSON.stringify(signals.phrases)}`);
+  }
+  if (!signals.phrases.includes('підстави відрахування')) {
+    throw new Error(`Expected residual subject phrase to survive signal build, got ${JSON.stringify(signals.phrases)}`);
+  }
+  if (!signals.phrases.includes('академічну мобільність')) {
+    throw new Error(`Expected discriminative education phrase to survive signal build, got ${JSON.stringify(signals.phrases)}`);
+  }
+  console.log('[OK] buildTaxonomyQuerySignals strips interrogative primary-law locator envelope');
+}
+
+async function testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator(): Promise<void> {
+  const defenseLaw = await getActMeta('808-20');
+  if (!defenseLaw) {
+    console.log('[SKIP] tokenized special-law locator scoring test (808-20 not present in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'Який спеціальний закон визначає процедури defense procurement і підстави для закриття інформації про таку закупівлю?';
+  const taxonomySignals = buildTaxonomyQuerySignals(query);
+  const querySignals = uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+    ...taxonomySignals.phrases,
+    ...taxonomySignals.tokens,
+  ]);
+  const scored = await scoreActCandidate('808-20', querySignals, 'general');
+  if (!scored.reasons.some((reason) => ['title_match', 'summary_match', 'keyword_match', 'topic_match'].includes(reason))) {
+    throw new Error(
+      `Expected tokenized special-law locator query to surface semantic LLDBI metadata reasons for 808-20, got ${JSON.stringify(scored)}`
+    );
+  }
+  if (scored.score <= 0.1) {
+    throw new Error(`Expected semantic scoring above validity-only floor for 808-20, got ${JSON.stringify(scored)}`);
+  }
+  console.log('[OK] scoreActCandidate uses tokenized special-law locator signals to surface LLDBI semantic metadata');
+}
+
+async function testScoreActCandidatePrefersHigherEducationLawForAcademicMobilityLocator(): Promise<void> {
+  const higherEducationLaw = await getActMeta('1556-18');
+  const umbrellaEducationLaw = await getActMeta('2145-19');
+  if (!higherEducationLaw || !umbrellaEducationLaw) {
+    console.log('[SKIP] higher-education special-law locator scoring test (1556-18 or 2145-19 not present in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'Який профільний закон визначає підстави відрахування з університету та право здобувача на академічну мобільність?';
+  const taxonomySignals = buildTaxonomyQuerySignals(query);
+  const querySignals = uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+    ...taxonomySignals.phrases,
+    ...taxonomySignals.tokens,
+  ]);
+  const [specializedScore, umbrellaScore] = await Promise.all([
+    scoreActCandidate('1556-18', querySignals, 'general'),
+    scoreActCandidate('2145-19', querySignals, 'general'),
+  ]);
+  if (specializedScore.score <= umbrellaScore.score) {
+    throw new Error(
+      `Expected higher-education law to outrank umbrella education law for academic-mobility locator, got ${JSON.stringify({ specializedScore, umbrellaScore })}`
+    );
+  }
+  console.log('[OK] scoreActCandidate prefers higher-education law for academic-mobility special-law locator');
+}
+
+async function testScoreActCandidatePrefersDatedNbuDailyActOverGenericCurrencyRegulation(): Promise<void> {
+  const targetDailyAct = await getActMeta('n0123500-26');
+  const genericCurrencyRegulation = await getActMeta('v0001500-19');
+  if (!targetDailyAct || !genericCurrencyRegulation) {
+    console.log('[SKIP] dated NBU daily-act scoring test (n0123500-26 or v0001500-19 not present in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'Яким нормативним актом Нацбанку на 27 березня 2026 року зафіксовано офіційний курс гривні щодо іноземних валют для валютного розрахунку?';
+  const taxonomySignals = buildTaxonomyQuerySignals(query);
+  const querySignals = uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+    ...taxonomySignals.phrases,
+    ...taxonomySignals.tokens,
+  ]);
+  const [dailyScore, regulationScore] = await Promise.all([
+    scoreActCandidate('n0123500-26', querySignals, 'general'),
+    scoreActCandidate('v0001500-19', querySignals, 'general'),
+  ]);
+  if (dailyScore.score <= regulationScore.score) {
+    throw new Error(
+      `Expected dated NBU daily act to outrank generic currency regulation, got ${JSON.stringify({ dailyScore, regulationScore })}`
+    );
+  }
+  console.log('[OK] scoreActCandidate prefers dated NBU daily acts over generic framework regulations');
+}
+
+async function testGetTaxonomyCandidatesGroundsCuedNumericRepealOrderWithDateContext(): Promise<void> {
+  const target = await getActMeta('262-2026-р');
+  const neighbor = await getActMeta('15-2026-р');
+  if (!target || !neighbor) {
+    console.log('[SKIP] cued-numeric repeal grounding test (262-2026-р or 15-2026-р not present in current LLDBI snapshot)');
+    return;
+  }
+  const result = await getTaxonomyCandidates({
+    query: 'Розпорядження про втрату чинності розпорядження КМУ №177 від 25 лютого 2026 року',
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order'],
+  });
+  if (!result.grounded_act_nregs.some((radaNreg) => radaNreg.toLowerCase() === '262-2026-р')) {
+    throw new Error(
+      `Expected cue+number repeal-order query to ground onto 262-2026-р, got ${JSON.stringify(result)}`
+    );
+  }
+  const targetRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === '262-2026-р');
+  const neighborRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === '15-2026-р');
+  if (targetRank === -1 || neighborRank === -1 || targetRank > neighborRank) {
+    throw new Error(
+      `Expected repeal-order cue+number query to rank 262-2026-р ahead of neighboring repeal orders, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  console.log('[OK] taxonomy grounding resolves cue+number repeal-order queries using title/date context');
+}
+
 function testExtractActReferenceSignalsCapturesExplicitDocumentTitles(): void {
   const signals = extractActReferenceSignals('Що регулює Указ про призначення Кубраков?');
   if (!signals.some((signal) => signal.toLowerCase().includes('указ про призначення кубраков'))) {
     throw new Error(`Expected explicit document-title signal for decree query, got ${JSON.stringify(signals)}`);
   }
   console.log('[OK] act-reference signal extraction captures explicit title-heavy act references');
+}
+
+function testExtractActReferenceSignalsCapturesModifiedGovernmentDecisionCue(): void {
+  const signals = extractActReferenceSignals(
+    'Яким урядовим рішенням у березні 2026 року оформили виділення коштів з резервного фонду державного бюджету?'
+  );
+  if (!signals.some((signal) => signal.toLowerCase().includes('урядовим рішенням'))) {
+    throw new Error(`Expected modified government-decision locator signal, got ${JSON.stringify(signals)}`);
+  }
+  if (!signals.some((signal) => signal.toLowerCase().startsWith('рішення'))) {
+    throw new Error(`Expected compact cue-normalized decision signal, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] act-reference signal extraction captures modified government-decision locators');
 }
 
 function testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator(): void {
@@ -5382,6 +9504,26 @@ function testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator
     throw new Error(`Expected descriptive fragment without metadata tail, got ${JSON.stringify(signals)}`);
   }
   console.log('[OK] act-reference signal extraction trims metadata tail from interrogative locator query');
+}
+
+function testExtractActReferenceSignalsPreservesCueForInterrogativeLocator(): void {
+  const signals = extractActReferenceSignals(
+    'Яким розпорядженням Кабінету Міністрів України звільнено Клочка А.О. з посади заступника Міністра оборони України?'
+  );
+  if (!signals.some((signal) => signal.toLowerCase().startsWith('розпорядженням кабінету міністрів україни звільнено клочка'))) {
+    throw new Error(`Expected cue-preserving interrogative locator signal, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] act-reference signal extraction preserves the subordinate-act cue for interrogative locators');
+}
+
+function testExtractActReferenceSignalsCompactsInflectedShortLawAliasQuery(): void {
+  const signals = extractActReferenceSignals(
+    'За законом про ТОВ який строк повідомлення про загальні збори і що має бути в повідомленні?'
+  );
+  if (!signals.some((signal) => signal.toLowerCase() === 'закон про тов')) {
+    throw new Error(`Expected compact canonical short-law alias signal, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] act-reference signal extraction compacts inflected short-law alias queries');
 }
 
 function testMetadataGroundedActCandidateAcceptsDistinctDescriptiveLocator(): void {
@@ -5400,6 +9542,47 @@ function testMetadataGroundedActCandidateAcceptsDistinctDescriptiveLocator(): vo
   console.log('[OK] metadata act grounding accepts distinct descriptive subordinate-act locator');
 }
 
+function testActReferenceCueCompatibilitySupportsBroadGovernmentDecisionEnvelope(): void {
+  if (
+    !areActReferenceCuesCompatible(
+      'рішення',
+      'розпорядження',
+      'Яким урядовим рішенням у березні 2026 року оформили виділення коштів з резервного фонду державного бюджету?'
+    )
+  ) {
+    throw new Error('Expected broad government-decision envelope to stay compatible with executive orders');
+  }
+  if (
+    areActReferenceCuesCompatible(
+      'рішення',
+      'розпорядження',
+      'Яким рішенням суду затверджено мирову угоду?'
+    )
+  ) {
+    throw new Error('Did not expect generic court decision wording to collapse onto executive orders');
+  }
+  console.log('[OK] act-reference cue compatibility keeps broad government-decision envelope distinct from generic decisions');
+}
+
+function testMetadataGroundedActCandidateAcceptsBroadGovernmentDecisionEnvelope(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: '257-2026-р',
+      title: 'Про виділення коштів з резервного фонду державного бюджету',
+      document_type: 'Розпорядження КМУ',
+      document_type_slug: 'cmu_order',
+      reasons: ['title_match', 'summary_match', 'rada_month_match'],
+      score: 3.4,
+    },
+    'Яким урядовим рішенням у березні 2026 року оформили виділення коштів з резервного фонду державного бюджету?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (!grounded) {
+    throw new Error('Expected broad government-decision wording to metadata-ground onto a matching CMU order');
+  }
+  console.log('[OK] metadata act grounding accepts broad government-decision envelope for matching CMU orders');
+}
+
 function testMetadataGroundedActCandidateAcceptsCompactTitleFragment(): void {
   const grounded = isMetadataGroundedActCandidate(
     {
@@ -5416,6 +9599,134 @@ function testMetadataGroundedActCandidateAcceptsCompactTitleFragment(): void {
   console.log('[OK] metadata act grounding accepts compact title fragments for descriptive subordinate acts');
 }
 
+function testMetadataGroundedActCandidateAcceptsAliasBackedShortLawTitle(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      title: 'Про національну безпеку України',
+      document_type: 'Закон',
+      score: 2.8,
+      reasons: ['alias_match'],
+    },
+    'За законом про нацбезпеку хто затверджує Стратегію національної безпеки?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match'])
+  );
+  if (!grounded) {
+    throw new Error('Expected alias-backed short law-title cue to qualify for metadata grounding');
+  }
+  console.log('[OK] metadata act grounding accepts alias-backed short law-title cues');
+}
+
+function testMetadataGroundedActCandidateRejectsExplicitLawTitleSemanticNeighbor(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      title: 'Про запобігання корупції',
+      document_type: 'Закон',
+      reasons: ['title_match'],
+    },
+    'За Законом України «Про медіацію», які істотні умови має містити договір про проведення медіації та коли медіатор зобов\'язаний повідомити про конфлікт інтересів?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected explicit absent law-title query not to metadata-ground onto a semantically neighboring law');
+  }
+  console.log('[OK] metadata act grounding rejects semantic neighbor when explicit law title names another act');
+}
+
+function testMetadataGroundedActCandidateRejectsStructuredIdentifierNeighbor(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: '33-2026-п',
+      title: 'Про внесення змін до порядку закупівлі безпілотних систем та засобів РЕБ',
+      document_type: 'Постанова КМУ',
+      reasons: ['title_match', 'summary_match'],
+      score: 2.7,
+    },
+    'Постанова 351-2026-п про зміни до закупівлі яких безпілотних і РЕБ-систем?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected exact structured identifier query not to metadata-ground onto a different act number');
+  }
+  console.log('[OK] metadata act grounding rejects structured-identifier neighbors');
+}
+
+function testMetadataGroundedActCandidateRejectsBaseOrderForAmendmentTitle(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: '955-2010-п',
+      title:
+        'Про затвердження Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин',
+      document_type: 'Постанова КМУ',
+      reasons: ['title_match', 'summary_match'],
+      score: 2.9,
+    },
+    'За постановою Кабінету Міністрів України «Про внесення зміни до пункту 14 Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин», порядок закупівлі яких саме засобів і виробів змінюється цією постановою?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected explicit amendment-order title query not to metadata-ground onto the underlying base order');
+  }
+  console.log('[OK] metadata act grounding rejects base-order fallback for amendment-title queries');
+}
+
+function testMetadataGroundedActCandidateRejectsPersonnelOrderNeighborWithDifferentPersonSignature(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: '32-2026-р',
+      title: 'Про звільнення Куцевола А.А. з посади заступника Міністра оборони України з питань європейської інтеграції',
+      document_type: 'Розпорядження КМУ',
+      reasons: ['title_match', 'summary_match'],
+      score: 3.2,
+    },
+    'Яким розпорядженням Кабінету Міністрів України звільнено Мироненка Ю.М. з посади заступника Міністра оборони України?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected explicit personnel-order query not to metadata-ground onto a neighboring dismissal order with another person identity');
+  }
+  console.log('[OK] metadata act grounding rejects personnel-order neighbors with different person signature');
+}
+
+function testMetadataGroundedActCandidateRejectsPresidentialDelegationNeighbor(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: '6/2026-рп',
+      title:
+        'Про делегацію України для участі у переговорах з Міжнародним банком реконструкції та розвитку щодо укладення Угоди про грант Фонду фінансового посередництва зі сприяння залученню ресурсів для інвестування в зміцнення України',
+      document_type: 'Розпорядження Президента',
+      document_type_slug: 'president_order',
+      reasons: ['title_match', 'summary_match'],
+      score: 3.1,
+    },
+    'Розпорядження Президента про делегацію України на 15-те засідання Конференції Сторін Конвенції про збереження мігруючих видів диких тварин',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected explicit presidential delegation query not to metadata-ground onto an unrelated delegation order');
+  }
+  console.log('[OK] metadata act grounding rejects neighboring presidential delegation orders without distinct title identity');
+}
+
+function testMetadataGroundedActCandidateRejectsKsuDecisionForPresidentialRepresentationQuery(): void {
+  const grounded = isMetadataGroundedActCandidate(
+    {
+      rada_nreg: 'v006p710-19',
+      title:
+        'Рішення Конституційного Суду України у справі за конституційним поданням 62 народних депутатів України щодо відповідності Конституції України (конституційності) Указу Президента України „Про дострокове припинення повноважень Верховної Ради України та призначення позачергових виборів“',
+      document_type: 'Рішення КСУ',
+      document_type_slug: 'ksu_decision',
+      reasons: ['title_match', 'summary_match'],
+      score: 3.2,
+    },
+    'Яким указом Президента України визначено Представника України у Виконавчій раді ЮНЕСКО?',
+    new Set(['exact_alias_match', 'exact_title_match', 'alias_match', 'title_match', 'summary_match'])
+  );
+  if (grounded) {
+    throw new Error('Expected presidential representation query not to metadata-ground onto a KSU decision that only mentions another presidential decree');
+  }
+  console.log('[OK] metadata act grounding rejects KSU decree neighbors for explicit presidential-act locators');
+}
+
 function testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator(): void {
   const grounded = isMetadataGroundedActCandidate(
     {
@@ -5430,6 +9741,27 @@ function testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator(): void
     throw new Error('Expected boilerplate repeal-order locator to remain non-grounded without distinct act identity');
   }
   console.log('[OK] metadata act grounding rejects boilerplate repeal-order locator without distinct identity');
+}
+
+function testInterrogativePrimaryLawLocatorQueryDetectsSpecialLawLocators(): void {
+  if (
+    !isInterrogativePrimaryLawLocatorQuery(
+      "Який спеціальний закон воєнного часу дозволяє призупинення трудового договору та по-особливому регулює відпустки працівників?"
+    )
+  ) {
+    throw new Error('Expected special-law locator query to be detected');
+  }
+  if (
+    !isInterrogativePrimaryLawLocatorQuery(
+      'Який профільний закон визначає систему громадського здоровʼя та епідемічний нагляд?'
+    )
+  ) {
+    throw new Error('Expected profile-law locator query to be detected');
+  }
+  if (isInterrogativePrimaryLawLocatorQuery('Який строк оскарження податкового повідомлення-рішення?')) {
+    throw new Error('Did not expect generic deadline question to look like a primary-law locator');
+  }
+  console.log('[OK] primary-law locator detector distinguishes special-law queries from generic legal questions');
 }
 
 function testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle(): void {
@@ -5450,6 +9782,19 @@ function testExtractStructuredActIdentifiersIgnoresDates(): void {
     throw new Error(`Expected date-like token to be ignored, got ${JSON.stringify(ids)}`);
   }
   console.log('[OK] extractStructuredActIdentifiers keeps act ids and ignores date-like strings');
+}
+
+function testExtractStructuredActIdentifiersIgnoresTemporalHyphenatedTerms(): void {
+  const query =
+    'Продавець не дав повної інформації про товар. Чи можу я повернути непродовольчий товар у 14-денний строк і на які норми посилатися?';
+  const ids = extractStructuredActIdentifiers(query);
+  if (ids.includes('14-денний')) {
+    throw new Error(`Expected temporal hyphenated term to stay out of structured act ids, got ${JSON.stringify(ids)}`);
+  }
+  if (hasExplicitActScopeCue(query)) {
+    throw new Error('Expected generic consumer mixed-source query with 14-денний term to remain outside explicit act scope');
+  }
+  console.log('[OK] extractStructuredActIdentifiers ignores temporal hyphenated terms');
 }
 
 function testExtractCuedNumericActReferencesCapturesBareNumberWithCue(): void {
@@ -6291,6 +10636,197 @@ function testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoal
   console.log('[OK] mixed-goal procedural fallback does not count as full act coverage');
 }
 
+function testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProceduralCompanionRemains(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '1618-15',
+        r2_key: 'legislation/civil_procedure/1618-15.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.59,
+        ordering_score: 0.76,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '1618-15',
+        r2_key: 'legislation/civil_procedure/1618-15.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.57,
+        ordering_score: 0.72,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_1',
+      } as never,
+      {
+        rada_nreg: '2947-14',
+        r2_key: 'legislation/civil/2947-14.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.64,
+        ordering_score: 0.64,
+        source: 'lldbi_chunks',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        score: 0.92,
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '2947-14',
+        title: 'Сімейний кодекс України',
+        score: 0.83,
+        category: 'civil',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '1618-15': ['goal_0', 'goal_1'],
+    },
+    taxonomyNregs: new Set(['1618-15', '2947-14']),
+    actsSearchNregs: ['1618-15', '2947-14'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '1618-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.58,
+        max_score: 0.64,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.92,
+        max_ordering_score: 0.76,
+      },
+      {
+        rada_nreg: '2947-14',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.61,
+        max_score: 0.64,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.56,
+        max_ordering_score: 0.64,
+      },
+    ],
+  });
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED when strong non-procedural companion evidence remains, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')) {
+    throw new Error(
+      `Expected MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED when strong non-procedural companion evidence remains, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts.some((act) => act.rada_nreg === '2947-14')) {
+    throw new Error(`Expected family-law companion to remain selected, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] strong non-procedural companion evidence blocks procedural single-act collapse');
+}
+
+function testSelectedActsRecoversMixedGoalPrimaryCompanionFromHitBackfill(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/civil_procedure/1618-15.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.59,
+        ordering_score: 0.76,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/civil_procedure/1618-15.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.57,
+        ordering_score: 0.72,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_1',
+      } as never,
+      {
+        rada_nreg: '2947-14',
+        title: 'Сімейний кодекс України',
+        category: 'family',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/family/2947-14.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.67,
+        ordering_score: 0.59,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '2947-14',
+        title: 'Сімейний кодекс України',
+        category: 'family',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/family/2947-14.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.58,
+        ordering_score: 0.56,
+        source: 'lldbi_chunks',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        score: 0.92,
+        category: 'civil_procedure',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [{ goal_id: 'goal_0' }, { goal_id: 'goal_1' }],
+    goal_support_by_act: {
+      '1618-15': ['goal_0', 'goal_1'],
+      '2947-14': ['goal_0'],
+    },
+    taxonomyNregs: new Set(['1618-15']),
+    actsSearchNregs: ['1618-15'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '1618-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.58,
+        max_score: 0.64,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.92,
+        max_ordering_score: 0.76,
+      },
+      {
+        rada_nreg: '2947-14',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.625,
+        max_score: 0.67,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.23,
+        max_ordering_score: 0.59,
+      },
+    ],
+  });
+  if (!result.selected_acts.some((act) => act.rada_nreg === '2947-14')) {
+    throw new Error(`Expected hit-backed family-law companion to be recovered, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PRIMARY_COMPANION_RECOVERED_FROM_HITS')) {
+    throw new Error(
+      `Expected MULTI_GOAL_PRIMARY_COMPANION_RECOVERED_FROM_HITS, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  console.log('[OK] hit-backed substantive companion is recovered for mixed procedural bundle');
+}
+
 function testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft(): void {
   const treatyResult = buildSelectedActs({
     finalHits: [
@@ -7035,6 +11571,951 @@ function testFinalizeMultiGoalSelectedActsKeepsOnlyFinalMetadataGrounding(): voi
   console.log('[OK] multi-goal finalizer keeps only final metadata grounding signals');
 }
 
+function testFinalizeMultiGoalSelectedActsDoesNotTreatActsSearchAsMetadataGrounding(): void {
+  const result = finalizeMultiGoalSelectedActs({
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+      },
+    ],
+    originalSelectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+      },
+    ],
+    baseSelectedActsConfidence: 0.75,
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: ['1023-12', '435-15'],
+      from_chunks_evidence: ['1023-12', '435-15'],
+    },
+    chunksEvidenceTopActs: [],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_1'])],
+    ]),
+  });
+  if (result.metadataGroundedActCount !== 0) {
+    throw new Error(`Expected acts_search-only support to not count as metadata grounding, got ${result.metadataGroundedActCount}`);
+  }
+  console.log('[OK] multi-goal finalizer does not treat acts_search as metadata grounding');
+}
+
+function testTrimUngroundedMultiGoalFallbackSelectionKeepsTopTwoEvidenceActs(): void {
+  const trimmed = trimUngroundedMultiGoalFallbackSelection({
+    selectedActs: [
+      {
+        rada_nreg: '2755-17',
+        act_title: 'Податковий кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'tax_customs',
+        document_type: 'Кодекс',
+        score: 0.49,
+      },
+      {
+        rada_nreg: '2947-14',
+        act_title: 'Сімейний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+        score: 0.43,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.39,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2755-17',
+        count_in_top30: 17,
+        avg_score_in_top30: 0.44,
+        max_score: 0.48,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.89,
+        max_ordering_score: 0.50,
+      },
+      {
+        rada_nreg: '2947-14',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.25,
+        max_score: 0.27,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.41,
+        max_ordering_score: 0.43,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.44,
+        max_score: 0.47,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.68,
+        max_ordering_score: 0.39,
+      },
+    ],
+    maxActs: 2,
+  });
+  const trimmedNregs = trimmed.map((act) => act.rada_nreg);
+  if (JSON.stringify(trimmedNregs) !== JSON.stringify(['2755-17', '2947-14'])) {
+    throw new Error(`Expected ungrounded multi-goal tail trim to keep top two evidence acts, got ${JSON.stringify(trimmedNregs)}`);
+  }
+  console.log('[OK] ungrounded multi-goal tail trim keeps top two evidence acts');
+}
+
+function testTrimLowConfidenceMultiGoalSelectionPreservesUniqueGoalCoverageWithoutMismatchSignal(): void {
+  const trimmed = trimLowConfidenceMultiGoalSelection({
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+        score: 0.57,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.46,
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+        score: 0.55,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 11,
+        avg_score_in_top30: 0.53,
+        max_score: 0.57,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.8,
+        max_ordering_score: 0.58,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.5,
+        max_score: 0.55,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.62,
+        max_ordering_score: 0.56,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.45,
+        max_score: 0.47,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.74,
+        max_ordering_score: 0.48,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    domainHint: 'general',
+    mismatchSignalsPresent: false,
+    maxActs: 2,
+  });
+  const trimmedNregs = [...trimmed.map((act) => act.rada_nreg)].sort();
+  if (JSON.stringify(trimmedNregs) !== JSON.stringify(['1023-12', '4651-17'])) {
+    throw new Error(`Expected low-confidence trim to preserve the unique-goal pair, got ${JSON.stringify(trimmedNregs)}`);
+  }
+  console.log('[OK] low-confidence multi-goal trim preserves unique goal coverage without mismatch signal');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionAllowsAnchoredThinLaw(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'За Законом України «Про ратифікацію Угоди (у формі обміну нотами) між Україною та Європейським Союзом про відновлення дії Угоди між Україною та Європейським Співтовариством про наукове і технологічне співробітництво», яку саме угоду відновлено та між якими сторонами вона укладена?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '984_011',
+        act_title:
+          'Угода про асоціацію між Україною, з однієї сторони, та Європейським Союзом, Європейським співтовариством з атомної енергії і їхніми державами-членами, з іншої сторони',
+        act_kind: 'INTERNATIONAL_TREATY',
+        category: 'international_eu',
+        document_type: 'Угода',
+        score: 0.56,
+      },
+      {
+        rada_nreg: '4805-20',
+        act_title:
+          'Про ратифікацію Угоди (у формі обміну нотами) між Україною та Європейським Союзом про відновлення дії Угоди між Україною та Європейським Співтовариством про наукове і технологічне співробітництво',
+        act_kind: 'PRIMARY_LAW',
+        category: 'international_eu',
+        document_type: 'Закон',
+        score: 0.56,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['984_011', '4805-20'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '4805-20',
+        title:
+          'Про ратифікацію Угоди (у формі обміну нотами) між Україною та Європейським Союзом про відновлення дії Угоди між Україною та Європейським Співтовариством про наукове і технологічне співробітництво',
+        score: 3.4,
+        reasons: ['exact_title_match'],
+        category: 'international_eu',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '984_011',
+        title:
+          'Угода про асоціацію між Україною, з однієї сторони, та Європейським Союзом, Європейським співтовариством з атомної енергії і їхніми державами-членами, з іншої сторони',
+        score: 2.2,
+        reasons: ['title_match'],
+        category: 'international_eu',
+        document_type: 'Угода',
+        document_type_slug: 'agreement',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '4805-20',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.79,
+        max_score: 0.79,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1,
+        max_ordering_score: 0.56,
+      },
+      {
+        rada_nreg: '984_011',
+        count_in_top30: 29,
+        avg_score_in_top30: 0.55,
+        max_score: 0.62,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 2.8,
+        max_ordering_score: 0.56,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'compliance_check', act_candidates_top3: ['4805-20', '4804-20'] },
+      { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['984_011', '4805-20'] },
+    ],
+  });
+  if (!result.allowSingleActCoverage) {
+    throw new Error(`Expected explicit anchored thin law to allow single-act coverage, got ${JSON.stringify(result)}`);
+  }
+  if (!result.selectedActsSourcesBreakdown.from_taxonomy.includes('4805-20')) {
+    throw new Error(
+      `Expected explicit anchored thin law to add taxonomy grounding for 4805-20, got ${JSON.stringify(result.selectedActsSourcesBreakdown)}`
+    );
+  }
+  if (!result.reasonCodes.includes('MULTI_GOAL_EXPLICIT_PRIMARY_SINGLE_ACT_ALLOWED')) {
+    throw new Error(`Expected explicit primary single-act allowance reason, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] explicit anchored thin law allows multi-goal single-act coverage');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionRecoversThinLawAndTrimsUnhintedOrderNoise(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'За Законом України «Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні», діяльність якої саме установи дозволена в Україні і між якими сторонами укладено угоду?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '984_011',
+        act_title:
+          'Угода про асоціацію між Україною, з однієї сторони, та Європейським Союзом, Європейським співтовариством з атомної енергії і їхніми державами-членами, з іншої сторони',
+        act_kind: 'INTERNATIONAL_TREATY',
+        category: 'international_eu',
+        document_type: 'Угода',
+        score: 0.57,
+      },
+      {
+        rada_nreg: 'z0841-01',
+        act_title: 'Про затвердження Інструкції про порядок регулювання діяльності банків в Україні',
+        act_kind: 'SECONDARY_ORDER',
+        category: 'finance_banking',
+        document_type: 'Постанова НБУ',
+        score: 0.65,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['984_011', 'z0841-01'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '4800-20',
+        title:
+          'Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні',
+        score: 3.2,
+        reasons: ['exact_title_match'],
+        category: 'international_bilateral',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '984_011',
+        title:
+          'Угода про асоціацію між Україною, з однієї сторони, та Європейським Союзом, Європейським співтовариством з атомної енергії і їхніми державами-членами, з іншої сторони',
+        score: 2.1,
+        reasons: ['title_match'],
+        category: 'international_eu',
+        document_type: 'Угода',
+        document_type_slug: 'agreement',
+      },
+      {
+        rada_nreg: 'z0841-01',
+        title: 'Про затвердження Інструкції про порядок регулювання діяльності банків в Україні',
+        score: 2.6,
+        reasons: ['title_match'],
+        category: 'finance_banking',
+        document_type: 'Постанова НБУ',
+        document_type_slug: 'nbu_resolution',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: 'z0841-01',
+        count_in_top30: 17,
+        avg_score_in_top30: 0.63,
+        max_score: 0.65,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 3.1,
+        max_ordering_score: 0.65,
+      },
+      {
+        rada_nreg: '984_011',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.56,
+        max_score: 0.61,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.79,
+        max_ordering_score: 0.57,
+      },
+      {
+        rada_nreg: '4800-20',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.79,
+        max_score: 0.79,
+        best_rank_in_top30: 9,
+        rank_mass_top30: 0.11,
+        max_ordering_score: 0.56,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'compliance_check', act_candidates_top3: ['4800-20', '4803-20', '4804-20'] },
+      { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['4801-20', '984_011', '4804-20'] },
+    ],
+  });
+  const selectedNregs = result.selectedActs.map((act) => act.rada_nreg);
+  if (!selectedNregs.includes('4800-20')) {
+    throw new Error(`Expected explicit thin law recovery to include 4800-20, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  if (selectedNregs.includes('z0841-01')) {
+    throw new Error(`Expected explicit thin law recovery to trim unrelated order noise, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  if (!result.reasonCodes.includes('MULTI_GOAL_EXPLICIT_PRIMARY_ACT_RECOVERED')) {
+    throw new Error(`Expected explicit primary act recovery reason, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] explicit anchored thin law recovery trims unrelated order noise');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionPrefersQuotedAmendmentLawOverBaseLaw(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'За Законом України «Про внесення змін до Закону України "Про наукову і науково-технічну діяльність" щодо питань дослідницької інфраструктури та підтримки молодих вчених», яких саме питань стосується цей закон про зміни?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '848-19',
+        act_title: 'Про наукову і науково-технічну діяльність',
+        act_kind: 'PRIMARY_LAW',
+        category: 'education_science',
+        document_type: 'Закон',
+        score: 0.83,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['848-19'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '848-19',
+        title: 'Про наукову і науково-технічну діяльність',
+        score: 4.2,
+        reasons: ['title_match'],
+        category: 'education_science',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '4794-20',
+        title:
+          'Про внесення змін до Закону України "Про наукову і науково-технічну діяльність" щодо питань дослідницької інфраструктури та підтримки молодих вчених',
+        score: 3.7,
+        reasons: ['exact_title_match'],
+        category: 'education_science',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '848-19',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.62,
+        max_score: 0.71,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.82,
+        max_ordering_score: 0.71,
+      },
+      {
+        rada_nreg: '4794-20',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.69,
+        max_score: 0.76,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.93,
+        max_ordering_score: 0.64,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['848-19', '4794-20'] },
+      { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['848-19', '4794-20'] },
+    ],
+  });
+  if (!result.allowSingleActCoverage) {
+    throw new Error(`Expected quoted amendment law to allow anchored single-act coverage, got ${JSON.stringify(result)}`);
+  }
+  if (result.selectedActs[0]?.rada_nreg !== '4794-20') {
+    throw new Error(`Expected quoted amendment title to recover 4794-20 over base law, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  if (result.selectedActs.some((act) => act.rada_nreg === '848-19')) {
+    throw new Error(`Expected quoted amendment title recovery to trim base-law fallback, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  console.log('[OK] quoted amendment title prefers amendment law over base-law fallback');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionTrimsUnhintedTreatyTailForQuotedPrimaryLawLocator(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'За Законом України «Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Словацької Республіки про взаєморозуміння щодо розміщення дипломатичного представництва України в Словацькій Республіці та дипломатичного представництва Словацької Республіки в Україні», про розміщення яких саме дипломатичних представництв і між якими державами йдеться?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '4799-20',
+        act_title:
+          'Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Словацької Республіки про взаєморозуміння щодо розміщення дипломатичного представництва України в Словацькій Республіці та дипломатичного представництва Словацької Республіки в Україні',
+        act_kind: 'PRIMARY_LAW',
+        category: 'international_eu',
+        document_type: 'Закон',
+        score: 0.57,
+      },
+      {
+        rada_nreg: '995_153',
+        act_title: 'Женевська конвенція про поводження з військовополоненими',
+        act_kind: 'INTERNATIONAL_TREATY',
+        category: 'international_eu',
+        document_type: 'Конвенція',
+        score: 0.53,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['4799-20', '995_153'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '4799-20',
+        title:
+          'Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Словацької Республіки про взаєморозуміння щодо розміщення дипломатичного представництва України в Словацькій Республіці та дипломатичного представництва Словацької Республіки в Україні',
+        score: 3.4,
+        reasons: ['exact_title_match'],
+        category: 'international_eu',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+      {
+        rada_nreg: '995_153',
+        title: 'Женевська конвенція про поводження з військовополоненими',
+        score: 1.7,
+        reasons: ['title_match'],
+        category: 'international_eu',
+        document_type: 'Конвенція',
+        document_type_slug: 'convention',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '4799-20',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.81,
+        max_score: 0.81,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.21,
+        max_ordering_score: 0.57,
+      },
+      {
+        rada_nreg: '995_153',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.5,
+        max_score: 0.53,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.71,
+        max_ordering_score: 0.51,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['4799-20', '995_153'] },
+      { goal_id: 'goal_1', goal_type: 'definition', act_candidates_top3: ['4799-20', '995_153'] },
+    ],
+  });
+  if (!result.allowSingleActCoverage) {
+    throw new Error(`Expected quoted ratification law to keep anchored single-act coverage, got ${JSON.stringify(result)}`);
+  }
+  const selectedNregs = result.selectedActs.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['4799-20'])) {
+    throw new Error(`Expected quoted ratification law to trim unhinted treaty tail, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  if (!result.reasonCodes.includes('MULTI_GOAL_EXPLICIT_PRIMARY_TAIL_TRIMMED')) {
+    throw new Error(`Expected quoted ratification law to record tail trim, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] quoted primary-law locator trims unhinted treaty tail');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxGenericMixedBundle(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query: 'Бандитизм: визначення і яка це юрисдикція підслідність?',
+    documentTypeHints: [],
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        document_type: 'Кодекс',
+        score: 0.66,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.61,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['2341-14', '4651-17'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 2.0,
+        reasons: ['title_match'],
+        category: 'criminal',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 1.8,
+        reasons: ['title_match'],
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.57,
+        max_score: 0.61,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.64,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.54,
+        max_score: 0.58,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.4,
+        max_ordering_score: 0.6,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['2341-14', '4651-17'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['4651-17', '2341-14'] },
+    ],
+  });
+  if (result.allowSingleActCoverage) {
+    throw new Error(`Did not expect generic mixed bundle to relax into explicit single-act coverage, got ${JSON.stringify(result)}`);
+  }
+  console.log('[OK] explicit primary single-act relaxation does not trigger for generic mixed bundles');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxUngroundedSpecialLawLocator(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'Який спеціальний закон воєнного часу дозволяє призупинення трудового договору та по-особливому регулює відпустки працівників?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '322-08',
+        act_title: 'Кодекс законів про працю України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'labor_social',
+        document_type: 'Кодекс',
+        score: 0.71,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['322-08'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '322-08',
+        title: 'Кодекс законів про працю України',
+        score: 0.92,
+        reasons: ['title_match'],
+        category: 'labor_social',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '322-08',
+        count_in_top30: 12,
+        avg_score_in_top30: 0.63,
+        max_score: 0.71,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.2,
+        max_ordering_score: 0.67,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['322-08'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['322-08'] },
+    ],
+  });
+  if (result.allowSingleActCoverage) {
+    throw new Error(`Expected ungrounded special-law locator to avoid generic single-act relaxation, got ${JSON.stringify(result)}`);
+  }
+  console.log('[OK] explicit primary relaxation stays blocked for ungrounded special-law locator queries');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionAllowsSemanticSpecialLawLocator(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query:
+      'Який спеціальний закон воєнного часу дозволяє призупинення трудового договору та по-особливому регулює відпустки працівників?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '2136-20',
+        act_title: 'Про організацію трудових відносин в умовах воєнного стану',
+        act_kind: 'PRIMARY_LAW',
+        category: 'labor_social',
+        document_type: 'Закон',
+        score: 0.79,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['2136-20'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '2136-20',
+        title: 'Про організацію трудових відносин в умовах воєнного стану',
+        score: 1.18,
+        reasons: ['summary_match', 'keyword_match'],
+        category: 'labor_social',
+        document_type: 'Закон',
+        document_type_slug: 'law',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2136-20',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.68,
+        max_score: 0.8,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.05,
+        max_ordering_score: 0.74,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['2136-20'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['2136-20'] },
+    ],
+  });
+  if (!result.allowSingleActCoverage) {
+    throw new Error(`Expected semantic special-law locator to allow single-act coverage when the act exists, got ${JSON.stringify(result)}`);
+  }
+  if (result.selectedActs[0]?.rada_nreg !== '2136-20') {
+    throw new Error(`Expected semantic special-law locator to keep the specialized law, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  console.log('[OK] explicit primary relaxation still allows semantic special-law locator when the target law exists');
+}
+
+function testTrimUngroundedMultiGoalFallbackSelectionCollapsesOffFamilyTwoActBundle(): void {
+  const trimmed = trimUngroundedMultiGoalFallbackSelection({
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+        score: 0.58,
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+        score: 0.52,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.54,
+        max_score: 0.58,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.71,
+        max_ordering_score: 0.59,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.49,
+        max_score: 0.52,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.64,
+        max_ordering_score: 0.52,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_1'])],
+    ]),
+    domainHint: 'admin',
+    mismatchSignalsPresent: true,
+    maxActs: 2,
+  });
+  const trimmedNregs = trimmed.map((act) => act.rada_nreg);
+  if (JSON.stringify(trimmedNregs) !== JSON.stringify(['1023-12'])) {
+    throw new Error(`Expected off-family two-act fallback to collapse to strongest candidate, got ${JSON.stringify(trimmedNregs)}`);
+  }
+  console.log('[OK] ungrounded multi-goal trim collapses off-family two-act fallback');
+}
+
+function testTrimUngroundedMultiGoalFallbackSelectionPreservesUniqueMixedCoverageWhenCompatible(): void {
+  const trimmed = trimUngroundedMultiGoalFallbackSelection({
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        document_type: 'Кодекс',
+        score: 0.56,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.53,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.57,
+        max_score: 0.6,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.31,
+        max_ordering_score: 0.61,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.52,
+        max_score: 0.56,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 1.08,
+        max_ordering_score: 0.55,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    domainHint: 'criminal',
+    mismatchSignalsPresent: true,
+    maxActs: 2,
+  });
+  const trimmedNregs = trimmed.map((act) => act.rada_nreg);
+  if (JSON.stringify(trimmedNregs) !== JSON.stringify(['2341-14', '4651-17'])) {
+    throw new Error(`Expected compatible mixed-goal bundle to stay intact, got ${JSON.stringify(trimmedNregs)}`);
+  }
+  console.log('[OK] ungrounded multi-goal trim preserves compatible unique-goal coverage');
+}
+
+function testTrimUngroundedMultiGoalFallbackSelectionPrefersUniqueGoalCoverageOverRedundantEvidence(): void {
+  const trimmed = trimUngroundedMultiGoalFallbackSelection({
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Закон',
+        score: 0.57,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.46,
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        document_type: 'Кодекс',
+        score: 0.55,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '1023-12',
+        count_in_top30: 11,
+        avg_score_in_top30: 0.53,
+        max_score: 0.57,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.8,
+        max_ordering_score: 0.58,
+      },
+      {
+        rada_nreg: '435-15',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.5,
+        max_score: 0.55,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.62,
+        max_ordering_score: 0.56,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.45,
+        max_score: 0.47,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.74,
+        max_ordering_score: 0.48,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    domainHint: 'general',
+    mismatchSignalsPresent: true,
+    maxActs: 2,
+  });
+  const trimmedNregs = [...trimmed.map((act) => act.rada_nreg)].sort();
+  if (JSON.stringify(trimmedNregs) !== JSON.stringify(['1023-12', '4651-17'])) {
+    throw new Error(`Expected trim to keep the unique-goal pair over redundant evidence act, got ${JSON.stringify(trimmedNregs)}`);
+  }
+  console.log('[OK] ungrounded multi-goal trim prioritizes unique goal coverage over redundant evidence');
+}
+
 function testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle(): void {
   const ok = hasStrongGoalSupportedMultiPrimaryCoverage({
     selectedActs: [
@@ -7145,6 +12626,78 @@ function testStrongGoalSupportedMultiPrimaryCoverageRequiresFullGoalCoverage(): 
   console.log('[OK] multi-goal confidence helper requires full goal coverage');
 }
 
+function testStrongGoalSupportedMultiPrimaryCoverageRejectsIncompatibleThreeFamilyBundle(): void {
+  const ok = hasStrongGoalSupportedMultiPrimaryCoverage({
+    selectedActs: [
+      {
+        rada_nreg: '2755-17',
+        act_title: 'Податковий кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'tax_customs',
+      },
+      {
+        rada_nreg: '2947-14',
+        act_title: 'Сімейний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    goalSupportByAct: new Map([
+      ['2755-17', new Set(['goal_0'])],
+      ['2947-14', new Set(['goal_1'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2755-17',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.62,
+        max_score: 0.69,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.7,
+        max_ordering_score: 0.71,
+      },
+      {
+        rada_nreg: '2947-14',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.58,
+        max_score: 0.63,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.82,
+        max_ordering_score: 0.6,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.57,
+        max_score: 0.61,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.74,
+        max_ordering_score: 0.59,
+      },
+    ],
+    actCandidatesTop: [
+      { rada_nreg: '2755-17', category: 'tax_customs' },
+      { rada_nreg: '2947-14', category: 'civil' },
+      { rada_nreg: '4651-17', category: 'criminal_procedure' },
+    ],
+  });
+  if (ok) {
+    throw new Error('Did not expect incompatible three-family bundle to count as strong multi-primary coverage');
+  }
+  console.log('[OK] multi-goal confidence helper rejects incompatible three-family bundles');
+}
+
 function testShouldFlagUngroundedMultiGoalFallbackOnChunksOnlyBroadPrimarySelection(): void {
   const flagged = shouldFlagUngroundedMultiGoalFallback({
     domainHint: 'general',
@@ -7179,6 +12732,139 @@ function testShouldFlagUngroundedMultiGoalFallbackOnChunksOnlyBroadPrimarySelect
     throw new Error('Expected chunks-only broad multi-goal primary fallback to be flagged as ungrounded');
   }
   console.log('[OK] multi-goal confidence helper flags ungrounded chunks-only broad primary fallback');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackOnIncompatibleGoalCoveredBundle(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'general',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '3543-12',
+        act_title: 'Про мобілізаційну підготовку та мобілізацію',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['3543-12', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['3543-12', '4651-17'],
+    },
+    topScore: 0.61,
+    mismatchSignalsPresent: true,
+  });
+  if (!flagged) {
+    throw new Error('Expected incompatible chunk-only goal-covered bundle to be flagged as ungrounded fallback');
+  }
+  console.log('[OK] multi-goal confidence helper flags incompatible chunk-only goal-covered bundles');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackOnExplicitActScopedChunksOnlyBundle(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'administrative',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '1618-15',
+        act_title: 'Про звернення громадян',
+        act_kind: 'PRIMARY_LAW',
+        category: 'administrative',
+      },
+      {
+        rada_nreg: '2747-15',
+        act_title: 'Кодекс адміністративного судочинства України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'judiciary_justice',
+      },
+      {
+        rada_nreg: '80731-10',
+        act_title: 'Податковий кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'tax_customs',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['1618-15', new Set(['goal_0'])],
+      ['2747-15', new Set(['goal_1'])],
+      ['80731-10', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['1618-15', '2747-15', '80731-10'],
+    },
+    topScore: 0.59,
+    mismatchSignalsPresent: false,
+    metadataGroundedActCount: 0,
+    explicitActScopeCue: true,
+  });
+  if (!flagged) {
+    throw new Error('Expected explicit act-scoped multi-goal chunks-only bundle without grounding to be flagged');
+  }
+  console.log('[OK] multi-goal confidence helper flags explicit act-scoped chunks-only fallback without grounding');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackOnThreeFamilyChunksOnlyBundleWithoutMismatchSignal(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'general',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '2755-17',
+        act_title: 'Податковий кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'tax_customs',
+      },
+      {
+        rada_nreg: '2947-14',
+        act_title: 'Сімейний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['2755-17', new Set(['goal_0'])],
+      ['2947-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['2755-17', '2947-14', '4651-17'],
+    },
+    topScore: 0.58,
+    mismatchSignalsPresent: false,
+  });
+  if (!flagged) {
+    throw new Error('Expected three-family chunk-only bundle to be flagged even without explicit mismatch signal');
+  }
+  console.log('[OK] multi-goal confidence helper flags three-family chunk-only bundles without explicit mismatch signal');
 }
 
 function testShouldNotFlagUngroundedMultiGoalFallbackWhenGoalCoverageIsReal(): void {
@@ -7257,6 +12943,167 @@ function testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCover
     throw new Error('Did not expect fully covered definition-goal bundle to be flagged as ungrounded fallback');
   }
   console.log('[OK] multi-goal confidence helper keeps covered definition-goal bundles');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackWhenSameFamilyBundleMasksStrongSecondaryCompetition(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'general',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['1023-12', '435-15'],
+    },
+    topScore: 0.57,
+    mismatchSignalsPresent: true,
+    secondaryFamilySupportScore: 0.47,
+  });
+  if (!flagged) {
+    throw new Error('Expected same-family covered bundle with strong secondary-family competition to be flagged');
+  }
+  console.log('[OK] multi-goal confidence helper flags same-family covered bundle when strong secondary-family competition remains');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackWhenSpecificDomainMapsToOffFamilyActs(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'admin',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '1023-12',
+        act_title: 'Про захист прав споживачів',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['1023-12', new Set(['goal_0'])],
+      ['435-15', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: ['1023-12', '435-15'],
+      from_chunks_evidence: ['1023-12', '435-15'],
+    },
+    topScore: 0.58,
+    mismatchSignalsPresent: true,
+  });
+  if (!flagged) {
+    throw new Error('Expected specific-domain off-family acts_search fallback to be flagged as ungrounded');
+  }
+  console.log('[OK] multi-goal confidence helper flags specific-domain off-family fallback');
+}
+
+function testShouldFlagUngroundedMultiGoalFallbackWhenOnlyTaxonomyBacksBroadOffFamilyBundle(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'admin',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '3543-12',
+        act_title: 'Про мобілізаційну підготовку та мобілізацію',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+      },
+      {
+        rada_nreg: '389-2003-п',
+        act_title: 'Порядок бронювання військовозобов’язаних',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['3543-12', new Set(['goal_0'])],
+      ['389-2003-п', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['3543-12', '389-2003-п'],
+      from_acts_search: [],
+      from_chunks_evidence: ['3543-12', '389-2003-п'],
+    },
+    topScore: 0.58,
+    mismatchSignalsPresent: true,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+  });
+  if (!flagged) {
+    throw new Error('Expected taxonomy-backed but ungrounded off-family bundle to stay flagged as ungrounded fallback');
+  }
+  console.log('[OK] multi-goal confidence helper keeps taxonomy-only off-family bundles flagged without indexed grounding');
+}
+
+function testShouldNotFlagUngroundedMultiGoalFallbackWhenExactIndexedGroundingExists(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'admin',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '3543-12',
+        act_title: 'Про мобілізаційну підготовку та мобілізацію',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+      },
+      {
+        rada_nreg: '389-2003-п',
+        act_title: 'Порядок бронювання військовозобов’язаних',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['3543-12', new Set(['goal_0'])],
+      ['389-2003-п', new Set(['goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['3543-12', '389-2003-п'],
+      from_acts_search: [],
+      from_chunks_evidence: ['3543-12', '389-2003-п'],
+    },
+    topScore: 0.58,
+    mismatchSignalsPresent: true,
+    exactActHitCount: 1,
+    groundedActHitCount: 0,
+  });
+  if (flagged) {
+    throw new Error('Did not expect exact indexed grounding to be treated as ungrounded multi-goal fallback');
+  }
+  console.log('[OK] multi-goal confidence helper does not flag bundles with exact indexed grounding');
 }
 
 function testSkipMultiGoalVariantSearchOnStrongPerGoalCoverage(): void {
@@ -7408,12 +13255,17 @@ async function main(): Promise<void> {
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
   testGoalSplitCarriesSharedTailAcrossClauses();
+  testGoalSplitKeepsAnchoredActTitleWithInternalConjunctionAsSingleGoal();
+  testGoalSplitKeepsCompactTitleFragmentWithInternalConjunctionAsSingleGoal();
+  testGoalSplitKeepsQuotedRatificationTitleWithInternalConjunctionAsSingleGoal();
+  testGoalSplitKeepsQuotedRatificationTitleSingleGoalWhenContractLike();
   testExplicitActScopeCueCoversStructuredIdsAndSubordinateActs();
   testStrongActScopeCueCountDistinguishesSingleAndMixedActScope();
   testGoalSplitDoesNotCompactMixedActScopeBundle();
   testGoalSplitCompactsSingleStrongActScopeBundle();
   testGoalSplitCompactsActMetadataBundle();
   testGoalSplitCompactsActMetadataBundleWithNeuterLocator();
+  testGoalSplitCompactsProfileLawMetadataBundle();
   testGoalSplitCompactsRepealOrderMetadataBundle();
   testGoalSplitDoesNotCompactActLocatorWithSubstantiveProcedureBundle();
   testGoalSplitDoesNotCompactActMetadataBundleWithProceduralRemedyFollowUp();
@@ -7427,6 +13279,7 @@ async function main(): Promise<void> {
   testGoalSplitCompactsProceduralBundleWithDocumentsFollowUp();
   testCategoryClusterSplitSkipsGroundedSingleAct();
   testCategoryClusterSplitSkipsDominantTitleFragmentSingleAct();
+  testCategoryClusterSplitSkipsQuotedExplicitLawTitleScope();
   testGoalSplitMarksProceduralSingleGoal();
   testGoalSplitCompactsProceduralBundleWithAnaphora();
   testGoalSplitCompactsProceduralBundleWithSharedProcessReference();
@@ -7439,12 +13292,14 @@ async function main(): Promise<void> {
   testStrongTaxonomySignalHelperMatchesSingleGoalPolicy();
   await testTaxonomyGroundsSingleLogicalActFamilyFromExactAlias();
   await testTaxonomyGroundsRepealOrderByDerivedTitleAlias();
+  await testTaxonomyPrefersInForceLogicalActSuccessorForTruncatedQuotedLawTitle();
   testStrongTaxonomySignalTreatsExactActHitAsStrong();
   testStrongTaxonomySignalTreatsGroundedAliasAsStrong();
   testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly();
   testDomainHintAlignedFamilyHelper();
   testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal();
   testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak();
+  testSingleGoalFirstPassPlanKeepsActsSearchForDescriptiveActTitleScope();
   testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly();
   testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest();
   testSingleGoalFirstPassPlanPreservesExplicitActsOnlyRequest();
@@ -7475,6 +13330,7 @@ async function main(): Promise<void> {
   testWithinActExpansionCompactsGroundedStructuralSingleActQueries();
   testWithinActExpansionSupportsExplicitActScopeWithoutExactGrounding();
   testWithinActExpansionCollapsesExplicitActScopeOnStrongHeadConsensus();
+  testWithinActExpansionSupportsGroundedDescriptiveActTitleQueries();
   testAuditBestProbeUsesNregInsteadOfWeakShortAlias();
   testAuditBestProbeUsesNregInsteadOfWeakShortCuedNumberAlias();
   testAuditBestProbeKeepsStrongCodeAlias();
@@ -7509,9 +13365,15 @@ async function main(): Promise<void> {
   testClassifyActKindUsesDocumentTypeSlug();
   await testTaxonomyKeywordTopicNotInScore();
   await testFindActByTitleFragmentExport();
+  await testFindActByTitleFragmentRecoversLongOfficialTitleVariant();
+  await testQuotedActTitleFragmentsSupportGroundingSignals();
+  testQuotedActTitleFragmentsRemainStableAcrossCallsForShortLawTitles();
+  testQuotedActTitleFragmentsPreserveOuterNestedQuotedLawTitles();
+  testApproximateGroundingSkipsQuotedAnchoredActTitles();
   await testDocsOnlyNoSemanticPlanIsNotMarkedDegraded();
   testChunkStructuralScorePrefersBaseArticleTitle();
   testOrderingScoreBeatsRawVectorScore();
+  testHybridOrderingPrefersGroundedActSearchHitForTitleLocator();
   testDiscriminativeStructuralScorePrefersMobilizationArticle();
   testStructuralScoreRemainsFiniteWhenMatchesAppearOutOfOrder();
   testStructuralScoreSoftensZeroOverlapPenaltyForStrongArticleHits();
@@ -7524,7 +13386,11 @@ async function main(): Promise<void> {
   testSingleGoalDegradedTraceMarksWeakEvidenceHonestly();
   testNormalizeSingleGoalLowConfidenceSelectionClearsOutOfScopeNoise();
   testNormalizeSingleGoalLowConfidenceSelectionKeepsSingleDomainAlignedPrimaryLaw();
+  testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbackNoise();
   testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivilBundle();
+  testNormalizeSingleGoalLowConfidenceSelectionPreservesTaxonomyBackedCivilBundle();
+  testNormalizeSingleGoalLowConfidenceSelectionRecoversCompanionFromActCandidates();
+  testNormalizeSingleGoalLowConfidenceSelectionNarrowsMetadataCompanionFallback();
   await testResolveSingleGoalSelectedActsConfirmsExplicitNonPrimaryScope();
   await testResolveSingleGoalSelectedActsClearsOutOfScopeForExactActScope();
   await testResolveSingleGoalSelectedActsRecoversExplicitIdentifierFromTailEvidence();
@@ -7537,7 +13403,23 @@ async function main(): Promise<void> {
   await testResolveSingleGoalSelectedActsRecoversAnchoredDescriptiveSubordinateAct();
   await testResolveSingleGoalSelectedActsKeepsGroundedSubordinateActAsWeakEvidenceWhenChunksMiss();
   await testResolveSingleGoalSelectedActsFlagsUngroundedGeneralMultiFamilySelection();
+  await testResolveSingleGoalSelectedActsRecoversEvidenceDominantExplicitActScope();
+  await testResolveSingleGoalSelectedActsRecoversSpecialLawLocatorFromCoverageWeightedEvidence();
+  await testResolveSingleGoalSelectedActsKeepsShortExplicitLawTitleWhenMetadataAndChunksConverge();
+  await testResolveSingleActScopeSelectionRecoversAnchorWhenOnlyHintedSupportActRemains();
+  await testResolveSingleActScopeSelectionRejectsUntrustedGroundedPersonnelOrder();
+  await testResolveSingleActScopeSelectionRecoversGroundedRepealOrderWithTrustedDateNumberIdentity();
+  await testResolveSingleGoalSelectedActsPrefersDominantEvidenceOverSemanticNeighborMetadataScope();
+  await testResolveSingleGoalSelectedActsPrefersEarlyRankMassLawOverCoverageTailForSoftLocator();
+  await testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle();
+  await testResolveSingleGoalSelectedActsRejectsSupportOnlySecondaryActForAbsentExplicitLawTitle();
+  await testResolveSingleGoalSelectedActsRejectsSemanticNeighborForAbsentExplicitLawTitle();
+  await testResolveSingleGoalSelectedActsRejectsBaseOrderFallbackForAbsentExplicitAmendmentOrder();
+  await testResolveSingleGoalSelectedActsRejectsPersonnelOrderNeighborForAbsentExplicitDismissalOrder();
+  await testResolveSingleGoalSelectedActsRecoversExplicitPersonnelOrderWithMatchingIdentity();
   await testResolveSingleGoalSelectedActsFlagsUngroundedGeneralChunksOnlyPrimaryFallback();
+  await testResolveSingleGoalSelectedActsFlagsUngroundedPrimaryCompanionFallback();
+  await testResolveSingleGoalSelectedActsFlagsBroadSameFamilyChunksOnlyFallback();
   testCoverageGapUsesSpecificDomainHintForLikelyMissingAct();
   testCoverageGapUsesUngroundedNonPrimaryOnlyWeakSelectionForLikelyMissingAct();
   testCoverageGapKeepsGroundedNonPrimaryOnlyWeakSelectionAsWeakEvidence();
@@ -7547,8 +13429,18 @@ async function main(): Promise<void> {
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
   testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
+  testCoverageGapTreatsMetadataOnlyExplicitActScopeMissAsLikelyMissingAct();
+  testCoverageGapUsesExplicitActScopeForLikelyMissingActWithoutGrounding();
+  testCoverageGapPrefersLikelyMissingActOverOutOfScopeForExplicitActScope();
+  testCoverageGapPromotesSpecificNonPrimaryOnlyWeakSelectionToLikelyMissingAct();
   testCoverageGapUsesProceduralOnlyMixedGoalFallbackForLikelyMissingAct();
   testCoverageGapKeepsGroundedSinglePrimaryProceduralBundleAsWeakEvidence();
+  testCoverageGapKeepsUngroundedSinglePrimaryProceduralBundleAsWeakEvidence();
+  testCoverageGapKeepsProceduralSinglePrimaryBundleWeakEvenWhenUngroundedFallbackFires();
+  testCoverageGapKeepsProceduralSinglePrimaryFallbackWeakWithoutBlockedReason();
+  testCoverageGapUsesLikelyMissingActForMixedProceduralFallbackWithOnlyMetadataGrounding();
+  testCoverageGapUsesLikelyMissingActForMixedProceduralFallbackWithFamilyMismatchTail();
+  testCoverageGapKeepsStrongSingleActProceduralSurfaceAsWeakEvidenceEvenWhenGoalTypesLookMixed();
   testCoverageGapUsesGroundedActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
   testCoverageGapUsesMetadataActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
   testCoverageGapUsesProceduralPrimaryWithoutActGroundingForLikelyMissingAct();
@@ -7560,13 +13452,33 @@ async function main(): Promise<void> {
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
+  testBuildTaxonomyQuerySignalsCanonicalizesInflectedLawCuePhrase();
+  testBuildTaxonomyQuerySignalsStripsPrimaryLawLocatorEnvelope();
+  await testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator();
+  await testScoreActCandidatePrefersHigherEducationLawForAcademicMobilityLocator();
+  await testScoreActCandidatePrefersDatedNbuDailyActOverGenericCurrencyRegulation();
+  await testGetTaxonomyCandidatesGroundsCuedNumericRepealOrderWithDateContext();
   testExtractActReferenceSignalsCapturesExplicitDocumentTitles();
+  testExtractActReferenceSignalsCapturesModifiedGovernmentDecisionCue();
   testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator();
+  testExtractActReferenceSignalsPreservesCueForInterrogativeLocator();
+  testExtractActReferenceSignalsCompactsInflectedShortLawAliasQuery();
   testMetadataGroundedActCandidateAcceptsDistinctDescriptiveLocator();
+  testActReferenceCueCompatibilitySupportsBroadGovernmentDecisionEnvelope();
+  testMetadataGroundedActCandidateAcceptsBroadGovernmentDecisionEnvelope();
   testMetadataGroundedActCandidateAcceptsCompactTitleFragment();
+  testMetadataGroundedActCandidateAcceptsAliasBackedShortLawTitle();
+  testMetadataGroundedActCandidateRejectsExplicitLawTitleSemanticNeighbor();
+  testMetadataGroundedActCandidateRejectsStructuredIdentifierNeighbor();
+  testMetadataGroundedActCandidateRejectsBaseOrderForAmendmentTitle();
+  testMetadataGroundedActCandidateRejectsPersonnelOrderNeighborWithDifferentPersonSignature();
+  testMetadataGroundedActCandidateRejectsPresidentialDelegationNeighbor();
+  testMetadataGroundedActCandidateRejectsKsuDecisionForPresidentialRepresentationQuery();
   testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator();
+  testInterrogativePrimaryLawLocatorQueryDetectsSpecialLawLocators();
   testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle();
   testExtractStructuredActIdentifiersIgnoresDates();
+  testExtractStructuredActIdentifiersIgnoresTemporalHyphenatedTerms();
   testExtractCuedNumericActReferencesCapturesBareNumberWithCue();
   testSelectedActsAvoidWeakSingleGoalSupportNoise();
   testSelectedActsTrimWeakMultiGoalTail();
@@ -7583,6 +13495,8 @@ async function main(): Promise<void> {
   testSelectedActsMarksCoverageMissWhenGoalSupportIsIncomplete();
   testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage();
   testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoals();
+  testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProceduralCompanionRemains();
+  testSelectedActsRecoversMixedGoalPrimaryCompanionFromHitBackfill();
   testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft();
   testSelectedActsBlocksWeakNonPrimaryNoiseUnderMultiGoalPrimaryDominance();
   testSelectedActsKeepsExplicitlyHintedNonPrimaryActInMultiGoalSelection();
@@ -7592,11 +13506,32 @@ async function main(): Promise<void> {
   testSelectedActsRequireEvidenceForPrimaryLawSupportTail();
   testFinalizeMultiGoalSelectedActsRecomputesConfidenceAfterTailTrim();
   testFinalizeMultiGoalSelectedActsKeepsOnlyFinalMetadataGrounding();
+  testFinalizeMultiGoalSelectedActsDoesNotTreatActsSearchAsMetadataGrounding();
+  testTrimUngroundedMultiGoalFallbackSelectionKeepsTopTwoEvidenceActs();
+  testTrimLowConfidenceMultiGoalSelectionPreservesUniqueGoalCoverageWithoutMismatchSignal();
+  testResolveExplicitPrimaryActMultiGoalSelectionAllowsAnchoredThinLaw();
+  testResolveExplicitPrimaryActMultiGoalSelectionRecoversThinLawAndTrimsUnhintedOrderNoise();
+  testResolveExplicitPrimaryActMultiGoalSelectionPrefersQuotedAmendmentLawOverBaseLaw();
+  testResolveExplicitPrimaryActMultiGoalSelectionTrimsUnhintedTreatyTailForQuotedPrimaryLawLocator();
+  testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxGenericMixedBundle();
+  testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxUngroundedSpecialLawLocator();
+  testResolveExplicitPrimaryActMultiGoalSelectionAllowsSemanticSpecialLawLocator();
+  testTrimUngroundedMultiGoalFallbackSelectionCollapsesOffFamilyTwoActBundle();
+  testTrimUngroundedMultiGoalFallbackSelectionPreservesUniqueMixedCoverageWhenCompatible();
+  testTrimUngroundedMultiGoalFallbackSelectionPrefersUniqueGoalCoverageOverRedundantEvidence();
   testStrongGoalSupportedMultiPrimaryCoverageRecognizesLegitimateMixedBundle();
   testStrongGoalSupportedMultiPrimaryCoverageRequiresFullGoalCoverage();
+  testStrongGoalSupportedMultiPrimaryCoverageRejectsIncompatibleThreeFamilyBundle();
   testShouldFlagUngroundedMultiGoalFallbackOnChunksOnlyBroadPrimarySelection();
+  testShouldFlagUngroundedMultiGoalFallbackOnExplicitActScopedChunksOnlyBundle();
+  testShouldFlagUngroundedMultiGoalFallbackOnIncompatibleGoalCoveredBundle();
+  testShouldFlagUngroundedMultiGoalFallbackOnThreeFamilyChunksOnlyBundleWithoutMismatchSignal();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenGoalCoverageIsReal();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCovered();
+  testShouldFlagUngroundedMultiGoalFallbackWhenSameFamilyBundleMasksStrongSecondaryCompetition();
+  testShouldFlagUngroundedMultiGoalFallbackWhenSpecificDomainMapsToOffFamilyActs();
+  testShouldFlagUngroundedMultiGoalFallbackWhenOnlyTaxonomyBacksBroadOffFamilyBundle();
+  testShouldNotFlagUngroundedMultiGoalFallbackWhenExactIndexedGroundingExists();
   testSkipMultiGoalVariantSearchOnStrongPerGoalCoverage();
   testSkipMultiGoalVariantSearchRequiresMaterialCoverage();
   testSkipMultiGoalVariantSearchRequiresPrimaryLawCoverage();

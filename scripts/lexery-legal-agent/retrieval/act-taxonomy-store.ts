@@ -6,6 +6,15 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config } from '../lib/config.js';
 import {
+  extractStructuredActIdentifiers,
+  looksLikeStructuredActIdentifier,
+  normalizeStructuredActIdentifier,
+} from '../lib/structured-act-identifier.js';
+export {
+  extractStructuredActIdentifiers,
+  looksLikeStructuredActIdentifier,
+} from '../lib/structured-act-identifier.js';
+import {
   incrementTaxonomyRefreshSuccess,
   incrementTaxonomyRefreshFailed,
   setTaxonomySnapshotAgeSeconds,
@@ -14,6 +23,10 @@ import {
   addU4TaxonomyHintsInjectedActs,
 } from '../gateway/observability.js';
 import { tolerantNormalizeToStrings } from './tolerant-normalizer.js';
+import {
+  extractInterrogativeActLocatorSignals,
+  looksLikeCompactActTitleFragmentQuery,
+} from './descriptive-act-title.js';
 
 const LEGISLATION_TABLE = 'legislation_documents';
 const MIN_TOKEN_LEN = 2;
@@ -33,6 +46,15 @@ const APPROX_REFERENCE_GROUNDING_BOOST = 2.6;
 const APPROX_REFERENCE_MIN_SCORE = 3;
 const APPROX_REFERENCE_MIN_MARGIN = 1;
 const EXACT_TEXT_GROUNDING_MIN_MARGIN = 0.9;
+const TITLE_FRAGMENT_GROUNDING_MIN_MARGIN = 1.1;
+const TITLE_FRAGMENT_MIN_TOKENS = 4;
+const TITLE_FRAGMENT_MIN_PHRASE_WORDS = 3;
+const DOCUMENT_NUMBER_MATCH_BOOST = 2.4;
+const DOCUMENT_NUMBER_MISMATCH_PENALTY = 1.1;
+const RADA_DATRED_MATCH_BOOST = 3.4;
+const RADA_DATRED_MISMATCH_PENALTY = 1.6;
+const RADA_MONTH_MATCH_BOOST = 1.9;
+const RADA_MONTH_MISMATCH_PENALTY = 0.9;
 
 const AMENDMENT_TITLE_PREFIXES = [
   'про внесення змін',
@@ -88,6 +110,110 @@ const QUERY_STOPWORDS = new Set([
   'як',
 ]);
 
+const PRIMARY_LAW_LOCATOR_NOISE_TOKENS = new Set([
+  'який',
+  'яка',
+  'яке',
+  'які',
+  'якого',
+  'якої',
+  'якому',
+  'яким',
+  'якими',
+  'яких',
+  'саме',
+  'акт',
+  'акта',
+  'актом',
+  'закон',
+  'закону',
+  'законом',
+  'закони',
+  'кодекс',
+  'кодексу',
+  'кодексом',
+  'конвенція',
+  'конвенції',
+  'договор',
+  'договір',
+  'договору',
+  'статут',
+  'статуту',
+  'спеціальний',
+  'спеціального',
+  'спеціальним',
+  'спеціальні',
+  'профільний',
+  'профільного',
+  'профільним',
+  'профільні',
+  'визначає',
+  'визначити',
+  'встановлює',
+  'встановити',
+  'регулює',
+  'регулювати',
+  'передбачає',
+  'передбачити',
+  'дозволяє',
+  'дозволити',
+  'право',
+  'права',
+  'правом',
+  'праву',
+]);
+
+const UKRAINIAN_MONTH_NUMBERS = new Map<string, string>([
+  ['січень', '01'],
+  ['січня', '01'],
+  ['січні', '01'],
+  ['лютий', '02'],
+  ['лютого', '02'],
+  ['лютому', '02'],
+  ['березень', '03'],
+  ['березня', '03'],
+  ['березні', '03'],
+  ['квітень', '04'],
+  ['квітня', '04'],
+  ['квітні', '04'],
+  ['травень', '05'],
+  ['травня', '05'],
+  ['травні', '05'],
+  ['червень', '06'],
+  ['червня', '06'],
+  ['червні', '06'],
+  ['липень', '07'],
+  ['липня', '07'],
+  ['липні', '07'],
+  ['серпень', '08'],
+  ['серпня', '08'],
+  ['серпні', '08'],
+  ['вересень', '09'],
+  ['вересня', '09'],
+  ['вересні', '09'],
+  ['жовтень', '10'],
+  ['жовтня', '10'],
+  ['жовтні', '10'],
+  ['листопад', '11'],
+  ['листопада', '11'],
+  ['листопаді', '11'],
+  ['грудень', '12'],
+  ['грудня', '12'],
+  ['грудні', '12'],
+]);
+
+const UKRAINIAN_MONTH_PATTERN = [...new Set(UKRAINIAN_MONTH_NUMBERS.keys())].join('|');
+const TEXTUAL_DATE_REGEX = new RegExp(
+  `\\b(\\d{1,2})\\s+(${UKRAINIAN_MONTH_PATTERN})\\s+(\\d{4})(?:\\s+року)?\\b`,
+  'giu'
+);
+const TEXTUAL_MONTH_YEAR_REGEX = new RegExp(
+  `\\b(${UKRAINIAN_MONTH_PATTERN})\\s+(\\d{4})(?:\\s+року)?\\b`,
+  'giu'
+);
+const NUMERIC_DATE_REGEX = /\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b/gu;
+const ISO_DATE_REGEX = /\b(\d{4})-(\d{2})-(\d{2})\b/gu;
+
 const ACT_REFERENCE_CUE_PATTERNS = [
   'указ(?:у|ом|і|а)?',
   'постанова|постанови|постановою|постанову',
@@ -110,6 +236,39 @@ const ACT_REFERENCE_SIGNAL_REGEX = new RegExp(
   `(?:^|[\\s\\W])((?:${ACT_REFERENCE_CUE_PATTERNS.join('|')})\\s+[^\\n,.?!;:]{4,160})(?=$|[\\s\\W])`,
   'giu'
 );
+const ACT_REFERENCE_MODIFIED_SIGNAL_REGEX = new RegExp(
+  `(?:^|[\\s\\W])(((?:(?:урядов|підзаконн|нормативн|нормативно-правов|відомч|галузев|банківськ|регуляторн)\\p{L}*\\s+){1,2})(?:${ACT_REFERENCE_CUE_PATTERNS.join('|')})\\s+[^\\n,.?!;:]{4,160})(?=$|[\\s\\W])`,
+  'giu'
+);
+const REPEAL_TITLE_PREFIX_REGEX =
+  /^про визнання такими?, що втрат(?:ив|ило|или) чинність,?\s+/iu;
+const TITLE_FRAGMENT_PREFIX_REGEX =
+  /^(?:про\s+|правила\s+|порядок\s+|інструкція\s+|положення\s+|регламент\s+|кодекс\s+|конвенція\s+|договір\s+|статут\s+)/iu;
+const ACT_REFERENCE_FOLLOW_UP_MARKERS = new Set([
+  'де',
+  'коли',
+  'куди',
+  'скільки',
+  'хто',
+  'чи',
+  'що',
+  'як',
+  'яка',
+  'яке',
+  'який',
+  'якими',
+  'яких',
+  'яким',
+  'якого',
+  'якої',
+  'яку',
+]);
+
+const BROAD_NON_PRIMARY_DECISION_QUERY_REGEX =
+  /(?:^|[\s,])(?:(?:(?:урядов|підзаконн|нормативн|нормативно-правов|відомч|галузев|банківськ|регуляторн)\p{L}*\s+){1,2})рішен\p{L}*/iu;
+const BROAD_NON_PRIMARY_DECISION_AUTHORITY_REGEX =
+  /\b(?:кму|кабмін\p{L}*|кабінет\p{L}*\s+міністр\p{L}*|уряд\p{L}*|нбу|нацбанк\p{L}*|національн\p{L}*\s+банк\p{L}*|міністерств\p{L}*|відомств\p{L}*)\b/iu;
+const BROAD_NON_PRIMARY_DECISION_COMPATIBLE_CUES = new Set(['постанова', 'розпорядження', 'наказ']);
 
 interface ActEntry {
   rada_nreg: string;
@@ -120,6 +279,8 @@ interface ActEntry {
   storage_category: string | null;
   document_type: string | null;
   document_type_slug: string | null;
+  document_number: string | null;
+  rada_datred: string | null;
   validity_status: string | null;
 }
 
@@ -162,12 +323,7 @@ function tokenizeQuery(q: string): string[] {
 }
 
 function normalizeActIdentifier(value: string): string {
-  return value
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/[‐‑–—−]/gu, '-')
-    .replace(/\s*([/_-])\s*/gu, '$1')
-    .trim();
+  return normalizeStructuredActIdentifier(value);
 }
 
 function normalizeNumericStem(value: string | null | undefined): string | null {
@@ -176,31 +332,132 @@ function normalizeNumericStem(value: string | null | undefined): string | null {
   return digits;
 }
 
+function normalizeDocumentNumber(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '')
+    .normalize('NFC')
+    .replace(/^№\s*/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLowerCase();
+  return normalized || null;
+}
+
+function normalizeRadaDatred(value: string | null | undefined): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}/u.test(raw)) return raw.slice(0, 10);
+  if (/^\d{8}$/u.test(raw)) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+  return null;
+}
+
+function toIsoDate(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2100) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function toMonthKey(year: number, month: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
+  if (year < 1900 || year > 2100) return null;
+  if (month < 1 || month > 12) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}`;
+}
+
+type QueryDocumentIdentitySignals = {
+  exactDates: Set<string>;
+  monthKeys: Set<string>;
+  documentNumbers: Set<string>;
+};
+
+function collectQueryDocumentIdentitySignals(values: string[]): QueryDocumentIdentitySignals {
+  const exactDates = new Set<string>();
+  const monthKeys = new Set<string>();
+  const documentNumbers = new Set<string>();
+
+  for (const value of values) {
+    const text = String(value ?? '').normalize('NFC');
+    if (!text) continue;
+
+    for (const match of text.matchAll(ISO_DATE_REGEX)) {
+      const isoDate = toIsoDate(Number(match[1]), Number(match[2]), Number(match[3]));
+      const monthKey = toMonthKey(Number(match[1]), Number(match[2]));
+      if (isoDate) exactDates.add(isoDate);
+      if (monthKey) monthKeys.add(monthKey);
+    }
+    for (const match of text.matchAll(NUMERIC_DATE_REGEX)) {
+      const isoDate = toIsoDate(Number(match[3]), Number(match[2]), Number(match[1]));
+      const monthKey = toMonthKey(Number(match[3]), Number(match[2]));
+      if (isoDate) exactDates.add(isoDate);
+      if (monthKey) monthKeys.add(monthKey);
+    }
+    for (const match of text.matchAll(TEXTUAL_DATE_REGEX)) {
+      const month = UKRAINIAN_MONTH_NUMBERS.get(match[2].toLowerCase());
+      if (!month) continue;
+      const isoDate = toIsoDate(Number(match[3]), Number(month), Number(match[1]));
+      const monthKey = toMonthKey(Number(match[3]), Number(month));
+      if (isoDate) exactDates.add(isoDate);
+      if (monthKey) monthKeys.add(monthKey);
+    }
+    for (const match of text.matchAll(TEXTUAL_MONTH_YEAR_REGEX)) {
+      const month = UKRAINIAN_MONTH_NUMBERS.get(match[1].toLowerCase());
+      const monthKey = month ? toMonthKey(Number(match[2]), Number(month)) : null;
+      if (monthKey) monthKeys.add(monthKey);
+    }
+
+    const referencedNumber = normalizeDocumentNumber(extractReferencedActNumber(text));
+    if (referencedNumber) documentNumbers.add(referencedNumber);
+  }
+
+  return { exactDates, monthKeys, documentNumbers };
+}
+
+function scoreEntryDocumentIdentity(
+  entry: Pick<ActEntry, 'document_number' | 'rada_datred'>,
+  queryIdentity: QueryDocumentIdentitySignals
+): ActCandidateScore {
+  let score = 0;
+  const reasons: string[] = [];
+  const entryDocumentNumber = normalizeDocumentNumber(entry.document_number);
+  const entryDate = normalizeRadaDatred(entry.rada_datred);
+  const entryMonthKey = entryDate ? entryDate.slice(0, 7) : null;
+
+  if (queryIdentity.documentNumbers.size > 0 && entryDocumentNumber) {
+    if (queryIdentity.documentNumbers.has(entryDocumentNumber)) {
+      score += DOCUMENT_NUMBER_MATCH_BOOST;
+      reasons.push('document_number_match');
+    } else {
+      score -= DOCUMENT_NUMBER_MISMATCH_PENALTY;
+      reasons.push('document_number_penalty');
+    }
+  }
+
+  if (queryIdentity.exactDates.size > 0 && entryDate) {
+    if (queryIdentity.exactDates.has(entryDate)) {
+      score += RADA_DATRED_MATCH_BOOST;
+      reasons.push('rada_datred_match');
+    } else {
+      score -= RADA_DATRED_MISMATCH_PENALTY;
+      reasons.push('rada_datred_penalty');
+    }
+  } else if (queryIdentity.exactDates.size === 0 && queryIdentity.monthKeys.size > 0 && entryMonthKey) {
+    if (queryIdentity.monthKeys.has(entryMonthKey)) {
+      score += RADA_MONTH_MATCH_BOOST;
+      reasons.push('rada_month_match');
+    } else {
+      score -= RADA_MONTH_MISMATCH_PENALTY;
+      reasons.push('rada_month_penalty');
+    }
+  }
+
+  return { score, reasons };
+}
+
 function extractPrimaryNumericStem(value: string | null | undefined): string | null {
   const normalized = normalizeActIdentifier(String(value ?? ''));
   const match = normalized.match(/(\d{1,8})/u);
   return normalizeNumericStem(match?.[1] ?? null);
-}
-
-export function looksLikeStructuredActIdentifier(value: string): boolean {
-  const normalized = normalizeActIdentifier(value);
-  if (!normalized || normalized.length < 4 || normalized.length > 32) return false;
-  if (!/\d/u.test(normalized)) return false;
-  if (!/[-_/]/u.test(normalized)) return false;
-  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/u.test(normalized)) return false;
-  return /^[\p{L}\p{N}_/-]+$/u.test(normalized);
-}
-
-export function extractStructuredActIdentifiers(query: string): string[] {
-  const matches = query
-    .normalize('NFC')
-    .match(/[\p{L}\p{N}_/‐‑–—−-]{4,32}/gu) ?? [];
-  const out = new Set<string>();
-  for (const match of matches) {
-    if (!looksLikeStructuredActIdentifier(match)) continue;
-    out.add(normalizeActIdentifier(match));
-  }
-  return [...out];
 }
 
 export function extractCuedNumericActReferences(
@@ -231,12 +488,37 @@ function tokenizeWords(value: string): string[] {
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
     .map((part) => part.trim())
-    .filter(
+      .filter(
       (part) => part.length >= MIN_TOKEN_LEN && !QUERY_STOPWORDS.has(part)
     );
 }
 
-function normalizeActReferenceCue(value: string | null | undefined): string | null {
+function buildPrimaryLawLocatorResidualSignals(query: string): { tokens: string[]; phrases: string[] } {
+  const residualTokens = new Set<string>();
+  const residualPhrases = new Set<string>();
+  for (const signal of extractInterrogativeActLocatorSignals(query)) {
+    const normalizedSignal = signal.normalize('NFC').trim();
+    if (!normalizedSignal) continue;
+    const signalTokens = tokenizeWords(normalizedSignal)
+      .map((token) => normalizeReferenceCueToken(token))
+      .filter((token) => token.length >= MIN_TOKEN_LEN && !PRIMARY_LAW_LOCATOR_NOISE_TOKENS.has(token));
+    if (signalTokens.length === 0) continue;
+    for (const token of signalTokens) residualTokens.add(token);
+    for (const phrase of buildPhraseSignals(signalTokens, MAX_QUERY_PHRASE_WORDS)) {
+      residualPhrases.add(phrase);
+    }
+  }
+  return {
+    tokens: [...residualTokens],
+    phrases: [...residualPhrases],
+  };
+}
+
+function normalizeReferenceCueToken(token: string): string {
+  return normalizeActReferenceCue(token) ?? token;
+}
+
+export function normalizeActReferenceCue(value: string | null | undefined): string | null {
   const firstToken = String(value ?? '')
     .normalize('NFC')
     .toLowerCase()
@@ -255,28 +537,107 @@ function normalizeActReferenceCue(value: string | null | undefined): string | nu
   if (firstToken.startsWith('rishenn')) return 'рішення';
   if (firstToken.startsWith('закон')) return 'закон';
   if (firstToken.startsWith('zakon')) return 'закон';
+  if (firstToken === 'law') return 'закон';
   if (firstToken.startsWith('кодекс')) return 'кодекс';
   if (firstToken.startsWith('kodeks')) return 'кодекс';
+  if (firstToken === 'code') return 'кодекс';
   if (firstToken.startsWith('правил') || firstToken.startsWith('правила')) return 'правила';
+  if (firstToken === 'rules') return 'правила';
   if (firstToken.startsWith('поряд')) return 'порядок';
   if (firstToken.startsWith('poriad') || firstToken.startsWith('poryad')) return 'порядок';
+  if (firstToken === 'procedure') return 'порядок';
   if (firstToken.startsWith('інструкц')) return 'інструкція';
   if (firstToken.startsWith('instruk')) return 'інструкція';
+  if (firstToken === 'instruction') return 'інструкція';
   if (firstToken.startsWith('положен')) return 'положення';
   if (firstToken.startsWith('polozh')) return 'положення';
+  if (firstToken === 'regulation') return 'положення';
   if (firstToken.startsWith('регламент')) return 'регламент';
   if (firstToken.startsWith('reglament')) return 'регламент';
   if (firstToken.startsWith('конвенц')) return 'конвенція';
   if (firstToken.startsWith('konvent')) return 'конвенція';
+  if (firstToken === 'convention') return 'конвенція';
   if (firstToken.startsWith('договор') || firstToken.startsWith('договір')) return 'договір';
   if (firstToken.startsWith('dogov') || firstToken.startsWith('dohov')) return 'договір';
+  if (firstToken === 'treaty' || firstToken === 'agreement') return 'договір';
   if (firstToken.startsWith('статут')) return 'статут';
   if (firstToken.startsWith('statut')) return 'статут';
+  if (firstToken === 'charter') return 'статут';
+  if (firstToken === 'resolution') return 'постанова';
+  if (firstToken === 'decree') return 'указ';
+  if (firstToken === 'order') return 'наказ';
   return null;
 }
 
+function queryUsesBroadNonPrimaryDecisionEnvelope(query: string | null | undefined): boolean {
+  const normalized = String(query ?? '').normalize('NFC');
+  if (!normalized) return false;
+  return (
+    BROAD_NON_PRIMARY_DECISION_QUERY_REGEX.test(normalized) ||
+    (
+      /\bрішен\p{L}*/iu.test(normalized) &&
+      BROAD_NON_PRIMARY_DECISION_AUTHORITY_REGEX.test(normalized)
+    )
+  );
+}
+
+export function areActReferenceCuesCompatible(
+  requestedCue: string | null | undefined,
+  candidateCue: string | null | undefined,
+  query?: string | null
+): boolean {
+  if (!requestedCue || !candidateCue) return false;
+  if (requestedCue === candidateCue) return true;
+  if (
+    requestedCue === 'рішення' &&
+    BROAD_NON_PRIMARY_DECISION_COMPATIBLE_CUES.has(candidateCue) &&
+    queryUsesBroadNonPrimaryDecisionEnvelope(query)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function buildReferenceTokens(value: string | null | undefined): string[] {
-  return [...new Set(tokenizeWords(String(value ?? '')).filter((token) => token.length >= 4))];
+  const rawTokens = [...new Set(tokenizeWords(String(value ?? '')).filter((token) => token.length >= 4))];
+  const cueNormalizedTokens = rawTokens
+    .map((token) => normalizeReferenceCueToken(token))
+    .filter((token) => token.length >= 4);
+  return uniqueStrings([...rawTokens, ...cueNormalizedTokens]);
+}
+
+function extractReferencedActNumber(value: string | null | undefined): string | null {
+  const match = String(value ?? '')
+    .normalize('NFC')
+    .match(/(?:№|N|No\.?|#)\s*([\p{L}\d][\p{L}\d/-]{0,20})/iu);
+  const normalized = match?.[1]?.trim();
+  return normalized || null;
+}
+
+function deriveRuntimeTitleAliases(title: string, documentType: string | null): string[] {
+  const normalizedTitle = title.normalize('NFC').trim();
+  if (!normalizedTitle) return [];
+
+  const out = new Set<string>();
+  const titleKey = toKey(normalizedTitle);
+  if (!REPEAL_TITLE_PREFIX_REGEX.test(titleKey)) return [];
+
+  const referencedSegment = normalizedTitle.replace(REPEAL_TITLE_PREFIX_REGEX, '').trim();
+  if (!referencedSegment) return [];
+
+  const cue = normalizeActReferenceCue(referencedSegment) ?? normalizeActReferenceCue(documentType);
+  const referencedNumber = extractReferencedActNumber(referencedSegment);
+
+  if (cue && referencedNumber) {
+    out.add(`${cue} про втрату чинності № ${referencedNumber}`);
+    out.add(`про втрату чинності ${cue} № ${referencedNumber}`);
+  }
+  if (cue) {
+    out.add(`${cue} втратило чинність`);
+    out.add(`${cue} про втрату чинності`);
+  }
+
+  return [...out];
 }
 
 function compactKey(value: string | null | undefined): string {
@@ -312,6 +673,8 @@ function scoreExactTextGroundingEntry(entry: ActEntry, signal: string, query: st
   const titleKey = toKey(entry.title);
   const aliasExact = entry.aliases.some((alias) => toKey(alias) === signalKey);
   const titleExact = titleKey === signalKey;
+  const requestedReferencedNumber = extractReferencedActNumber(signal) ?? extractReferencedActNumber(query);
+  const entryReferencedNumber = extractReferencedActNumber(entry.title);
   const candidateTokens = new Set([
     ...buildReferenceTokens(entry.title),
     ...entry.aliases.flatMap((alias) => buildReferenceTokens(alias)),
@@ -322,12 +685,70 @@ function scoreExactTextGroundingEntry(entry: ActEntry, signal: string, query: st
   if (titleExact) score += 2.6;
   if (aliasExact) score += 2.3;
   if (titleKey && (titleKey.includes(signalKey) || signalKey.includes(titleKey))) score += 0.45;
+  if (requestedReferencedNumber && entryReferencedNumber === requestedReferencedNumber) score += 2.4;
+  else if (requestedReferencedNumber && entryReferencedNumber && entryReferencedNumber !== requestedReferencedNumber) {
+    score -= 1.6;
+  }
   score += Math.min(1.2, tokenMatches * 0.35);
   if (entry.validity_status === 'in_force') score += VALIDITY_IN_FORCE_BOOST;
   if (!queryLooksAmendmentFocused(query) && isAmendmentLikeActTitle(entry.title)) {
     score -= 1.8;
   }
+  score += scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals([signal, query])).score;
   return score;
+}
+
+function normalizeLogicalActFamilyTitle(title: string | null | undefined): string {
+  return String(title ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\([^)]*\)/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function entriesShareSingleLogicalActFamily(entries: ActEntry[]): boolean {
+  if (entries.length < 2) return false;
+  const normalizedTitles = new Set(entries.map((entry) => normalizeLogicalActFamilyTitle(entry.title)));
+  if (normalizedTitles.size !== 1) return false;
+  const categories = new Set(entries.map((entry) => entry.category ?? ''));
+  const docTypes = new Set(entries.map((entry) => entry.document_type_slug ?? entry.document_type ?? ''));
+  return categories.size === 1 && docTypes.size === 1;
+}
+
+function resolveLogicalActFamilyRepresentative(
+  entries: ActEntry[],
+  signal: string,
+  query: string
+): ActEntry | null {
+  if (!entriesShareSingleLogicalActFamily(entries)) return null;
+  return [...entries].sort((left, right) => {
+    const scoreDiff = scoreExactTextGroundingEntry(right, signal, query) - scoreExactTextGroundingEntry(left, signal, query);
+    if (Math.abs(scoreDiff) > 1e-9) return scoreDiff > 0 ? 1 : -1;
+    return left.rada_nreg.localeCompare(right.rada_nreg);
+  })[0] ?? null;
+}
+
+function resolveUniqueInForceLogicalActSuccessor(
+  entries: ActEntry[],
+  signals: Array<string | null | undefined>
+): ActEntry | null {
+  if (!entriesShareSingleLogicalActFamily(entries)) return null;
+  const identity = collectQueryDocumentIdentitySignals(signals.map((signal) => String(signal ?? '')));
+  if (
+    identity.documentNumbers.size > 0 ||
+    identity.exactDates.size > 0 ||
+    identity.monthKeys.size > 0
+  ) {
+    return null;
+  }
+  const inForceEntries = entries.filter((entry) => entry.validity_status === 'in_force');
+  if (inForceEntries.length !== 1) return null;
+  const staleEntries = entries.filter(
+    (entry) => entry.validity_status && entry.validity_status !== 'in_force'
+  );
+  if (staleEntries.length === 0) return null;
+  return inForceEntries[0] ?? null;
 }
 
 function resolveExactTextGroundingAmbiguity(
@@ -335,6 +756,9 @@ function resolveExactTextGroundingAmbiguity(
   signal: string,
   query: string
 ): ActEntry | null {
+  const inForceSuccessor = resolveUniqueInForceLogicalActSuccessor(entries, [signal, query]);
+  if (inForceSuccessor) return inForceSuccessor;
+
   let best: { entry: ActEntry; score: number } | null = null;
   let secondScore = Number.NEGATIVE_INFINITY;
 
@@ -353,13 +777,340 @@ function resolveExactTextGroundingAmbiguity(
   return best.entry;
 }
 
+function collectTitleFragmentCandidates(snap: TaxonomySnapshot, fragment: string): ActEntry[] {
+  const key = toKey(fragment);
+  if (!key || key.length < 5) return [];
+
+  const candidates = new Map<string, ActEntry>();
+  for (const entry of snap.byTitleExact.get(key) ?? []) {
+    candidates.set(entry.rada_nreg, entry);
+  }
+  for (const entry of snap.byAliasExact.get(key) ?? []) {
+    candidates.set(entry.rada_nreg, entry);
+  }
+  for (const entry of snap.acts.values()) {
+    const titleKey = toKey(entry.title);
+    if (!titleKey) continue;
+    if (titleKey.includes(key) || key.includes(titleKey)) {
+      candidates.set(entry.rada_nreg, entry);
+    }
+  }
+  if (candidates.size === 0) {
+    const phraseSignals = buildPhraseSignals(buildReferenceTokens(fragment), MAX_QUERY_PHRASE_WORDS)
+      .filter((phrase) => phrase.split(/\s+/u).filter(Boolean).length >= TITLE_FRAGMENT_MIN_PHRASE_WORDS)
+      .sort((left, right) => right.split(/\s+/u).length - left.split(/\s+/u).length);
+    for (const phrase of phraseSignals) {
+      const phraseKey = toKey(phrase);
+      if (!phraseKey) continue;
+      for (const entry of snap.byTitle.get(phraseKey) ?? []) {
+        candidates.set(entry.rada_nreg, entry);
+      }
+      for (const entry of snap.byAlias.get(phraseKey) ?? []) {
+        candidates.set(entry.rada_nreg, entry);
+      }
+    }
+  }
+  return [...candidates.values()];
+}
+
+type TitleFragmentGroundingScore = {
+  score: number;
+  matchedTokenCount: number;
+  tokenCoverage: number;
+  matchedPhraseCount: number;
+  maxPhraseWords: number;
+};
+
+function scoreTitleFragmentGroundingEntry(
+  entry: ActEntry,
+  fragment: string
+): TitleFragmentGroundingScore {
+  const fragmentKey = toKey(fragment);
+  const fragmentTokens = buildReferenceTokens(fragment);
+  const requestedReferencedNumber = extractReferencedActNumber(fragment);
+  const entryReferencedNumber = extractReferencedActNumber(entry.title);
+  if (!fragmentKey || fragmentTokens.length === 0) {
+    return {
+      score: Number.NEGATIVE_INFINITY,
+      matchedTokenCount: 0,
+      tokenCoverage: 0,
+      matchedPhraseCount: 0,
+      maxPhraseWords: 0,
+    };
+  }
+
+  const titleKey = toKey(entry.title);
+  const titledDocumentKey = entry.document_type ? toKey(`${entry.document_type} ${entry.title}`) : '';
+  const aliasKeys = entry.aliases.map((alias) => toKey(alias)).filter(Boolean);
+  const candidateTokens = [
+    ...buildReferenceTokens(entry.title),
+    ...buildReferenceTokens(entry.document_type ?? ''),
+    ...entry.aliases.flatMap((alias) => buildReferenceTokens(alias)),
+  ];
+
+  let matchedTokenCount = 0;
+  for (const token of fragmentTokens) {
+    if (candidateTokens.some((candidateToken) => tokensSoftMatch(token, candidateToken))) {
+      matchedTokenCount += 1;
+    }
+  }
+  const tokenCoverage = matchedTokenCount / fragmentTokens.length;
+
+  let score = 0;
+  if (titleKey && (titleKey.includes(fragmentKey) || fragmentKey.includes(titleKey))) score += 2.8;
+  if (titledDocumentKey && (titledDocumentKey.includes(fragmentKey) || fragmentKey.includes(titledDocumentKey))) {
+    score += 3.1;
+  }
+  if (requestedReferencedNumber && entryReferencedNumber === requestedReferencedNumber) score += 2.6;
+  else if (requestedReferencedNumber && entryReferencedNumber && entryReferencedNumber !== requestedReferencedNumber) {
+    score -= 1.8;
+  }
+  score += scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals([fragment])).score;
+
+  let matchedPhraseCount = 0;
+  let maxPhraseWords = 0;
+  for (const phrase of buildPhraseSignals(fragmentTokens, MAX_QUERY_PHRASE_WORDS)) {
+    const phraseWords = phrase.split(/\s+/u).filter(Boolean).length;
+    if (phraseWords < TITLE_FRAGMENT_MIN_PHRASE_WORDS) continue;
+    const phraseKey = toKey(phrase);
+    if (!phraseKey) continue;
+    const phraseMatched =
+      (!!titleKey && titleKey.includes(phraseKey)) ||
+      (!!titledDocumentKey && titledDocumentKey.includes(phraseKey)) ||
+      aliasKeys.some((aliasKey) => aliasKey.includes(phraseKey) || phraseKey.includes(aliasKey));
+    if (!phraseMatched) continue;
+    matchedPhraseCount += 1;
+    maxPhraseWords = Math.max(maxPhraseWords, phraseWords);
+    score += phraseWords >= 4 ? 0.95 : 0.55;
+  }
+
+  score += Math.min(2.4, matchedTokenCount * 0.35);
+  if (tokenCoverage >= 0.85) score += 1.1;
+  else if (tokenCoverage >= 0.65) score += 0.55;
+  else if (tokenCoverage < 0.45) score -= 1.1;
+  if (entry.validity_status === 'in_force') score += VALIDITY_IN_FORCE_BOOST;
+  if (!queryLooksAmendmentFocused(fragment) && isAmendmentLikeActTitle(entry.title)) {
+    score -= 1.8;
+  }
+
+  return {
+    score,
+    matchedTokenCount,
+    tokenCoverage,
+    matchedPhraseCount,
+    maxPhraseWords,
+  };
+}
+
+function resolveTitleFragmentGroundingAmbiguity(
+  entries: ActEntry[],
+  fragment: string,
+  query?: string
+): ActEntry | null {
+  const inForceSuccessor = resolveUniqueInForceLogicalActSuccessor(entries, [fragment, query]);
+  if (inForceSuccessor) return inForceSuccessor;
+
+  let best:
+    | {
+        entry: ActEntry;
+        score: TitleFragmentGroundingScore;
+      }
+    | null = null;
+  let secondScore = Number.NEGATIVE_INFINITY;
+
+  for (const entry of entries) {
+    const score = scoreTitleFragmentGroundingEntry(entry, fragment);
+    if (!best || score.score > best.score.score) {
+      secondScore = best?.score.score ?? secondScore;
+      best = { entry, score };
+    } else if (score.score > secondScore) {
+      secondScore = score.score;
+    }
+  }
+
+  if (!best) return null;
+  if (best.score.matchedTokenCount < TITLE_FRAGMENT_MIN_TOKENS) return null;
+  if (
+    best.score.maxPhraseWords < 4 &&
+    best.score.matchedPhraseCount < 2 &&
+    best.score.tokenCoverage < 0.75
+  ) {
+    return null;
+  }
+  if (best.score.score - secondScore < TITLE_FRAGMENT_GROUNDING_MIN_MARGIN) return null;
+  return best.entry;
+}
+
+function resolveTitleFragmentGroundingEntries(
+  snap: TaxonomySnapshot,
+  fragment: string,
+  query?: string
+): ActEntry[] {
+  const candidates = collectTitleFragmentCandidates(snap, fragment);
+  if (candidates.length <= 1) return candidates;
+
+  const exactTextGrounded = resolveExactTextGroundingAmbiguity(candidates, fragment, fragment);
+  if (exactTextGrounded) return [exactTextGrounded];
+
+  const titleFragmentGrounded = resolveTitleFragmentGroundingAmbiguity(candidates, fragment, query);
+  if (titleFragmentGrounded) return [titleFragmentGrounded];
+
+  return candidates.sort((left, right) => left.rada_nreg.localeCompare(right.rada_nreg));
+}
+
+function resolveCuedNumericReferenceAmbiguity(
+  entries: ActEntry[],
+  reference: { cue: string; numericStem: string; rawReference: string },
+  query: string
+): ActEntry | null {
+  const fragments = uniqueStrings([
+    query,
+    reference.rawReference,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+  ])
+    .filter((fragment) => buildReferenceTokens(fragment).length >= TITLE_FRAGMENT_MIN_TOKENS)
+    .sort((left, right) => buildReferenceTokens(right).length - buildReferenceTokens(left).length);
+
+  for (const fragment of fragments) {
+    const grounded = resolveTitleFragmentGroundingAmbiguity(entries, fragment);
+    if (grounded) return grounded;
+  }
+  return null;
+}
+
 export function extractActReferenceSignals(query: string): string[] {
   const out = new Set<string>();
+  const addSignal = (rawSignal: string | null | undefined): void => {
+    const signal = String(rawSignal ?? '')
+      .normalize('NFC')
+      .trim()
+      .replace(/\s+/gu, ' ');
+    if (!signal) return;
+    out.add(signal);
+    for (const compactSignal of buildCompactActReferenceSignals(signal)) out.add(compactSignal);
+  };
   for (const match of query.normalize('NFC').matchAll(ACT_REFERENCE_SIGNAL_REGEX)) {
-    const signal = match[1]?.trim();
-    if (signal) out.add(signal);
+    addSignal(match[1]);
+  }
+  for (const match of query.normalize('NFC').matchAll(ACT_REFERENCE_MODIFIED_SIGNAL_REGEX)) {
+    addSignal(match[1]);
+  }
+  for (const signal of extractInterrogativeActLocatorSignals(query)) addSignal(signal);
+  return [...out];
+}
+
+function buildCompactActReferenceSignals(signal: string): string[] {
+  const tokens = signal.normalize('NFC').match(/[\p{L}\p{N}/-]+/gu) ?? [];
+  if (tokens.length < 2) return [];
+
+  const cueIndex = tokens.findIndex((token) => normalizeActReferenceCue(token) !== null);
+  const canonicalTokens = cueIndex >= 0 ? [...tokens.slice(cueIndex)] : [...tokens];
+  const canonicalCue = normalizeActReferenceCue(canonicalTokens[0]);
+  if (canonicalCue) canonicalTokens[0] = canonicalCue;
+
+  const out = new Set<string>();
+  out.add(tokens.join(' '));
+  out.add(canonicalTokens.join(' '));
+
+  let informativeAfterCue = 0;
+  let cutIndex = -1;
+  for (let index = 1; index < canonicalTokens.length; index += 1) {
+    const rawToken = canonicalTokens[index] ?? '';
+    const token = toKey(rawToken).replace(/[^\p{L}\p{N}]+/gu, '');
+    if (!token) continue;
+    if (ACT_REFERENCE_FOLLOW_UP_MARKERS.has(token) && informativeAfterCue >= 1) {
+      cutIndex = index;
+      break;
+    }
+    if (!QUERY_STOPWORDS.has(token)) informativeAfterCue += 1;
+  }
+
+  if (cutIndex >= 2) {
+    out.add(canonicalTokens.slice(0, cutIndex).join(' '));
+  }
+
+  return [...out];
+}
+
+export function extractQuotedActTitleFragments(value: string): string[] {
+  const normalized = value.normalize('NFC');
+  ACT_REFERENCE_SIGNAL_REGEX.lastIndex = 0;
+  const hasActCue =
+    normalizeActReferenceCue(normalized) !== null ||
+    ACT_REFERENCE_SIGNAL_REGEX.test(normalized);
+  ACT_REFERENCE_SIGNAL_REGEX.lastIndex = 0;
+  const out = new Set<string>();
+  const collectQuotedSegments = (openQuote: string, closeQuote: string): string[] => {
+    const segments: string[] = [];
+    if (openQuote === closeQuote) {
+      let outerStart = -1;
+      for (let index = 0; index < normalized.length; index += 1) {
+        const char = normalized[index];
+        if (char !== openQuote) continue;
+        if (outerStart < 0) {
+          outerStart = index + 1;
+          continue;
+        }
+        segments.push(normalized.slice(outerStart, index));
+        outerStart = -1;
+      }
+      if (outerStart >= 0) {
+        segments.push(normalized.slice(outerStart));
+      }
+      return segments;
+    }
+    let depth = 0;
+    let outerStart = -1;
+    for (let index = 0; index < normalized.length; index += 1) {
+      const char = normalized[index];
+      if (char === openQuote) {
+        if (depth === 0) outerStart = index + 1;
+        depth += 1;
+        continue;
+      }
+      if (char === closeQuote && depth > 0) {
+        depth -= 1;
+        if (depth === 0 && outerStart >= 0) {
+          segments.push(normalized.slice(outerStart, index));
+          outerStart = -1;
+        }
+      }
+    }
+    if (depth > 0 && outerStart >= 0) {
+      segments.push(normalized.slice(outerStart));
+    }
+    return segments;
+  };
+  const addFragment = (rawFragment: string | null | undefined): void => {
+    const fragment = String(rawFragment ?? '')
+      .trim()
+      .replace(/\s+/gu, ' ')
+      .replace(/[.,;:!?…]+$/u, '')
+      .trim();
+    if (!fragment) return;
+    const rawTokens = fragment
+      .normalize('NFC')
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= MIN_TOKEN_LEN);
+    const contentTokens = tokenizeWords(fragment);
+    if (rawTokens.length < 2) return;
+    if (contentTokens.length < 2 && !TITLE_FRAGMENT_PREFIX_REGEX.test(fragment)) return;
+    if (TITLE_FRAGMENT_PREFIX_REGEX.test(fragment) || hasActCue) out.add(fragment);
+  };
+  for (const fragment of uniqueStrings([
+    ...collectQuotedSegments('«', '»'),
+    ...collectQuotedSegments('"', '"'),
+  ])) {
+    addFragment(fragment);
   }
   return [...out];
+}
+
+export function shouldSkipApproximateActReferenceGrounding(signal: string): boolean {
+  return extractQuotedActTitleFragments(signal).length > 0;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -401,11 +1152,18 @@ function metadataSignals(
     if (!normalized) continue;
     out.add(normalized);
     const parts = tokenizeWords(normalized).filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
+    const cueNormalizedParts = parts
+      .map((part) => normalizeReferenceCueToken(part))
+      .filter((part) => part.length >= MIN_METADATA_TOKEN_LEN);
+    const signalParts = uniqueStrings([...parts, ...cueNormalizedParts]);
     if (options?.includeTokenParts !== false) {
-      for (const part of parts) out.add(part);
+      for (const part of signalParts) out.add(part);
     }
     if (options?.includePhrases) {
       for (const phrase of buildPhraseSignals(parts, options.maxWords ?? MAX_QUERY_PHRASE_WORDS)) {
+        out.add(phrase);
+      }
+      for (const phrase of buildPhraseSignals(cueNormalizedParts, options.maxWords ?? MAX_QUERY_PHRASE_WORDS)) {
         out.add(phrase);
       }
     }
@@ -419,11 +1177,41 @@ function aliasSignals(value: unknown): string[] {
 
 export function buildTaxonomyQuerySignals(query: string): { tokens: string[]; phrases: string[] } {
   const rawTokens = tokenizeQuery(query);
+  const cueNormalizedTokens = rawTokens.map((token) => normalizeReferenceCueToken(token));
   const informativeTokens = tokenizeWords(query);
-  const phrases = buildPhraseSignals(informativeTokens, MAX_QUERY_PHRASE_WORDS);
+  const cueNormalizedInformativeTokens = informativeTokens.map((token) => normalizeReferenceCueToken(token));
+  const residualLocatorSignals = buildPrimaryLawLocatorResidualSignals(query);
+  const primaryLawLocatorQuery = residualLocatorSignals.tokens.length > 0;
+  const filteredRawTokens = primaryLawLocatorQuery
+    ? rawTokens.filter((token) => !PRIMARY_LAW_LOCATOR_NOISE_TOKENS.has(normalizeReferenceCueToken(token)))
+    : rawTokens;
+  const filteredCueNormalizedTokens = primaryLawLocatorQuery
+    ? cueNormalizedTokens.filter((token) => !PRIMARY_LAW_LOCATOR_NOISE_TOKENS.has(token))
+    : cueNormalizedTokens;
+  const filteredCueNormalizedInformativeTokens = primaryLawLocatorQuery
+    ? cueNormalizedInformativeTokens.filter((token) => !PRIMARY_LAW_LOCATOR_NOISE_TOKENS.has(token))
+    : cueNormalizedInformativeTokens;
+  const phrases = uniqueStrings([
+    ...buildPhraseSignals(
+      primaryLawLocatorQuery ? filteredCueNormalizedInformativeTokens : informativeTokens,
+      MAX_QUERY_PHRASE_WORDS
+    ),
+    ...buildPhraseSignals(filteredCueNormalizedInformativeTokens, MAX_QUERY_PHRASE_WORDS),
+    ...residualLocatorSignals.phrases,
+  ]);
   const structuredIdentifiers = extractStructuredActIdentifiers(query);
+  const tokenSignals = primaryLawLocatorQuery
+    ? uniqueStrings([
+        ...filteredCueNormalizedInformativeTokens,
+        ...residualLocatorSignals.tokens,
+      ])
+    : uniqueStrings([
+        ...filteredRawTokens,
+        ...filteredCueNormalizedTokens,
+        ...filteredCueNormalizedInformativeTokens,
+      ]);
   return {
-    tokens: [...new Set([...rawTokens, ...structuredIdentifiers])],
+    tokens: uniqueStrings([...tokenSignals, ...structuredIdentifiers]),
     phrases: [...new Set([...phrases, ...structuredIdentifiers])],
   };
 }
@@ -436,9 +1224,25 @@ function getActReferenceTexts(entry: ActEntry): string[] {
   return [...texts];
 }
 
-function entryMatchesActCue(entry: ActEntry, cue: string): boolean {
+function entryMatchesActCue(entry: ActEntry, cue: string, query?: string): boolean {
   const texts = [entry.document_type, entry.document_type_slug, entry.title, ...entry.aliases];
-  return texts.some((text) => normalizeActReferenceCue(text) === cue);
+  return texts.some((text) => areActReferenceCuesCompatible(cue, normalizeActReferenceCue(text), query));
+}
+
+function filterGroundingEntriesByRequestedCue(
+  entries: ActEntry[],
+  signal: string,
+  query: string
+): ActEntry[] {
+  const cue =
+    normalizeActReferenceCue(signal) ??
+    extractActReferenceSignals(query)
+      .map((referenceSignal) => normalizeActReferenceCue(referenceSignal))
+      .find(Boolean) ??
+    normalizeActReferenceCue(query);
+  if (!cue) return entries;
+  const matched = entries.filter((entry) => entryMatchesActCue(entry, cue, query));
+  return matched.length > 0 ? matched : [];
 }
 
 function resolveApproximateActReference(
@@ -462,7 +1266,7 @@ function resolveApproximateActReference(
         normalizeActReferenceCue(text) ??
         normalizeActReferenceCue(entry.document_type) ??
         normalizeActReferenceCue(entry.document_type_slug);
-      if (textCue !== cue) continue;
+      if (!areActReferenceCuesCompatible(cue, textCue, signal)) continue;
 
       const candidateTokens = buildReferenceTokens(text).filter((token) => normalizeActReferenceCue(token) !== cue);
       if (candidateTokens.length === 0) continue;
@@ -528,6 +1332,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     .from(LEGISLATION_TABLE)
     .select(
       'rada_nreg, title, summary, category, storage_category, document_type, document_type_slug, aliases, keywords, topics, validity_status'
+      + ', document_number, rada_datred'
     )
     .eq('qdrant_status', 'indexed');
 
@@ -561,7 +1366,13 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   for (const row of rows) {
     const rada_nreg = typeof row?.rada_nreg === 'string' ? row.rada_nreg.trim() : '';
     const title = typeof row?.title === 'string' ? row.title.trim() : '';
-    const aliases = tolerantNormalizeToStrings(row?.aliases);
+    const aliases = uniqueStrings([
+      ...tolerantNormalizeToStrings(row?.aliases),
+      ...deriveRuntimeTitleAliases(
+        typeof row?.title === 'string' ? row.title.trim() : '',
+        row?.document_type != null ? String(row.document_type).trim() : null
+      ),
+    ]);
     const summary = typeof row?.summary === 'string' ? row.summary.trim() : null;
     const category = row?.category != null ? String(row.category).trim() : null;
     const storage_category =
@@ -569,6 +1380,9 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     const document_type = normDocType(row?.document_type);
     const document_type_slug =
       row?.document_type_slug != null ? String(row.document_type_slug).trim() : null;
+    const document_number =
+      row?.document_number != null ? String(row.document_number).trim() : null;
+    const rada_datred = normalizeRadaDatred(row?.rada_datred);
     const validity_status =
       row?.validity_status != null ? String(row.validity_status).trim().toLowerCase() : null;
     if (!rada_nreg) continue;
@@ -582,6 +1396,8 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
       storage_category,
       document_type,
       document_type_slug,
+      document_number,
+      rada_datred,
       validity_status,
     };
     const titledDocument = document_type && title ? `${document_type} ${title}` : '';
@@ -788,9 +1604,13 @@ export async function getTaxonomyCandidates(
   const cuedNumericReferences = extractCuedNumericActReferences(query);
   for (const reference of cuedNumericReferences) {
     if (reference.numericStem.length < 3) continue;
-    const candidates = (snap.byNumericStem.get(reference.numericStem) ?? []).filter((entry) =>
+    let candidates = (snap.byNumericStem.get(reference.numericStem) ?? []).filter((entry) =>
       entryMatchesActCue(entry, reference.cue)
     );
+    if (candidates.length > 1) {
+      const resolved = resolveCuedNumericReferenceAmbiguity(candidates, reference, query);
+      if (resolved) candidates = [resolved];
+    }
     if (candidates.length !== 1) continue;
     const [entry] = candidates;
     groundedActHitNregs.add(entry.rada_nreg);
@@ -802,9 +1622,16 @@ export async function getTaxonomyCandidates(
     if (entry.category) categoryHintsSet.add(entry.category);
   }
 
+  const actReferenceSignals = extractActReferenceSignals(query);
+  const quotedTitleSignals = uniqueStrings([
+    ...extractQuotedActTitleFragments(query),
+    ...actReferenceSignals.flatMap((signal) => extractQuotedActTitleFragments(signal)),
+    ...entities.flatMap((entity) => extractQuotedActTitleFragments(entity?.law_title ?? '')),
+  ]);
   const exactTextSignals = uniqueStrings([
     query,
-    ...extractActReferenceSignals(query),
+    ...actReferenceSignals,
+    ...quotedTitleSignals,
     ...entities.map((entity) => entity?.act_abbrev),
     ...entities.map((entity) => entity?.law_title),
   ]);
@@ -819,9 +1646,16 @@ export async function getTaxonomyCandidates(
         ] as const)
       ).values(),
     ];
+    groundedEntries = filterGroundingEntriesByRequestedCue(groundedEntries, signal, query);
+    if (groundedEntries.length === 0) continue;
     if (groundedEntries.length > 1) {
       const resolvedEntry = resolveExactTextGroundingAmbiguity(groundedEntries, signal, query);
-      if (resolvedEntry) groundedEntries = [resolvedEntry];
+      if (resolvedEntry) {
+        groundedEntries = [resolvedEntry];
+      } else {
+        const familyRepresentative = resolveLogicalActFamilyRepresentative(groundedEntries, signal, query);
+        if (familyRepresentative) groundedEntries = [familyRepresentative];
+      }
     }
     if (groundedEntries.length !== 1) continue;
     const [entry] = groundedEntries;
@@ -831,8 +1665,34 @@ export async function getTaxonomyCandidates(
     if (entry.category) categoryHintsSet.add(entry.category);
   }
 
+  const compactTitleGroundingSignals = uniqueStrings([
+    ...quotedTitleSignals,
+    ...actReferenceSignals,
+    ...entities.map((entity) => entity?.law_title),
+    ...(looksLikeCompactActTitleFragmentQuery(query, { includeRulesLikeTitles: true }) ? [query] : []),
+  ]);
+  if (groundedActHitNregs.size === 0) {
+    for (const signal of compactTitleGroundingSignals) {
+      const groundedEntries = filterGroundingEntriesByRequestedCue(
+        resolveTitleFragmentGroundingEntries(snap, signal, query),
+        signal,
+        query
+      );
+      if (groundedEntries.length !== 1) continue;
+      const [entry] = groundedEntries;
+      groundedActHitNregs.add(entry.rada_nreg);
+      radaNregScores.set(
+        entry.rada_nreg,
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + TITLE_MATCH_BOOST * 1.1
+      );
+      pushAliasHit(entry, signal);
+      if (entry.category) categoryHintsSet.add(entry.category);
+    }
+  }
+
   if (groundedActHitNregs.size === 0) {
     for (const signal of exactTextSignals) {
+      if (shouldSkipApproximateActReferenceGrounding(signal)) continue;
       const resolved = resolveApproximateActReference(snap, signal);
       if (!resolved) continue;
       groundedActHitNregs.add(resolved.entry.rada_nreg);
@@ -1060,6 +1920,8 @@ export interface ActMeta {
   storage_category?: string | null;
   document_type: string | null;
   document_type_slug?: string | null;
+  document_number?: string | null;
+  rada_datred?: string | null;
   validity_status?: string | null;
 }
 
@@ -1077,6 +1939,8 @@ export async function getActMeta(rada_nreg: string): Promise<ActMeta | null> {
     storage_category: entry.storage_category,
     document_type: entry.document_type,
     document_type_slug: entry.document_type_slug,
+    document_number: entry.document_number,
+    rada_datred: entry.rada_datred,
     validity_status: entry.validity_status,
   };
 }
@@ -1104,34 +1968,7 @@ export async function findActByAlias(alias: string): Promise<string[]> {
 export async function findActByTitleFragment(fragment: string): Promise<string[]> {
   const snap = await ensureSnapshot();
   if (!snap) return [];
-  const key = toKey(fragment);
-  if (!key || key.length < 5) return [];
-
-  const candidates = new Map<string, ActEntry>();
-  for (const entry of snap.byTitleExact.get(key) ?? []) {
-    candidates.set(entry.rada_nreg, entry);
-  }
-  for (const entry of snap.byAliasExact.get(key) ?? []) {
-    candidates.set(entry.rada_nreg, entry);
-  }
-  for (const entry of snap.acts.values()) {
-    const titleKey = toKey(entry.title);
-    if (!titleKey) continue;
-    if (titleKey.includes(key) || key.includes(titleKey)) {
-      candidates.set(entry.rada_nreg, entry);
-    }
-  }
-
-  if (candidates.size === 1) {
-    return [...candidates.keys()];
-  }
-
-  const exactTextGrounded = resolveExactTextGroundingAmbiguity([...candidates.values()], fragment, fragment);
-  if (exactTextGrounded) {
-    return [exactTextGrounded.rada_nreg];
-  }
-
-  return [...candidates.keys()].sort((a, b) => a.localeCompare(b));
+  return resolveTitleFragmentGroundingEntries(snap, fragment).map((entry) => entry.rada_nreg);
 }
 
 /** Find act candidates by alias token overlap (structural only). Returns rada_nreg[]. */
@@ -1167,6 +2004,11 @@ export async function scoreActCandidate(
   let score = 0;
   const reasons: string[] = [];
   const signals = [...new Set(querySignals.map((signal) => toKey(signal)).filter(Boolean))];
+  const documentIdentity = scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals(querySignals));
+  score += documentIdentity.score;
+  for (const reason of documentIdentity.reasons) {
+    if (!reasons.includes(reason)) reasons.push(reason);
+  }
   for (const key of signals) {
     if (!key) continue;
     const isPhrase = key.includes(' ');
