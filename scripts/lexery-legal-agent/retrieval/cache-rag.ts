@@ -91,6 +91,7 @@ import {
 import {
   finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
+  recoverUncoveredMultiGoalActs,
   resolveExplicitPrimaryActMultiGoalSelection,
   shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
@@ -102,6 +103,7 @@ import {
   runSingleGoalFirstPassSearch,
 } from './single-goal-first-pass.js';
 import { runSingleGoalHitPostprocess } from './single-goal-hit-postprocess.js';
+import { uniqueStrings } from './retrieval-utils.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 
@@ -116,10 +118,6 @@ function toLldbiHintsUsed(
     (hu.injected_counts?.by_category_hints ?? 0) + (hu.injected_counts?.by_doc_type_hints ?? 0);
   if (categories_used_count === 0 && doc_types_used_count === 0 && injected_acts_count === 0) return undefined;
   return { categories_used_count, doc_types_used_count, injected_acts_count };
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 function hasMixedProcedureAndNonProcedureGoals(
@@ -1393,6 +1391,20 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     const multiGoalSingleActCoverageAllowed =
       selectedActsReasonCodesMulti.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED') ||
       explicitPrimaryActMultiGoalResolution.allowSingleActCoverage;
+    const multiGoalTrimMaxActs = Math.min(Math.max(goalsSummary.length, 2), 3);
+    const recoveredMultiGoalActs = recoverUncoveredMultiGoalActs({
+      selectedActs: selected_acts_multi,
+      actCandidatesTop: multiActCandidatesTopHydrated,
+      chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
+      goalsSummary,
+      goalSupportByAct,
+      domainHint,
+      maxActs: multiGoalTrimMaxActs,
+    });
+    if (recoveredMultiGoalActs.length !== selected_acts_multi.length) {
+      selected_acts_multi = recoveredMultiGoalActs;
+      multiReasonCodesFinal.push('MULTI_GOAL_UNCOVERED_GOAL_ACT_RECOVERED');
+    }
     const multiGoalStrongPrimaryCoverage = hasStrongGoalSupportedMultiPrimaryCoverage({
       selectedActs: selected_acts_multi,
       goalsSummary,
@@ -1447,7 +1459,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       selected_acts_multi = trimLowConfidenceMultiGoalSelection({
         selectedActs: selected_acts_multi,
         chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
-        maxActs: 2,
+        maxActs: multiGoalTrimMaxActs,
         goalsSummary,
         goalSupportByAct,
         domainHint,
@@ -1502,7 +1514,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       const normalizedMultiSelectedActs = trimUngroundedMultiGoalFallbackSelection({
         selectedActs: selected_acts_multi,
         chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
-        maxActs: 2,
+        maxActs: multiGoalTrimMaxActs,
         goalsSummary,
         goalSupportByAct,
         domainHint,

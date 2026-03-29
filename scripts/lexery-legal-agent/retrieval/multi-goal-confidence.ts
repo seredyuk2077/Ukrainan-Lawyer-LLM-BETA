@@ -96,6 +96,16 @@ const STRONG_PRIMARY_LOCATOR_SEMANTIC_REASON_CODES = new Set([
   'topic_match',
 ]);
 
+const STRONG_MULTI_GOAL_RECOVERY_REASON_CODES = new Set([
+  'exact_alias_match',
+  'exact_title_match',
+  'alias_match',
+  'title_match',
+  'summary_match',
+  'keyword_match',
+  'topic_match',
+]);
+
 const EXPLICIT_PRIMARY_ANCHOR_MAX_BEST_RANK = 12;
 const EXPLICIT_PRIMARY_ANCHOR_MIN_ORDERING_SCORE = 0.36;
 
@@ -301,6 +311,12 @@ function hasStrongChunksEvidence(item: ChunksEvidenceItem | undefined): boolean 
   );
 }
 
+function hasStrongMultiGoalRecoverySemanticSupport(candidate: ActCandidateLike | undefined): boolean {
+  if (!candidate) return false;
+  if ((candidate.score ?? 0) < 1) return false;
+  return candidate.reasons?.some((reasonCode) => STRONG_MULTI_GOAL_RECOVERY_REASON_CODES.has(reasonCode)) === true;
+}
+
 function isProceduralPrimaryLawActLike(act: Pick<SelectedActOutput, 'act_kind' | 'category' | 'act_title'>): boolean {
   if (act.act_kind !== 'PRIMARY_LAW') return false;
   const familyKey = toFamilyKey(act.category);
@@ -316,13 +332,28 @@ function normalizeSelectedActsSourcesBreakdown(
   breakdown: SelectedActsSourcesBreakdownLike | undefined
 ): MultiGoalSelectedActsFinalizationOutput['selectedActsSourcesBreakdown'] {
   const selectedNregs = new Set(selectedActs.map((act) => act.rada_nreg));
-  return {
+  const next = {
     from_taxonomy: [...new Set((breakdown?.from_taxonomy ?? []).filter((radaNreg) => selectedNregs.has(radaNreg)))],
     from_acts_search: [...new Set((breakdown?.from_acts_search ?? []).filter((radaNreg) => selectedNregs.has(radaNreg)))],
     from_chunks_evidence: [
       ...new Set((breakdown?.from_chunks_evidence ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))),
     ],
   };
+  for (const act of selectedActs) {
+    const radaNreg = act.rada_nreg?.trim();
+    if (!radaNreg) continue;
+    const sourceTags = new Set(act.source_tags ?? []);
+    if (sourceTags.has('TAXONOMY')) {
+      next.from_taxonomy = [...new Set([...next.from_taxonomy, radaNreg])];
+    }
+    if (sourceTags.has('ACTS_SEARCH')) {
+      next.from_acts_search = [...new Set([...next.from_acts_search, radaNreg])];
+    }
+    if (sourceTags.has('CHUNKS_EVIDENCE')) {
+      next.from_chunks_evidence = [...new Set([...next.from_chunks_evidence, radaNreg])];
+    }
+  }
+  return next;
 }
 
 function hasSameSelectedActSet(left: SelectedActOutput[], right: SelectedActOutput[]): boolean {
@@ -346,6 +377,37 @@ function buildRecoveredExplicitPrimaryAct(input: {
     ).toFixed(2)}`,
     reason_tag: 'CHUNKS_EVIDENCE',
     source_tags: ['CHUNKS_EVIDENCE', 'EXPLICIT_PRIMARY_ACT_RECOVERED'],
+    document_type: input.candidate.document_type ?? null,
+    category: input.candidate.category ?? null,
+    act_kind: classifyActKind(
+      input.candidate.title ?? input.candidate.rada_nreg,
+      input.candidate.document_type ?? null,
+      input.candidate.category ?? null,
+      input.candidate.document_type_slug ?? null
+    ),
+    flags: {
+      recovered: true,
+      keep_one: false,
+      draft: false,
+      opinion: false,
+    },
+  };
+}
+
+function buildRecoveredMultiGoalAct(input: {
+  candidate: ActCandidateLike;
+  evidence: ChunksEvidenceItem | undefined;
+}): SelectedActOutput {
+  const orderingScore = input.evidence?.max_ordering_score ?? input.evidence?.max_score ?? input.candidate.score;
+  return {
+    rada_nreg: input.candidate.rada_nreg,
+    act_title: input.candidate.title ?? input.candidate.rada_nreg,
+    score: orderingScore,
+    why_selected: `goal_recovery best_rank=${input.evidence?.best_rank_in_top30 ?? 'n/a'} max_score=${(
+      orderingScore ?? 0
+    ).toFixed(2)}`,
+    reason_tag: input.evidence ? 'CHUNKS_EVIDENCE' : 'TAXONOMY_TOP',
+    source_tags: input.evidence ? ['CHUNKS_EVIDENCE', 'GOAL_RECOVERY'] : ['TAXONOMY', 'GOAL_RECOVERY'],
     document_type: input.candidate.document_type ?? null,
     category: input.candidate.category ?? null,
     act_kind: classifyActKind(
@@ -944,6 +1006,135 @@ export function trimLowConfidenceMultiGoalSelection(input: {
   // Reuse the goal-aware trim policy so early low-confidence normalization
   // does not drop the only act with unique goal coverage before finalization.
   return trimUngroundedMultiGoalFallbackSelection(input);
+}
+
+export function recoverUncoveredMultiGoalActs(input: {
+  selectedActs: SelectedActOutput[];
+  actCandidatesTop: ActCandidateLike[];
+  chunksEvidenceTopActs: ChunksEvidenceItem[];
+  goalsSummary: GoalSummaryCoverageLike[];
+  goalSupportByAct: GoalSupportByAct;
+  domainHint?: string;
+  maxActs?: number;
+}): SelectedActOutput[] {
+  const maxActs = Math.max(input.selectedActs.length, Math.max(1, input.maxActs ?? 2));
+  if (input.selectedActs.length === 0 || input.selectedActs.length >= maxActs) {
+    return input.selectedActs;
+  }
+
+  const requiredGoalIds = new Set(
+    input.goalsSummary.map((goal) => goal.goal_id.trim()).filter(Boolean)
+  );
+  if (requiredGoalIds.size < 2) return input.selectedActs;
+
+  const goalById = new Map(
+    input.goalsSummary.map((goal) => [goal.goal_id, goal] as const)
+  );
+  const evidenceByNreg = new Map(
+    input.chunksEvidenceTopActs.map((item) => [item.rada_nreg, item] as const)
+  );
+  const selectedActs = [...input.selectedActs];
+  const selectedNregs = new Set(selectedActs.map((act) => act.rada_nreg));
+
+  while (selectedActs.length < maxActs) {
+    const coveredGoalIds = collectCoveredGoalIdsForActs(selectedActs, input.goalSupportByAct);
+    const uncoveredGoalIds = new Set(
+      [...requiredGoalIds].filter((goalId) => !coveredGoalIds.has(goalId))
+    );
+    if (uncoveredGoalIds.size === 0) break;
+
+    const selectedFamilies = selectedActs
+      .map((act) => toFamilyKey(act.category))
+      .filter((familyKey) => familyKey !== 'unknown');
+
+    const recoveredCandidate = input.actCandidatesTop
+      .filter((candidate) => !selectedNregs.has(candidate.rada_nreg))
+      .map((candidate) => {
+        const actKind = classifyActKind(
+          candidate.title ?? candidate.rada_nreg,
+          candidate.document_type ?? null,
+          candidate.category ?? null,
+          candidate.document_type_slug ?? null
+        );
+        if (actKind !== 'PRIMARY_LAW') return null;
+
+        const candidateGoalIds = collectGoalIdsForAct(candidate.rada_nreg, input.goalSupportByAct, requiredGoalIds);
+        const uncoveredMatches = [...candidateGoalIds].filter((goalId) => uncoveredGoalIds.has(goalId));
+        if (uncoveredMatches.length === 0) return null;
+
+        const evidence = evidenceByNreg.get(candidate.rada_nreg);
+        const strongEvidence = hasStrongChunksEvidence(evidence);
+        const strongSemantic = hasStrongMultiGoalRecoverySemanticSupport(candidate);
+        if (!strongEvidence && !strongSemantic) return null;
+
+        const familyKey = toFamilyKey(candidate.category);
+        const domainAligned = isDomainHintAlignedFamily(input.domainHint, familyKey);
+        const compatibleWithSelected = selectedFamilies.some((selectedFamily) =>
+          areCompatiblePrimaryFamilies(selectedFamily, familyKey)
+        );
+        const proceduralLike = isProceduralPrimaryLawActLike({
+          act_kind: 'PRIMARY_LAW',
+          category: candidate.category ?? null,
+          act_title: candidate.title ?? candidate.rada_nreg,
+        });
+        const categoryMatchedGoals = uncoveredMatches.filter((goalId) => {
+          const requiredCategories = goalById.get(goalId)?.required_categories?.filter(Boolean) ?? [];
+          if (requiredCategories.length === 0) return true;
+          return !!candidate.category && requiredCategories.includes(candidate.category);
+        }).length;
+
+        return {
+          candidate,
+          evidence,
+          uncoveredGoalCount: uncoveredMatches.length,
+          categoryMatchedGoals,
+          domainAligned,
+          compatibleWithSelected,
+          proceduralLike,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => {
+        if ((left?.categoryMatchedGoals ?? 0) !== (right?.categoryMatchedGoals ?? 0)) {
+          return (right?.categoryMatchedGoals ?? 0) - (left?.categoryMatchedGoals ?? 0);
+        }
+        if ((left?.uncoveredGoalCount ?? 0) !== (right?.uncoveredGoalCount ?? 0)) {
+          return (right?.uncoveredGoalCount ?? 0) - (left?.uncoveredGoalCount ?? 0);
+        }
+        if ((left?.domainAligned ?? false) !== (right?.domainAligned ?? false)) {
+          return Number(right?.domainAligned ?? false) - Number(left?.domainAligned ?? false);
+        }
+        if ((left?.compatibleWithSelected ?? false) !== (right?.compatibleWithSelected ?? false)) {
+          return Number(right?.compatibleWithSelected ?? false) - Number(left?.compatibleWithSelected ?? false);
+        }
+        if ((left?.proceduralLike ?? false) !== (right?.proceduralLike ?? false)) {
+          return Number(right?.proceduralLike ?? false) - Number(left?.proceduralLike ?? false);
+        }
+        return compareTrimEvidence(
+          {
+            score: left?.candidate.score,
+            rankMassTop30: left?.evidence?.rank_mass_top30,
+            bestRankInTop30: left?.evidence?.best_rank_in_top30,
+          },
+          {
+            score: right?.candidate.score,
+            rankMassTop30: right?.evidence?.rank_mass_top30,
+            bestRankInTop30: right?.evidence?.best_rank_in_top30,
+          }
+        );
+      })[0];
+
+    if (!recoveredCandidate) break;
+
+    const recoveredAct = buildRecoveredMultiGoalAct({
+      candidate: recoveredCandidate.candidate,
+      evidence: recoveredCandidate.evidence,
+    });
+    selectedActs.push(recoveredAct);
+    selectedNregs.add(recoveredAct.rada_nreg);
+  }
+
+  return selectedActs;
 }
 
 export function hasStrongGoalSupportedMultiPrimaryCoverage(input: {

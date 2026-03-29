@@ -30,6 +30,14 @@ import {
   type FinalizeSelectedActsAfterRoutingOutput,
 } from './selected-acts-finalizer.js';
 import { normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
+import {
+  buildNormalizedNregMap,
+  getByNormalizedNreg,
+  normalizeRadaNreg,
+  pushUnique,
+  sameRadaNreg,
+  uniqueStrings,
+} from './retrieval-utils.js';
 
 type SelectedActLike = {
   rada_nreg: string;
@@ -83,42 +91,6 @@ export interface ResolveSingleActScopeSelectionOutput {
   evidenceSingleActNreg: string | null;
   calendarScopedRecurringActAmbiguous: boolean;
   topActCandidate?: ActCandidateInput;
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
-
-function pushUnique(reasonCodes: string[], code: string): void {
-  if (!reasonCodes.includes(code)) reasonCodes.push(code);
-}
-
-function normalizeRadaNreg(value: string | null | undefined): string {
-  const raw = String(value ?? '').normalize('NFC').trim();
-  if (!raw) return '';
-  const normalized = normalizeStructuredActIdentifier(raw);
-  return normalized || raw.toLowerCase();
-}
-
-function sameRadaNreg(left: string | null | undefined, right: string | null | undefined): boolean {
-  const normalizedLeft = normalizeRadaNreg(left);
-  const normalizedRight = normalizeRadaNreg(right);
-  return normalizedLeft.length > 0 && normalizedLeft === normalizedRight;
-}
-
-function buildNormalizedNregMap<T extends { rada_nreg?: string | null }>(items: T[]): Map<string, T> {
-  const out = new Map<string, T>();
-  for (const item of items) {
-    const key = normalizeRadaNreg(item.rada_nreg);
-    if (!key || out.has(key)) continue;
-    out.set(key, item);
-  }
-  return out;
-}
-
-function getByNormalizedNreg<T>(map: Map<string, T>, radaNreg: string | null | undefined): T | undefined {
-  const key = normalizeRadaNreg(radaNreg);
-  return key ? map.get(key) : undefined;
 }
 
 function hasActWithNreg(

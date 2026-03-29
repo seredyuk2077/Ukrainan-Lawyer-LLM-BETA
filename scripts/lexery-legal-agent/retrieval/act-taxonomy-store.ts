@@ -772,11 +772,58 @@ function extractReferencedActNumber(value: string | null | undefined): string | 
   return normalized || null;
 }
 
+const RUNTIME_CODE_TITLE_ALIAS_PATTERNS: Array<{ pattern: RegExp; aliases: string[] }> = [
+  { pattern: /\bцивільний кодекс(?:\s+україни)?\b/iu, aliases: ['ЦКУ', 'ЦК України', 'ЦК'] },
+  {
+    pattern: /\bцивільний процесуальний кодекс(?:\s+україни)?\b/iu,
+    aliases: ['ЦПКУ', 'ЦПК України', 'ЦПК'],
+  },
+  { pattern: /\bкримінальний кодекс(?:\s+україни)?\b/iu, aliases: ['ККУ', 'КК України', 'КК'] },
+  {
+    pattern: /\bкримінальний процесуальний кодекс(?:\s+україни)?\b/iu,
+    aliases: ['КПКУ', 'КПК України', 'КПК'],
+  },
+  { pattern: /\bподатковий кодекс(?:\s+україни)?\b/iu, aliases: ['ПКУ', 'ПК України', 'ПК'] },
+  { pattern: /\bмитний кодекс(?:\s+україни)?\b/iu, aliases: ['МКУ', 'МК України', 'МК'] },
+  { pattern: /\bсімейний кодекс(?:\s+україни)?\b/iu, aliases: ['СКУ', 'СК України', 'СК'] },
+  { pattern: /\bгосподарський кодекс(?:\s+україни)?\b/iu, aliases: ['ГКУ', 'ГК України', 'ГК'] },
+  {
+    pattern: /\bгосподарський процесуальний кодекс(?:\s+україни)?\b/iu,
+    aliases: ['ГПКУ', 'ГПК України', 'ГПК'],
+  },
+  {
+    pattern: /\bкодекс адміністративного судочинства(?:\s+україни)?\b/iu,
+    aliases: ['КАСУ', 'КАС України'],
+  },
+  {
+    pattern: /\bкодекс україни про адміністративні правопорушення\b/iu,
+    aliases: ['КУпАП', 'КУАП', 'КУпАП України'],
+  },
+  {
+    pattern: /\bкодекс законів про працю(?:\s+україни)?\b/iu,
+    aliases: ['КЗпП', 'КЗПП', 'КЗпП України'],
+  },
+  { pattern: /\bземельний кодекс(?:\s+україни)?\b/iu, aliases: ['ЗКУ', 'ЗК України', 'ЗК'] },
+  { pattern: /\bбюджетний кодекс(?:\s+україни)?\b/iu, aliases: ['БКУ', 'БК України', 'БК'] },
+];
+
+function deriveRuntimeCodeTitleAliases(title: string): string[] {
+  const normalizedTitle = title.normalize('NFC').trim();
+  if (!normalizedTitle) return [];
+  const out = new Set<string>();
+  for (const entry of RUNTIME_CODE_TITLE_ALIAS_PATTERNS) {
+    if (!entry.pattern.test(normalizedTitle)) continue;
+    for (const alias of entry.aliases) out.add(alias);
+  }
+  return [...out];
+}
+
 function deriveRuntimeTitleAliases(title: string, documentType: string | null): string[] {
   const normalizedTitle = title.normalize('NFC').trim();
   if (!normalizedTitle) return [];
 
   const out = new Set<string>();
+  for (const alias of deriveRuntimeCodeTitleAliases(normalizedTitle)) out.add(alias);
   const titleKey = toKey(normalizedTitle);
   if (REPEAL_TITLE_PREFIX_REGEX.test(titleKey)) {
     const referencedSegment = normalizedTitle.replace(REPEAL_TITLE_PREFIX_REGEX, '').trim();
@@ -1494,14 +1541,19 @@ function entryMatchesActCue(entry: ActEntry, cue: string, query?: string): boole
 function filterGroundingEntriesByRequestedCue(
   entries: ActEntry[],
   signal: string,
-  query: string
+  query: string,
+  options?: { allowActReferenceSignalFallback?: boolean; allowQueryLevelCueFallback?: boolean }
 ): ActEntry[] {
   const cue =
     normalizeActReferenceCue(signal) ??
-    extractActReferenceSignals(query)
-      .map((referenceSignal) => normalizeActReferenceCue(referenceSignal))
-      .find(Boolean) ??
-    normalizeActReferenceCue(query);
+    (
+      options?.allowActReferenceSignalFallback === false
+        ? null
+        : extractActReferenceSignals(query)
+            .map((referenceSignal) => normalizeActReferenceCue(referenceSignal))
+            .find(Boolean)
+    ) ??
+    (options?.allowQueryLevelCueFallback === false ? null : normalizeActReferenceCue(query));
   if (!cue) return entries;
   const matched = entries.filter((entry) => entryMatchesActCue(entry, cue, query));
   return matched.length > 0 ? matched : [];
@@ -1904,6 +1956,11 @@ export async function getTaxonomyCandidates(
     ...entities.map((entity) => entity?.act_abbrev),
     ...entities.map((entity) => entity?.law_title),
   ]);
+  const exactAliasGroundingSignals = uniqueStrings([
+    ...tokens,
+    ...phrases.filter((phrase) => buildReferenceTokens(phrase).length <= 3),
+    ...entities.map((entity) => entity?.act_abbrev),
+  ]);
   const queryIdentitySignals = collectQueryDocumentIdentitySignals(exactTextSignals);
   for (const signal of exactTextSignals) {
     const key = toKey(signal);
@@ -1929,6 +1986,32 @@ export async function getTaxonomyCandidates(
     }
     if (groundedEntries.length !== 1) continue;
     const [entry] = groundedEntries;
+    groundedActHitNregs.add(entry.rada_nreg);
+    radaNregScores.set(entry.rada_nreg, (radaNregScores.get(entry.rada_nreg) ?? 0) + ALIAS_PHRASE_BOOST);
+    pushAliasHit(entry, signal);
+    if (entry.category) categoryHintsSet.add(entry.category);
+  }
+
+  for (const signal of exactAliasGroundingSignals) {
+    const key = toKey(signal);
+    if (!key) continue;
+    let groundedEntries = filterGroundingEntriesByRequestedCue(snap.byAliasExact.get(key) ?? [], signal, query, {
+      allowActReferenceSignalFallback: false,
+      allowQueryLevelCueFallback: false,
+    });
+    if (groundedEntries.length === 0) continue;
+    if (groundedEntries.length > 1) {
+      const resolvedEntry = resolveExactTextGroundingAmbiguity(groundedEntries, signal, query);
+      if (resolvedEntry) {
+        groundedEntries = [resolvedEntry];
+      } else {
+        const familyRepresentative = resolveLogicalActFamilyRepresentative(groundedEntries, signal, query);
+        if (familyRepresentative) groundedEntries = [familyRepresentative];
+      }
+    }
+    if (groundedEntries.length !== 1) continue;
+    const [entry] = groundedEntries;
+    exactActHitNregs.add(entry.rada_nreg);
     groundedActHitNregs.add(entry.rada_nreg);
     radaNregScores.set(entry.rada_nreg, (radaNregScores.get(entry.rada_nreg) ?? 0) + ALIAS_PHRASE_BOOST);
     pushAliasHit(entry, signal);

@@ -25,6 +25,8 @@ const FAMILY_PRIOR_BOOST_WEAK = 0.05;
 const LLDBI_SOFT_PRIOR_POLICY_VERSION = 1;
 const ACT_EVIDENCE_TOP_N = 30;
 const ACT_EVIDENCE_MAX_BOOST = 0.75;
+const EXACT_ACT_GROUNDING_BOOST = 0.42;
+const SOFT_ACT_GROUNDING_BOOST = 0.24;
 
 export type FamilyHint = {
   family: string;
@@ -250,10 +252,9 @@ export async function rankActCandidates(
       .filter((candidate) => candidate.rada_nreg)
       .map((candidate) => candidate.rada_nreg as string)
   );
-  const exactGroundedNregs = new Set([
-    ...(taxonomyResult.exact_act_nregs ?? []),
-    ...(taxonomyResult.grounded_act_nregs ?? []),
-  ]);
+  const exactActNregs = new Set(taxonomyResult.exact_act_nregs ?? []);
+  const groundedActNregs = new Set(taxonomyResult.grounded_act_nregs ?? []);
+  const exactGroundedNregs = new Set([...exactActNregs, ...groundedActNregs]);
   const amendmentIntent = queryLooksAmendmentFocused(query);
 
   const familyHints = buildFamilyHints(actPlannerOutput);
@@ -346,6 +347,11 @@ export async function rankActCandidates(
 
     const { boost: actHitEvidenceBoost, applied: evidenceApplied } =
       computeActHitEvidenceBoost(normalizedEvidenceByNreg.get(nreg));
+    const groundedActBoost = exactActNregs.has(nreg)
+      ? EXACT_ACT_GROUNDING_BOOST
+      : groundedActNregs.has(nreg)
+        ? SOFT_ACT_GROUNDING_BOOST
+        : 0;
     const totalScore =
       score +
       plannerBoost +
@@ -353,9 +359,12 @@ export async function rankActCandidates(
       antiPenalty +
       lldbiCategoryBoost +
       lldbiDocTypeBoost +
-      actHitEvidenceBoost;
+      actHitEvidenceBoost +
+      groundedActBoost;
     const lldbiPriorApplied = lldbiCategoryBoost > 0 || lldbiDocTypeBoost > 0;
-    const whyTag = lldbiPriorApplied
+    const whyTag = groundedActBoost > 0
+      ? 'ACT_GROUNDING'
+      : lldbiPriorApplied
       ? 'LLDBI_SOFT_PRIOR'
       : evidenceApplied
         ? 'HITS_EVIDENCE'
@@ -370,9 +379,18 @@ export async function rankActCandidates(
       category: meta?.category ?? null,
       document_type: meta?.document_type ?? null,
       score: totalScore,
-      reasons: evidenceApplied ? [...reasonsOut, 'hits_evidence'] : reasonsOut,
-      priorApplied: priorApplied || lldbiPriorApplied || evidenceApplied,
-      priorBoost: familyPriorBoost + lldbiCategoryBoost + lldbiDocTypeBoost + actHitEvidenceBoost,
+      reasons:
+        groundedActBoost > 0
+          ? [
+              ...(evidenceApplied ? [...reasonsOut, 'hits_evidence'] : reasonsOut),
+              exactActNregs.has(nreg) ? 'exact_act_grounding_boost' : 'grounded_act_boost',
+            ]
+          : evidenceApplied
+            ? [...reasonsOut, 'hits_evidence']
+            : reasonsOut,
+      priorApplied: priorApplied || lldbiPriorApplied || evidenceApplied || groundedActBoost > 0,
+      priorBoost:
+        familyPriorBoost + lldbiCategoryBoost + lldbiDocTypeBoost + actHitEvidenceBoost + groundedActBoost,
       antiPenalty,
       whyTag,
       source_tier: tier,

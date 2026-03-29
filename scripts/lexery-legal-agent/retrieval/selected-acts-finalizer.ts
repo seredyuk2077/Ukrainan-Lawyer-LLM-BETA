@@ -4,18 +4,7 @@ import {
   type SelectedActOutput,
   type SelectedActsKindsCount,
 } from './selected-acts.js';
-import { normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
-
-function normalizeRadaNreg(value: string | null | undefined): string {
-  const raw = String(value ?? '').normalize('NFC').trim();
-  if (!raw) return '';
-  const normalized = normalizeStructuredActIdentifier(raw);
-  return normalized || raw.toLowerCase();
-}
+import { normalizeRadaNreg, uniqueStrings } from './retrieval-utils.js';
 
 export function summarizeSelectedActs(acts: SelectedActOutput[]): {
   selected_acts_kinds_count: SelectedActsKindsCount;

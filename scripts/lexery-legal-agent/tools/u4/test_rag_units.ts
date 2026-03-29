@@ -19,6 +19,7 @@ import {
   extractActReferenceSignals,
   extractQuotedActTitleFragments,
   extractStructuredActIdentifiers,
+  findActByAlias,
   getActMeta,
   getTaxonomyCandidates,
   isAmendmentLikeActTitle,
@@ -31,6 +32,7 @@ import { extractEntities } from '../../classify/entity-extractor.js';
 import { tagLegalDomain } from '../../classify/legal-domain-tagger.js';
 import { runCacheRag } from '../../retrieval/cache-rag.js';
 import { selectActPlannerTier } from '../../retrieval/act-planner.js';
+import { rankActCandidates } from '../../retrieval/act-candidate-ranking.js';
 import {
   buildWithinActPool,
   extractActSearchNregsFromHits,
@@ -80,6 +82,7 @@ import {
   isDomainHintAlignedFamily,
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
+  shouldConfirmSoftPrimaryLawTwoActBundle,
   shouldConfirmSoftPrimarySingleAct,
   shouldConfirmSoftNonPrimarySingleAct,
   shouldConfirmSoftProceduralSingleAct,
@@ -98,6 +101,7 @@ import {
 import {
   finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
+  recoverUncoveredMultiGoalActs,
   resolveExplicitPrimaryActMultiGoalSelection,
   shouldFlagUngroundedMultiGoalFallback,
   shouldSkipMultiGoalVariantSearch,
@@ -3540,6 +3544,72 @@ function testShouldConfirmSoftPrimarySingleAct(): void {
     throw new Error('Did not expect explicit law-scoped primary query to use soft primary-law confirmation');
   }
   console.log('[OK] soft primary-law single-act confirmation stays bounded to non-explicit dominant surfaces');
+}
+
+function testShouldConfirmSoftPrimaryLawTwoActBundle(): void {
+  const shouldConfirmTaxProcedureBundle = shouldConfirmSoftPrimaryLawTwoActBundle({
+    query:
+      "Компанія отримала податкове повідомлення-рішення і хоче нормально пройти адміністративне оскарження та підготуватися до суду.",
+    domainHint: 'tax_customs',
+    reasonCodes: [
+      'LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED',
+      'LOW_EVIDENCE',
+      'ACT_SELECTION_LOW_CONFIDENCE',
+    ],
+    topScore: 0.61,
+    selectedActs: [
+      { rada_nreg: '2755-17', act_kind: 'PRIMARY_LAW', category: 'tax_customs' },
+      { rada_nreg: '2747-15', act_kind: 'PRIMARY_LAW', category: 'civil_procedure_administrative' },
+    ],
+    evidenceByNreg: new Map([
+      ['2755-17', { count_in_top30: 6, best_rank_in_top30: 1, rank_mass_top30: 2.8, max_ordering_score: 0.61 }],
+      ['2747-15', { count_in_top30: 3, best_rank_in_top30: 4, rank_mass_top30: 0.54, max_ordering_score: 0.46 }],
+    ]),
+    familyDominantOk: true,
+  });
+  if (!shouldConfirmTaxProcedureBundle) {
+    throw new Error('Expected tax + admin-procedure soft bundle to be confirmable');
+  }
+
+  const shouldRejectOffFamilyBundle = shouldConfirmSoftPrimaryLawTwoActBundle({
+    query: "Клієнт питає загалом про договір і ще щось з податками.",
+    domainHint: 'civil',
+    reasonCodes: ['LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED', 'LOW_EVIDENCE'],
+    topScore: 0.58,
+    selectedActs: [
+      { rada_nreg: '435-15', act_kind: 'PRIMARY_LAW', category: 'civil' },
+      { rada_nreg: '2755-17', act_kind: 'PRIMARY_LAW', category: 'tax_customs' },
+    ],
+    evidenceByNreg: new Map([
+      ['435-15', { count_in_top30: 4, best_rank_in_top30: 1, rank_mass_top30: 1.8, max_ordering_score: 0.57 }],
+      ['2755-17', { count_in_top30: 3, best_rank_in_top30: 2, rank_mass_top30: 0.8, max_ordering_score: 0.45 }],
+    ]),
+    familyDominantOk: true,
+  });
+  if (shouldRejectOffFamilyBundle) {
+    throw new Error('Did not expect off-family civil+tax bundle to be confirmable');
+  }
+
+  const shouldConfirmFamilyCivilBundle = shouldConfirmSoftPrimaryLawTwoActBundle({
+    query:
+      'Квартиру, куплену у шлюбі, один із подружжя продав без нотаріальної згоди другого. На які норми спиратися?',
+    domainHint: 'civil',
+    reasonCodes: ['WEAK_EVIDENCE', 'LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED'],
+    topScore: 0.47,
+    selectedActs: [
+      { rada_nreg: '435-15', act_kind: 'PRIMARY_LAW', category: 'civil' },
+      { rada_nreg: '2947-14', act_kind: 'PRIMARY_LAW', category: 'family' },
+    ],
+    evidenceByNreg: new Map([
+      ['435-15', { count_in_top30: 4, best_rank_in_top30: 2, rank_mass_top30: 0.74, max_ordering_score: 0.47 }],
+      ['2947-14', { count_in_top30: 3, best_rank_in_top30: 5, rank_mass_top30: 0.41, max_ordering_score: 0.39 }],
+    ]),
+    familyDominantOk: true,
+  });
+  if (!shouldConfirmFamilyCivilBundle) {
+    throw new Error('Expected compatible civil+family soft bundle to recover from weak evidence');
+  }
+  console.log('[OK] soft primary-law two-act confirmation accepts real bundles and rejects off-family pairs');
 }
 
 function testShouldConfirmSoftNonPrimarySingleAct(): void {
@@ -12229,6 +12299,41 @@ function testBuildTaxonomyQuerySignalsStripsPrimaryLawLocatorEnvelope(): void {
   console.log('[OK] buildTaxonomyQuerySignals strips interrogative primary-law locator envelope');
 }
 
+async function testRuntimeCodeAliasesResolveCommonCodeAbbreviations(): Promise<void> {
+  const civilCode = await findActByAlias('ЦКУ');
+  if (!civilCode.includes('435-15')) {
+    throw new Error(`Expected ЦКУ alias to resolve to 435-15, got ${JSON.stringify(civilCode)}`);
+  }
+  const criminalProcedureCode = await findActByAlias('КПК');
+  if (!criminalProcedureCode.includes('4651-17')) {
+    throw new Error(
+      `Expected КПК alias to resolve to 4651-17, got ${JSON.stringify(criminalProcedureCode)}`
+    );
+  }
+  console.log('[OK] runtime code title aliases resolve common code abbreviations');
+}
+
+async function testGetTaxonomyCandidatesGroundsCivilCodeForSoftCkuQuery(): Promise<void> {
+  const query = 'Договір оренди приміщення. Сторони: ТОВ "Х" та ФОП. Перевір на відповідність ЦКУ.';
+  const result = await getTaxonomyCandidates({
+    query,
+    domainHint: 'civil',
+    categoryHints: ['civil'],
+    documentTypeHints: ['Кодекс'],
+    entities: extractEntities(query).entities,
+  });
+  if (!result.exact_act_nregs.includes('435-15') && !result.grounded_act_nregs.includes('435-15')) {
+    throw new Error(
+      `Expected soft ЦКУ query to ground 435-15, got ${JSON.stringify({
+        exact: result.exact_act_nregs,
+        grounded: result.grounded_act_nregs,
+        alias_hits: result.alias_hits.slice(0, 5),
+      })}`
+    );
+  }
+  console.log('[OK] taxonomy candidates ground civil code for soft ЦКУ query');
+}
+
 async function testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator(): Promise<void> {
   const defenseLaw = await getActMeta('808-20');
   if (!defenseLaw) {
@@ -12255,6 +12360,73 @@ async function testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator(): 
     throw new Error(`Expected semantic scoring above validity-only floor for 808-20, got ${JSON.stringify(scored)}`);
   }
   console.log('[OK] scoreActCandidate uses tokenized special-law locator signals to surface LLDBI semantic metadata');
+}
+
+async function testRankActCandidatesPrefersExplicitGroundedCivilCodeOverTopicalSpecialLaw(): Promise<void> {
+  const query = 'Договір оренди приміщення. Сторони: ТОВ "Х" та ФОП. Перевір на відповідність ЦКУ.';
+  const taxonomyResult = await getTaxonomyCandidates({
+    query,
+    domainHint: 'civil',
+    categoryHints: ['civil'],
+    documentTypeHints: ['Кодекс'],
+    entities: extractEntities(query).entities,
+  });
+  if (!taxonomyResult.exact_act_nregs.includes('435-15') && !taxonomyResult.grounded_act_nregs.includes('435-15')) {
+    console.log('[SKIP] explicit grounded civil-code ranking test (435-15 not grounded in current LLDBI snapshot)');
+    return;
+  }
+  const result = await rankActCandidates({
+    query,
+    domainHint: 'civil',
+    categoryHints: ['civil'],
+    documentTypeHints: ['Кодекс'],
+    lldbiHintsPresent: true,
+    actPlannerOutput: null,
+    taxonomyResult,
+    actNregsFromSearch: ['157-20', '435-15'],
+    finalHits: [
+      {
+        rada_nreg: '157-20',
+        r2_key: 'r2://157-20/1',
+        json_path: '$.chunks[0]',
+        score: 0.81,
+        ordering_score: 0.69,
+        source: 'lldbi_chunks',
+      },
+      {
+        rada_nreg: '157-20',
+        r2_key: 'r2://157-20/2',
+        json_path: '$.chunks[1]',
+        score: 0.79,
+        ordering_score: 0.66,
+        source: 'lldbi_chunks',
+      },
+      {
+        rada_nreg: '157-20',
+        r2_key: 'r2://157-20/3',
+        json_path: '$.chunks[2]',
+        score: 0.76,
+        ordering_score: 0.64,
+        source: 'lldbi_chunks',
+      },
+      {
+        rada_nreg: '435-15',
+        r2_key: 'r2://435-15/1',
+        json_path: '$.chunks[3]',
+        score: 0.54,
+        ordering_score: 0.48,
+        source: 'lldbi_chunks',
+      },
+    ] as never,
+    qdrantCallCounter: { count: 99 },
+    stepsLatencyMs: [],
+  });
+  if (result.actCandidatesTop[0]?.rada_nreg !== '435-15') {
+    throw new Error(
+      `Expected explicit grounded civil code to outrank topical special law, got ${JSON.stringify(result.actCandidatesTop.slice(0, 3))}`
+    );
+  }
+  console.log('[OK] rankActCandidates prefers explicit grounded civil code over topical special-law evidence');
 }
 
 async function testScoreActCandidatePrefersHigherEducationLawForAcademicMobilityLocator(): Promise<void> {
@@ -14830,6 +15002,187 @@ function testTrimLowConfidenceMultiGoalSelectionPreservesUniqueGoalCoverageWitho
   console.log('[OK] low-confidence multi-goal trim preserves unique goal coverage without mismatch signal');
 }
 
+function testRecoverUncoveredMultiGoalActsRestoresProcedureCompanion(): void {
+  const recovered = recoverUncoveredMultiGoalActs({
+    selectedActs: [
+      {
+        rada_nreg: '1700-18',
+        act_title: 'Про запобігання корупції',
+        act_kind: 'PRIMARY_LAW',
+        category: 'anti_corruption',
+        document_type: 'Закон',
+        score: 0.55,
+      },
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '1700-18',
+        title: 'Про запобігання корупції',
+        category: 'anti_corruption',
+        document_type: 'Закон',
+        score: 1.7,
+        reasons: ['title_match'],
+      },
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        document_type: 'Кодекс',
+        score: 1.3,
+        reasons: ['keyword_match', 'topic_match'],
+      },
+      {
+        rada_nreg: '1618-15',
+        title: 'Цивільний процесуальний кодекс України',
+        category: 'civil_procedure_administrative',
+        document_type: 'Кодекс',
+        score: 1.15,
+        reasons: ['topic_match'],
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '1700-18',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.5,
+        max_score: 0.55,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.8,
+        max_ordering_score: 0.56,
+      },
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.47,
+        max_score: 0.51,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 1.1,
+        max_ordering_score: 0.48,
+      },
+      {
+        rada_nreg: '1618-15',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.45,
+        max_score: 0.48,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.3,
+        max_ordering_score: 0.46,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', required_categories: ['anti_corruption'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', required_categories: ['administrative'] },
+    ],
+    goalSupportByAct: new Map([
+      ['1700-18', new Set(['goal_0'])],
+      ['2747-15', new Set(['goal_1'])],
+      ['1618-15', new Set(['goal_1'])],
+    ]),
+    domainHint: 'administrative',
+    maxActs: 2,
+  });
+  const recoveredNregs = [...recovered.map((act) => act.rada_nreg)].sort();
+  if (JSON.stringify(recoveredNregs) !== JSON.stringify(['1700-18', '2747-15'])) {
+    throw new Error(`Expected uncovered-goal recovery to restore KASU companion, got ${JSON.stringify(recoveredNregs)}`);
+  }
+  console.log('[OK] uncovered-goal recovery restores procedural companion act');
+}
+
+function testRecoverUncoveredMultiGoalActsAllowsThreeActContrastiveBundle(): void {
+  const recovered = recoverUncoveredMultiGoalActs({
+    selectedActs: [
+      {
+        rada_nreg: '3543-12',
+        act_title: 'Про мобілізаційну підготовку та мобілізацію',
+        act_kind: 'PRIMARY_LAW',
+        category: 'defense_mobilization',
+        document_type: 'Закон',
+        score: 0.49,
+      },
+      {
+        rada_nreg: '80731-10',
+        act_title: 'Кодекс України про адміністративні правопорушення',
+        act_kind: 'PRIMARY_LAW',
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        score: 0.53,
+      },
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        score: 1.5,
+        reasons: ['title_match'],
+      },
+      {
+        rada_nreg: '3543-12',
+        title: 'Про мобілізаційну підготовку та мобілізацію',
+        category: 'defense_mobilization',
+        document_type: 'Закон',
+        score: 1.35,
+        reasons: ['keyword_match'],
+      },
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        category: 'criminal',
+        document_type: 'Кодекс',
+        score: 1.1,
+        reasons: ['topic_match'],
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 12,
+        avg_score_in_top30: 0.5,
+        max_score: 0.57,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.58,
+      },
+      {
+        rada_nreg: '3543-12',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.41,
+        max_score: 0.49,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.88,
+        max_ordering_score: 0.44,
+      },
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.39,
+        max_score: 0.44,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.51,
+        max_ordering_score: 0.41,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', required_categories: ['defense_mobilization'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', required_categories: ['administrative_offenses'] },
+      { goal_id: 'goal_2', goal_type: 'definition', required_categories: ['criminal'] },
+    ],
+    goalSupportByAct: new Map([
+      ['3543-12', new Set(['goal_0'])],
+      ['80731-10', new Set(['goal_1'])],
+      ['2341-14', new Set(['goal_2'])],
+    ]),
+    domainHint: 'general',
+    maxActs: 3,
+  });
+  const recoveredNregs = [...recovered.map((act) => act.rada_nreg)].sort();
+  if (JSON.stringify(recoveredNregs) !== JSON.stringify(['2341-14', '3543-12', '80731-10'])) {
+    throw new Error(`Expected uncovered-goal recovery to preserve three-act contrastive bundle, got ${JSON.stringify(recoveredNregs)}`);
+  }
+  console.log('[OK] uncovered-goal recovery allows three-act contrastive bundle');
+}
+
 function testResolveExplicitPrimaryActMultiGoalSelectionAllowsAnchoredThinLaw(): void {
   const result = resolveExplicitPrimaryActMultiGoalSelection({
     query:
@@ -16685,11 +17038,15 @@ async function main(): Promise<void> {
   testProceduralPrimaryWithoutGroundingRequiresActSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testShouldConfirmSoftNonPrimarySingleAct();
+  testShouldConfirmSoftPrimaryLawTwoActBundle();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
   testBuildTaxonomyQuerySignalsCanonicalizesInflectedLawCuePhrase();
   testBuildTaxonomyQuerySignalsStripsPrimaryLawLocatorEnvelope();
+  await testRuntimeCodeAliasesResolveCommonCodeAbbreviations();
+  await testGetTaxonomyCandidatesGroundsCivilCodeForSoftCkuQuery();
   await testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator();
+  await testRankActCandidatesPrefersExplicitGroundedCivilCodeOverTopicalSpecialLaw();
   await testScoreActCandidatePrefersHigherEducationLawForAcademicMobilityLocator();
   await testScoreActCandidatePrefersDatedNbuDailyActOverGenericCurrencyRegulation();
   await testScoreActCandidatePrefersExactDateRecurringSeriesMemberOverSameTitleNeighbors();
@@ -16751,6 +17108,8 @@ async function main(): Promise<void> {
   testFinalizeMultiGoalSelectedActsDoesNotTreatActsSearchAsMetadataGrounding();
   testTrimUngroundedMultiGoalFallbackSelectionKeepsTopTwoEvidenceActs();
   testTrimLowConfidenceMultiGoalSelectionPreservesUniqueGoalCoverageWithoutMismatchSignal();
+  testRecoverUncoveredMultiGoalActsRestoresProcedureCompanion();
+  testRecoverUncoveredMultiGoalActsAllowsThreeActContrastiveBundle();
   testResolveExplicitPrimaryActMultiGoalSelectionAllowsAnchoredThinLaw();
   testResolveExplicitPrimaryActMultiGoalSelectionRecoversThinLawAndTrimsUnhintedOrderNoise();
   testResolveExplicitPrimaryActMultiGoalSelectionPrefersQuotedAmendmentLawOverBaseLaw();

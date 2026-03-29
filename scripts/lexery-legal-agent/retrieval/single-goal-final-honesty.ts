@@ -7,6 +7,7 @@ import {
   isDomainHintAlignedFamily,
   toFamilyKey,
 } from './family-alignment.js';
+import { uniqueStrings } from './retrieval-utils.js';
 
 type SelectedActLike = SelectedActOutput & {
   category?: string | null;
@@ -55,10 +56,6 @@ export interface NormalizeSingleGoalLowConfidenceSelectionOutput {
   selectedActsFinalMeta: FinalizeSelectedActsAfterRoutingOutput;
   selectedActsSourcesBreakdown?: SelectedActsSourcesBreakdownLike;
   reasonCodes: string[];
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 function buildEvidenceMap(chunksEvidenceTopActs: ChunksEvidenceLike[]): Map<string, ChunksEvidenceLike> {
