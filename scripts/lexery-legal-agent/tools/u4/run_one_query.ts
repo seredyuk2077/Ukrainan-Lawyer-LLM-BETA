@@ -109,7 +109,9 @@ async function waitHealth(baseUrl: string, timeoutMs = 20_000): Promise<boolean>
       const r = await fetch(`${baseUrl}/health`);
       const j = (await r.json()) as { status?: string };
       if (r.ok && j.status === 'healthy') return true;
-    } catch {}
+    } catch {
+      void 0;
+    }
     await sleep(250);
   }
   return false;
@@ -314,7 +316,9 @@ async function main() {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       child.kill('SIGKILL');
-    } catch {}
+    } catch {
+      void child.killed;
+    }
   }
 }
 

@@ -147,7 +147,9 @@ async function waitForHealth(
     try {
       const r = await fetch(`http://localhost:${port}/health`);
       if (r.ok) return;
-    } catch {}
+    } catch {
+      void 0;
+    }
     await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
   }
   const stderrTail = tail.stderr.slice(-8).join('').trim();
