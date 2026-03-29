@@ -1,6 +1,7 @@
 import type { FinalizeSelectedActsAfterRoutingOutput } from './selected-acts-finalizer.js';
 import { summarizeSelectedActs } from './selected-acts-finalizer.js';
 import type { SelectedActOutput } from './selected-acts.js';
+import { isDomainHintAlignedFamily, toFamilyKey } from './family-alignment.js';
 
 type SelectedActLike = SelectedActOutput & {
   category?: string | null;
@@ -40,6 +41,7 @@ export interface NormalizeSingleGoalLowConfidenceSelectionInput {
   chunksEvidenceTopActs: ChunksEvidenceLike[];
   preserveScopedSelection?: boolean;
   preferPrimaryLawRetention?: boolean;
+  explicitActScopeCueQuery?: boolean;
 }
 
 export interface NormalizeSingleGoalLowConfidenceSelectionOutput {
@@ -50,66 +52,6 @@ export interface NormalizeSingleGoalLowConfidenceSelectionOutput {
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
-
-function toFamilyKey(category: string | undefined | null): string {
-  return (category ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim() || 'unknown';
-}
-
-function normalizeDomainHintKey(domainHint: string | undefined | null): string {
-  const normalized = (domainHint ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim();
-  if (normalized === 'admin') return 'administrative';
-  return normalized;
-}
-
-function isSpecificDomainHint(domainHint: string | undefined | null): boolean {
-  const normalized = normalizeDomainHintKey(domainHint);
-  return normalized.length > 0 && normalized !== 'general' && normalized !== 'unknown';
-}
-
-function isDomainHintAlignedFamily(
-  domainHint: string | undefined | null,
-  familyKey: string | undefined | null
-): boolean {
-  const normalizedDomain = normalizeDomainHintKey(domainHint);
-  const normalizedFamily = toFamilyKey(familyKey);
-  if (!isSpecificDomainHint(normalizedDomain) || !normalizedFamily || normalizedFamily === 'unknown') return false;
-  if (normalizedFamily === normalizedDomain) return true;
-  if (normalizedFamily.startsWith(`${normalizedDomain}_`) || normalizedDomain.startsWith(`${normalizedFamily}_`)) {
-    return true;
-  }
-  if (normalizedDomain === 'tax_customs' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'tax' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'labor_social' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'labor' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'civil' && (normalizedFamily === 'civil' || normalizedFamily === 'civil_procedure')) {
-    return true;
-  }
-  if (normalizedDomain === 'civil' && normalizedFamily === 'family') return true;
-  if (normalizedDomain === 'family' && (normalizedFamily === 'family' || normalizedFamily === 'civil')) {
-    return true;
-  }
-  if (
-    normalizedDomain === 'criminal' &&
-    (normalizedFamily === 'criminal' || normalizedFamily === 'criminal_procedure')
-  ) {
-    return true;
-  }
-  if (
-    normalizedDomain === 'administrative' &&
-    (normalizedFamily === 'administrative' || normalizedFamily === 'administrative_offenses')
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function buildEvidenceMap(chunksEvidenceTopActs: ChunksEvidenceLike[]): Map<string, ChunksEvidenceLike> {
@@ -352,6 +294,27 @@ export function normalizeSingleGoalLowConfidenceSelection(
     reasonCodes.includes('UNGROUNDED_PRIMARY_COMPANION_FALLBACK') ||
     reasonCodes.includes('DOMAIN_HINT_PRIMARY_FAMILY_MISMATCH');
   const strictNarrowingSignals = reasonCodes.includes('UNGROUNDED_PRIMARY_COMPANION_FALLBACK');
+  const explicitUngroundedNonPrimarySingleton =
+    input.explicitActScopeCueQuery === true &&
+    selectedActsFinal.length === 1 &&
+    selectedActsFinal[0]?.act_kind !== 'PRIMARY_LAW';
+
+  if (explicitUngroundedNonPrimarySingleton) {
+    selectedActsFinal = [];
+    reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_CLEARED');
+    reasonCodes.push('LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED');
+    selectedActsFinalMeta = updateSelectedActsFinalMeta(
+      selectedActsFinalMeta,
+      selectedActsFinal,
+      0.4,
+      ['LOW_CONFIDENCE_SELECTED_ACTS_CLEARED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED']
+    );
+    return {
+      selectedActsFinal,
+      selectedActsFinalMeta,
+      reasonCodes: uniqueStrings(reasonCodes),
+    };
+  }
 
   if (selectedActsFinal.length > 0 && severeSignals) {
     if (explicitScopeNoConvergence) {
@@ -408,8 +371,37 @@ export function normalizeSingleGoalLowConfidenceSelection(
             ((retainedRunnerUpPrimaryEvidence?.max_ordering_score ?? 0) + 0.03)
         )
       );
+    const canRetainDominantDomainAlignedPrimaryAct =
+      !reasonCodes.includes('OUT_OF_SCOPE') &&
+      !!retainedTopPrimaryAct &&
+      isDomainHintAlignedFamily(
+        input.domainHint,
+        resolveActFamilyKey(retainedTopPrimaryAct, input.actCandidatesTopHydrated)
+      ) &&
+      hasMaterialPrimaryEvidence(retainedTopPrimaryEvidence) &&
+      (
+        !retainedRunnerUpPrimaryAct ||
+        !hasMaterialPrimaryEvidence(retainedRunnerUpPrimaryEvidence) ||
+        (retainedTopPrimaryEvidence?.rank_mass_top30 ?? 0) >=
+          ((retainedRunnerUpPrimaryEvidence?.rank_mass_top30 ?? 0) + 0.25) ||
+        (
+          (retainedTopPrimaryEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) + 2 <=
+            (retainedRunnerUpPrimaryEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) &&
+          (retainedTopPrimaryEvidence?.max_ordering_score ?? 0) >=
+            ((retainedRunnerUpPrimaryEvidence?.max_ordering_score ?? 0) + 0.03)
+        )
+      );
     if (!reasonCodes.includes('OUT_OF_SCOPE') && domainAlignedPrimaryActs.length === 1) {
       selectedActsFinal = domainAlignedPrimaryActs;
+      reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED');
+      selectedActsFinalMeta = updateSelectedActsFinalMeta(
+        selectedActsFinalMeta,
+        selectedActsFinal,
+        0.5,
+        ['LOW_CONFIDENCE_SELECTED_ACTS_NARROWED']
+      );
+    } else if (canRetainDominantDomainAlignedPrimaryAct && retainedTopPrimaryAct) {
+      selectedActsFinal = [retainedTopPrimaryAct];
       reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED');
       selectedActsFinalMeta = updateSelectedActsFinalMeta(
         selectedActsFinalMeta,

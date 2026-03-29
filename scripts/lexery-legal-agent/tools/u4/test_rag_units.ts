@@ -11,7 +11,7 @@ import {
   getProcedureCategoryEnvelope,
   tryCategoryClusterSplitV2,
 } from '../../retrieval/goal-splitter.js';
-import { buildSelectedActs, classifyActKind } from '../../retrieval/selected-acts.js';
+import { buildSelectedActs, classifyActKind, documentTypeHintMatches } from '../../retrieval/selected-acts.js';
 import {
   areActReferenceCuesCompatible,
   buildTaxonomyQuerySignals,
@@ -80,6 +80,9 @@ import {
   isDomainHintAlignedFamily,
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
+  shouldConfirmSoftPrimarySingleAct,
+  shouldConfirmSoftNonPrimarySingleAct,
+  shouldConfirmSoftProceduralSingleAct,
 } from '../../retrieval/single-goal-selected-acts.js';
 import {
   isInterrogativePrimaryLawLocatorQuery,
@@ -161,6 +164,19 @@ function testContrastiveLiabilityGoalSplit(): void {
     throw new Error(`Expected administrative goal to use compact subject focus instead of duplicating full phrase, got ${JSON.stringify(subqueries)}`);
   }
   console.log('[OK] heuristicGoalSplit(contrastive liability) → shared-subject multi-goal split');
+}
+
+function testDocumentTypeHintMatchesSupportsSlugHints(): void {
+  if (!documentTypeHintMatches('Розпорядження КМУ', ['cmu_order'], 'cmu_order')) {
+    throw new Error('Expected documentTypeHintMatches to accept exact slug hints for document_type_slug-backed acts');
+  }
+  if (!documentTypeHintMatches('Постанова КМУ', ['cmu_resolution'], 'cmu_resolution')) {
+    throw new Error('Expected documentTypeHintMatches to accept exact resolution slug hints');
+  }
+  if (documentTypeHintMatches('Розпорядження КМУ', ['cmu_resolution'], 'cmu_order')) {
+    throw new Error('Expected documentTypeHintMatches not to cross-match incompatible CMU document_type slugs');
+  }
+  console.log('[OK] documentTypeHintMatches supports slug hints without cross-matching incompatible kinds');
 }
 
 function testFamilyGuardDoesNotInjectUnsupportedPrimaryLaw(): void {
@@ -248,17 +264,20 @@ function testGoalSplitMultiClauseWithoutPlannerDependency(): void {
   console.log('[OK] heuristicGoalSplit(multi-clause) produces cheap structural multi-goal split');
 }
 
-function testGoalSplitCarriesSharedTailAcrossClauses(): void {
-  const q = 'Порядок звільнення та компенсації при скороченні';
+function testGoalSplitKeepsSingleQuestionCoordinatedObjectBundleAsOneGoal(): void {
+  const q =
+    'Де Кабмін у березні 2026 року скоригував порядок експериментального проекту допомоги покупцям товарів і послуг українського виробництва?';
   const r = heuristicGoalSplit(q, 'labor_social', undefined);
-  if (r.goals.length < 2) {
-    throw new Error(`Expected shared-tail split to produce 2 goals, got ${r.goals.length}`);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected coordinated object bundle to stay single-goal, got ${JSON.stringify(r)}`);
   }
-  const subqueries = r.goals.map((goal) => goal.subquery);
-  if (!subqueries[0]?.includes('при скороченні')) {
-    throw new Error(`Expected first clause to inherit shared tail, got ${JSON.stringify(subqueries)}`);
+  if (!r.reason_codes.includes('same_act_bundle_compaction')) {
+    throw new Error(`Expected same_act_bundle_compaction, got ${JSON.stringify(r.reason_codes)}`);
   }
-  console.log('[OK] heuristicGoalSplit carries shared tail into both structural clauses');
+  if (r.reason_codes.includes('multi_clause_structure')) {
+    throw new Error(`Did not expect multi_clause_structure after phrase-bundle compaction, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  console.log('[OK] heuristicGoalSplit keeps coordinated object bundle inside one goal');
 }
 
 function testGoalSplitKeepsAnchoredActTitleWithInternalConjunctionAsSingleGoal(): void {
@@ -545,6 +564,36 @@ function testGoalSplitCarriesSubjectIntoYesNoFollowUp(): void {
     throw new Error(`Expected yes/no follow-up to inherit shared tax subject, got ${followUpGoal?.subquery}`);
   }
   console.log('[OK] heuristicGoalSplit carries subject into yes/no follow-up question');
+}
+
+function testGoalSplitCarriesActorSubjectIntoPoliceFollowUp(): void {
+  const q = 'Що може поліція під час перевірки документів і коли вона має пояснити причину зупинки?';
+  const r = heuristicGoalSplit(q, 'administrative', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected police same-actor bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('shared_actor_bundle_compaction')) {
+    throw new Error(`Expected shared_actor_bundle_compaction for police bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if (!r.goals[0]?.subquery.toLowerCase().includes('поліці')) {
+    throw new Error(`Expected compacted police goal to keep actor subject, got ${r.goals[0]?.subquery}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts same-actor police bundle into one goal');
+}
+
+function testGoalSplitCarriesActorSubjectIntoLaborNeedFollowUp(): void {
+  const q = 'Коли роботодавець може звільнити за прогул і що треба оформити перед цим?';
+  const r = heuristicGoalSplit(q, 'labor_social', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected labor same-actor bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('shared_actor_bundle_compaction')) {
+    throw new Error(`Expected shared_actor_bundle_compaction for labor bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if (!r.goals[0]?.subquery.toLowerCase().includes('роботодав')) {
+    throw new Error(`Expected compacted labor goal to keep employer actor subject, got ${r.goals[0]?.subquery}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts same-actor labor bundle into one goal');
 }
 
 function testGoalSplitAddsSpecificTaxAppealSignals(): void {
@@ -915,6 +964,25 @@ function testStrongTaxonomySignalTreatsGroundedAliasAsStrong(): void {
   console.log('[OK] taxonomy-strength helper treats grounded exact alias/title matches as strong support');
 }
 
+function testStrongTaxonomySignalRejectsCalendarScopedVolumeWithoutGrounding(): void {
+  const strong = hasStrongSingleGoalTaxonomySignal({
+    goals_count: 1,
+    taxonomy_strength: {
+      taxonomy_act_count: 12,
+      alias_hit_count: 8,
+      grounded_act_hit_count: 0,
+      exact_act_hit_count: 0,
+      category_hint_count: 1,
+      document_type_hint_count: 1,
+      has_explicit_calendar_date: true,
+    },
+  });
+  if (strong) {
+    throw new Error('Expected explicit calendar-date query without exact/grounded act identity not to count as strong taxonomy support');
+  }
+  console.log('[OK] taxonomy-strength helper rejects calendar-scoped taxonomy volume without act grounding');
+}
+
 function testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly(): void {
   const strong = hasStrongSingleGoalTaxonomySignal({
     goals_count: 1,
@@ -936,6 +1004,15 @@ function testDomainHintAlignedFamilyHelper(): void {
   if (!isDomainHintAlignedFamily('civil', 'civil_procedure')) {
     throw new Error('Expected civil domain hint to align with civil_procedure family');
   }
+  if (!isDomainHintAlignedFamily('civil', 'family')) {
+    throw new Error('Expected civil domain hint to align with family family');
+  }
+  if (!isDomainHintAlignedFamily('family', 'civil')) {
+    throw new Error('Expected family domain hint to align with civil family');
+  }
+  if (!isDomainHintAlignedFamily('admin', 'administrative_offenses')) {
+    throw new Error('Expected admin domain hint to align with administrative_offenses family');
+  }
   if (!isDomainHintAlignedFamily('criminal', 'criminal_procedure')) {
     throw new Error('Expected criminal domain hint to align with criminal_procedure family');
   }
@@ -947,6 +1024,9 @@ function testDomainHintAlignedFamilyHelper(): void {
   }
   if (isDomainHintAlignedFamily('civil', 'administrative')) {
     throw new Error('Expected civil domain hint not to align with administrative family');
+  }
+  if (isDomainHintAlignedFamily('admin', 'civil')) {
+    throw new Error('Expected admin domain hint not to align with civil family');
   }
   console.log('[OK] domain-hint family alignment helper keeps generic family envelopes only');
 }
@@ -1031,6 +1111,33 @@ function testSingleGoalFirstPassPlanKeepsActsSearchForDescriptiveActTitleScope()
     );
   }
   console.log('[OK] single-goal first-pass plan keeps acts search for descriptive act-title scope');
+}
+
+function testSingleGoalFirstPassPlanKeepsActsSearchForCalendarScopedTaxonomyVolume(): void {
+  const result = buildSingleGoalFirstPassPlan({
+    steps: undefined,
+    collections: {
+      chunks: 'lexery_legislation_chunks',
+      acts: 'lexery_legislation_acts',
+    },
+    goalsCount: 1,
+    taxonomyStrength: {
+      taxonomy_act_count: 12,
+      alias_hit_count: 8,
+      grounded_act_hit_count: 0,
+      exact_act_hit_count: 0,
+      category_hint_count: 1,
+      document_type_hint_count: 1,
+      has_explicit_calendar_date: true,
+    },
+  });
+  if (!result.usedActsSearch) {
+    throw new Error(`Expected explicit calendar-date taxonomy volume to keep acts search enabled, got ${JSON.stringify(result)}`);
+  }
+  if (!result.actsSearchPolicyReasonCodes.includes('ACTS_SEARCH_ENABLED')) {
+    throw new Error(`Expected ACTS_SEARCH_ENABLED for calendar-scoped taxonomy volume, got ${JSON.stringify(result.actsSearchPolicyReasonCodes)}`);
+  }
+  console.log('[OK] single-goal first-pass plan keeps acts search for calendar-scoped taxonomy volume without grounding');
 }
 
 function testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly(): void {
@@ -1838,7 +1945,7 @@ function testHitCitationKeyPreservesNestedFallbackSelectors(): void {
 }
 
 function testArticleBackfillPrefersSingleAliasMatchedAct(): void {
-  const preferred = deriveArticleBackfillPreferredNreg({
+  const taxonomyResult: Parameters<typeof deriveArticleBackfillPreferredNreg>[0] = {
     anchor_tokens: [],
     rada_nreg_candidates: ['2755-17', '2747-15'],
     category_hints: [],
@@ -1848,7 +1955,8 @@ function testArticleBackfillPrefersSingleAliasMatchedAct(): void {
     ],
     taxonomy_hints_used: undefined,
     debug: { source: 'supabase', taxonomy_snapshot_version: 1 },
-  } as any);
+  };
+  const preferred = deriveArticleBackfillPreferredNreg(taxonomyResult);
   if (preferred !== '2755-17') {
     throw new Error(`Expected preferred rada_nreg 2755-17, got ${preferred}`);
   }
@@ -1856,7 +1964,7 @@ function testArticleBackfillPrefersSingleAliasMatchedAct(): void {
 }
 
 function testArticleBackfillPrefersDominantAliasMatchedAct(): void {
-  const preferred = deriveArticleBackfillPreferredNreg({
+  const taxonomyResult: Parameters<typeof deriveArticleBackfillPreferredNreg>[0] = {
     anchor_tokens: [],
     rada_nreg_candidates: ['z1257-07', '1442-97-п', '280-98-п'],
     category_hints: [],
@@ -1870,7 +1978,8 @@ function testArticleBackfillPrefersDominantAliasMatchedAct(): void {
     ],
     taxonomy_hints_used: undefined,
     debug: { source: 'supabase', taxonomy_snapshot_version: 1 },
-  } as any);
+  };
+  const preferred = deriveArticleBackfillPreferredNreg(taxonomyResult);
   if (preferred !== 'z1257-07') {
     throw new Error(`Expected dominant alias evidence to pick z1257-07, got ${preferred}`);
   }
@@ -2487,6 +2596,41 @@ async function testFindActByTitleFragmentRecoversLongOfficialTitleVariant(): Pro
     throw new Error(`Expected long official title fragment to ground 1127-2022-п, got ${JSON.stringify(matches)}`);
   }
   console.log('[OK] findActByTitleFragment recovers long official title variants with omitted stopwords/tail');
+}
+
+async function testFindActByTitleFragmentUsesFullQueryDateToResolveRecurringSeriesAmbiguity(): Promise<void> {
+  const targetMeta = await getActMeta('n0116500-26');
+  const neighborMeta = await getActMeta('n0120500-26');
+  if (!targetMeta || !neighborMeta) {
+    console.log('[SKIP] query-aware recurring title-fragment grounding test (n0116500-26 or n0120500-26 missing in current LLDBI snapshot)');
+    return;
+  }
+  const fragment = 'Про облікову ціну банківських металів';
+  const query = 'Де Нацбанк на 23 березня 2026 року зафіксував облікову ціну банківських металів?';
+  const matches = await findActByTitleFragment(fragment, query);
+  if (matches.length !== 1 || matches[0] !== 'n0116500-26') {
+    throw new Error(
+      `Expected full query date to disambiguate recurring same-title fragment to n0116500-26, got ${JSON.stringify(matches)}`
+    );
+  }
+  console.log('[OK] findActByTitleFragment uses full query date to resolve recurring same-title ambiguity');
+}
+
+async function testFindActByTitleFragmentRecoversCurrencyRateAliasVariant(): Promise<void> {
+  const targetMeta = await getActMeta('n0115500-26');
+  if (!targetMeta) {
+    console.log('[SKIP] currency-rate alias fragment grounding test (n0115500-26 missing in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'Яким документом НБУ на 23.03.2026 встановлено офіційний валютний курс гривні для щоденного застосування?';
+  const matches = await findActByTitleFragment('офіційний валютний курс гривні', query);
+  if (matches.length !== 1 || matches[0] !== 'n0115500-26') {
+    throw new Error(
+      `Expected currency-rate alias variant to ground n0115500-26, got ${JSON.stringify(matches)}`
+    );
+  }
+  console.log('[OK] findActByTitleFragment recovers currency-rate alias variants for recurring NBU daily acts');
 }
 
 async function testQuotedActTitleFragmentsSupportGroundingSignals(): Promise<void> {
@@ -3197,6 +3341,343 @@ function testNormalizeSingleGoalLowConfidenceSelectionKeepsSingleDomainAlignedPr
     throw new Error(`Expected LOW_CONFIDENCE_SELECTED_ACTS_NARROWED, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] low-confidence normalization keeps one domain-aligned primary law instead of noisy tail');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionKeepsDominantDomainAlignedProceduralPrimaryLaw(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        score: 0.59,
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        score: 0.47,
+        document_type: 'Кодекс',
+      },
+      {
+        rada_nreg: '2747-15',
+        act_title: 'Кодекс адміністративного судочинства України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil_procedure_administrative',
+        score: 0.45,
+        document_type: 'Кодекс',
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.53,
+      selected_acts_confidence_pre_routing: 0.53,
+      selected_acts_decision_final: { confidence: 0.53, reason_codes: [] },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'FRAGMENTED_PRIMARY_FAMILY_SELECTION'],
+    domainHint: 'criminal',
+    actCandidatesTopHydrated: [
+      { rada_nreg: '4651-17', category: 'criminal_procedure' },
+      { rada_nreg: '2341-14', category: 'criminal' },
+      { rada_nreg: '2747-15', category: 'civil_procedure_administrative' },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '4651-17', rank_mass_top30: 1.42, best_rank_in_top30: 1, max_ordering_score: 0.58 },
+      { rada_nreg: '2341-14', rank_mass_top30: 0.09, best_rank_in_top30: 11, max_ordering_score: 0.48 },
+      { rada_nreg: '2747-15', rank_mass_top30: 0.07, best_rank_in_top30: 9, max_ordering_score: 0.52 },
+    ],
+  });
+  if (result.selectedActsFinal.length !== 1 || result.selectedActsFinal[0]?.rada_nreg !== '4651-17') {
+    throw new Error(
+      `Expected low-confidence normalization to keep the dominant domain-aligned procedural code, got ${JSON.stringify(result.selectedActsFinal)}`
+    );
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED')) {
+    throw new Error(`Expected LOW_CONFIDENCE_SELECTED_ACTS_NARROWED, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] low-confidence normalization keeps dominant domain-aligned procedural primary law');
+}
+
+function testShouldConfirmSoftProceduralSingleAct(): void {
+  const shouldConfirm = shouldConfirmSoftProceduralSingleAct({
+    query: 'До якого суду і в який строк скаржаться на невнесення відомостей до ЄРДР після заяви про злочин?',
+    domainHint: 'criminal',
+    reasonCodes: [
+      'CHUNKS_FAMILY_MISMATCH_DEMOTED',
+      'SUPPORT_FAMILY_MISMATCH_BLOCKED',
+      'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+      'LOW_EVIDENCE',
+      'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+    ],
+    topScore: 0.599,
+    selectedActsCount: 1,
+    leadAct: {
+      act_kind: 'PRIMARY_LAW',
+      category: 'criminal_procedure',
+    },
+    leadEvidence: {
+      count_in_top30: 8,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 4.395,
+      max_ordering_score: 0.583,
+    },
+    familyDominantOk: true,
+    proceduralOnlyPrimarySelection: true,
+    interrogativePrimaryLawLocatorQuery: false,
+  });
+  if (!shouldConfirm) {
+    throw new Error('Expected strong domain-aligned soft procedural single-act surface to be confirmable');
+  }
+
+  const shouldRejectExplicitScope = shouldConfirmSoftProceduralSingleAct({
+    query: 'За Кримінальним процесуальним кодексом України, до якого суду скаржаться на невнесення відомостей до ЄРДР?',
+    domainHint: 'criminal',
+    reasonCodes: ['FRAGMENTED_PRIMARY_FAMILY_SELECTION', 'LOW_EVIDENCE'],
+    topScore: 0.61,
+    selectedActsCount: 1,
+    leadAct: {
+      act_kind: 'PRIMARY_LAW',
+      category: 'criminal_procedure',
+    },
+    leadEvidence: {
+      count_in_top30: 7,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 3.9,
+      max_ordering_score: 0.59,
+    },
+    familyDominantOk: true,
+    proceduralOnlyPrimarySelection: false,
+    interrogativePrimaryLawLocatorQuery: false,
+  });
+  if (shouldRejectExplicitScope) {
+    throw new Error('Did not expect explicit act-scoped procedural query to use soft single-act confirmation');
+  }
+
+  const shouldRejectNonProceduralSelection = shouldConfirmSoftProceduralSingleAct({
+    query: 'Куди і в який строк скаржаться на невнесення відомостей до ЄРДР після заяви про злочин?',
+    domainHint: 'criminal',
+    reasonCodes: ['FRAGMENTED_PRIMARY_FAMILY_SELECTION', 'LOW_EVIDENCE', 'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED'],
+    topScore: 0.61,
+    selectedActsCount: 1,
+    leadAct: {
+      act_kind: 'PRIMARY_LAW',
+      category: 'criminal_procedure',
+    },
+    leadEvidence: {
+      count_in_top30: 7,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 4.1,
+      max_ordering_score: 0.59,
+    },
+    familyDominantOk: true,
+    proceduralOnlyPrimarySelection: false,
+    interrogativePrimaryLawLocatorQuery: false,
+  });
+  if (shouldRejectNonProceduralSelection) {
+    throw new Error('Did not expect non-procedural-only primary selection to use soft procedural single-act confirmation');
+  }
+  console.log('[OK] soft procedural single-act confirmation stays bounded to non-explicit procedural surfaces');
+}
+
+function testShouldConfirmSoftPrimarySingleAct(): void {
+  const shouldConfirm = shouldConfirmSoftPrimarySingleAct({
+    query: 'Що може поліція під час перевірки документів і коли вона має пояснити причину зупинки?',
+    domainHint: 'administrative',
+    reasonCodes: [
+      'SUPPORT_FAMILY_MISMATCH_BLOCKED',
+      'SELECTED_ACTS_FROM_CHUNKS_EVIDENCE',
+      'FAMILY_DOMINANT_OK',
+      'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+      'LOW_EVIDENCE',
+      'UNGROUNDED_PRIMARY_FALLBACK',
+      'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+    ],
+    topScore: 0.574,
+    selectedActsCount: 1,
+    leadAct: {
+      act_kind: 'PRIMARY_LAW',
+      category: 'administrative',
+    },
+    leadEvidence: {
+      count_in_top30: 8,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 3.2,
+      max_ordering_score: 0.551,
+    },
+    familyDominantOk: true,
+  });
+  if (!shouldConfirm) {
+    throw new Error('Expected strong dominant soft primary-law surface to be confirmable');
+  }
+
+  const shouldRejectExplicitScope = shouldConfirmSoftPrimarySingleAct({
+    query: 'За Законом України Про Національну поліцію, коли поліцейський має пояснити причину зупинки?',
+    domainHint: 'administrative',
+    reasonCodes: ['FAMILY_DOMINANT_OK', 'LOW_EVIDENCE', 'UNGROUNDED_PRIMARY_FALLBACK'],
+    topScore: 0.61,
+    selectedActsCount: 1,
+    leadAct: {
+      act_kind: 'PRIMARY_LAW',
+      category: 'administrative',
+    },
+    leadEvidence: {
+      count_in_top30: 9,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 3.8,
+      max_ordering_score: 0.57,
+    },
+    familyDominantOk: true,
+  });
+  if (shouldRejectExplicitScope) {
+    throw new Error('Did not expect explicit law-scoped primary query to use soft primary-law confirmation');
+  }
+  console.log('[OK] soft primary-law single-act confirmation stays bounded to non-explicit dominant surfaces');
+}
+
+function testShouldConfirmSoftNonPrimarySingleAct(): void {
+  const shouldConfirm = shouldConfirmSoftNonPrimarySingleAct({
+    reasonCodes: [
+      'GROUNDED_ACT_SCOPE_CONFIRMED',
+      'GROUNDED_ACT_SCOPE_RECOVERED',
+      'CALENDAR_SCOPED_ACT_NO_UNIQUE_CONVERGENCE',
+      'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+      'NO_STRONG_ACT_EVIDENCE',
+      'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+    ],
+    topScore: 0.61,
+    selectedActsCount: 1,
+    leadAct: {
+      rada_nreg: '1178-2022-п',
+      act_title: 'Про затвердження Особливостей здійснення публічних закупівель',
+      document_type: 'Постанова КМУ',
+      act_kind: 'SECONDARY_ORDER',
+    },
+    leadCandidate: {
+      rada_nreg: '1178-2022-п',
+      title: 'Про затвердження Особливостей здійснення публічних закупівель',
+      document_type: 'Постанова КМУ',
+      document_type_slug: 'cmu_resolution',
+      reasons: ['exact_alias_match'],
+      score: 3.1,
+    },
+    leadEvidence: {
+      count_in_top30: 1,
+      best_rank_in_top30: 2,
+      rank_mass_top30: 0.5,
+      max_ordering_score: 0.47,
+    },
+  });
+  if (!shouldConfirm) {
+    throw new Error('Expected sparse grounded non-primary single-act scope to be confirmable');
+  }
+
+  const shouldConfirmRecurringDailyAct = shouldConfirmSoftNonPrimarySingleAct({
+    query: 'Де Нацбанк на 24.03.2026 зафіксував референтну облікову ціну банківських металів?',
+    reasonCodes: ['NO_STRONG_ACT_EVIDENCE', 'NON_PRIMARY_ONLY_WEAK_CONFIDENCE', 'NO_PRIMARY_LAW_EVIDENCE', 'LOW_EVIDENCE'],
+    topScore: 0.6903,
+    selectedActsCount: 1,
+    leadAct: {
+      rada_nreg: 'n0118500-26',
+      act_title: 'Про облікову ціну банківських металів',
+      document_type: 'Постанова НБУ',
+      act_kind: 'SECONDARY_ORDER',
+    },
+    leadCandidate: {
+      rada_nreg: 'n0118500-26',
+      title: 'Про облікову ціну банківських металів',
+      document_type: 'Постанова НБУ',
+      document_type_slug: 'nbu_resolution',
+      reasons: ['title_match'],
+      score: 2.4,
+    },
+    leadEvidence: {
+      count_in_top30: 1,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 0.399,
+      max_ordering_score: 0.399,
+    },
+  });
+  if (!shouldConfirmRecurringDailyAct) {
+    throw new Error('Expected strong date-scoped recurring non-primary act to be confirmable after import');
+  }
+
+  const shouldRejectAuthoritativeFallback = shouldConfirmSoftNonPrimarySingleAct({
+    reasonCodes: [
+      'AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED',
+      'LOW_EVIDENCE',
+      'ACT_SELECTION_LOW_CONFIDENCE',
+    ],
+    topScore: 0.66,
+    selectedActsCount: 1,
+    leadAct: {
+      rada_nreg: '950-2007-п',
+      act_title: 'Про затвердження Регламенту Кабінету Міністрів України',
+      document_type: 'Постанова КМУ',
+      act_kind: 'SECONDARY_ORDER',
+    },
+    leadCandidate: {
+      rada_nreg: '950-2007-п',
+      title: 'Про затвердження Регламенту Кабінету Міністрів України',
+      document_type: 'Постанова КМУ',
+      document_type_slug: 'cmu_resolution',
+      reasons: ['summary_match'],
+      score: 3.4,
+    },
+    leadEvidence: {
+      count_in_top30: 7,
+      best_rank_in_top30: 1,
+      rank_mass_top30: 2.1,
+      max_ordering_score: 0.46,
+    },
+  });
+  if (shouldRejectAuthoritativeFallback) {
+    throw new Error('Did not expect broad authoritative non-primary fallback to use soft single-act confirmation');
+  }
+
+  const shouldRejectExplicitGenericFallback = shouldConfirmSoftNonPrimarySingleAct({
+    query: 'Яким актом Кабінету Міністрів у березні 2026 року подовжено контракт із директором ДП "Енергоринок" Гнатюком Ю.Л.?',
+    reasonCodes: [
+      'GROUNDED_ACT_SCOPE_CONFIRMED',
+      'GROUNDED_ACT_SCOPE_RECOVERED',
+      'CALENDAR_SCOPED_ACT_NO_UNIQUE_CONVERGENCE',
+      'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+      'NO_STRONG_ACT_EVIDENCE',
+      'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+    ],
+    topScore: 0.61,
+    selectedActsCount: 1,
+    leadAct: {
+      rada_nreg: '950-2007-п',
+      act_title: 'Про затвердження Регламенту Кабінету Міністрів України',
+      document_type: 'Постанова КМУ',
+      act_kind: 'SECONDARY_ORDER',
+    },
+    leadCandidate: {
+      rada_nreg: '950-2007-п',
+      title: 'Про затвердження Регламенту Кабінету Міністрів України',
+      document_type: 'Постанова КМУ',
+      document_type_slug: 'cmu_resolution',
+      reasons: ['summary_match'],
+      score: 3.4,
+    },
+    leadEvidence: {
+      count_in_top30: 5,
+      best_rank_in_top30: 2,
+      rank_mass_top30: 0.95,
+      max_ordering_score: 0.477,
+    },
+  });
+  if (shouldRejectExplicitGenericFallback) {
+    throw new Error('Did not expect explicit descriptive non-primary query to confirm generic regulation fallback');
+  }
+  console.log('[OK] soft non-primary single-act confirmation stays bounded to grounded/recovered scope surfaces');
 }
 
 function testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbackNoise(): void {
@@ -7478,6 +7959,203 @@ async function testResolveSingleGoalSelectedActsRejectsCalendarScopedRecurringAc
   console.log('[OK] calendar-scoped recurring-act locator stays honest without unique convergence');
 }
 
+async function testResolveSingleGoalSelectedActsRecoversCalendarScopedRecurringActWithUniqueDateMatch(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Де Нацбанк на 25 березня 2026 року закріпив офіційний курс гривні до іноземних валют?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500-19/27',
+        json_path: '$.chunks[27]',
+        score: 0.508,
+        ordering_score: 0.484,
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+      },
+      {
+        rada_nreg: 'n0119500-26',
+        r2_key: 'r2://n0119500-26/1',
+        json_path: '$.paragraphs[1]',
+        score: 0.723,
+        ordering_score: 0.413,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+      {
+        rada_nreg: 'n0121500-26',
+        r2_key: 'r2://n0121500-26/1',
+        json_path: '$.paragraphs[1]',
+        score: 0.72,
+        ordering_score: 0.412,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        r2_key: 'r2://n0123500-26/1',
+        json_path: '$.paragraphs[1]',
+        score: 0.714,
+        ordering_score: 0.409,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+      },
+    ],
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: 'n0119500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.2,
+        category: 'banking_currency',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: ['title_match', 'keyword_match', 'rada_datred_match', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'n0121500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.1,
+        category: 'banking_currency',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: ['title_match', 'keyword_match', 'rada_datred_penalty', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.05,
+        category: 'banking_currency',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: ['title_match', 'keyword_match', 'rada_datred_penalty', 'chunks_evidence_meta', 'validity_in_force'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['n0119500-26', 'n0121500-26', 'n0123500-26']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['Повідомлення НБУ'],
+    taxonomyActCount: 3,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: ['DOC_TYPE_HINT_ALLOWED'],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.723,
+    avgScore: 0.62,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: true,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: 'v0001500-19',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.505,
+        max_score: 0.508,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.1,
+        max_ordering_score: 0.484,
+      },
+      {
+        rada_nreg: 'n0119500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.723,
+        max_score: 0.723,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.42,
+        max_ordering_score: 0.413,
+      },
+      {
+        rada_nreg: 'n0121500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.72,
+        max_score: 0.72,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.41,
+        max_ordering_score: 0.412,
+      },
+      {
+        rada_nreg: 'n0123500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.714,
+        max_score: 0.714,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.4,
+        max_ordering_score: 0.409,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        { title: string; category: string; document_type: string; document_type_slug: string; storage_category: string | null }
+      > = {
+        'v0001500-19': {
+          title:
+            'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+          category: 'banking_currency',
+          document_type: 'Постанова',
+          document_type_slug: 'resolution',
+          storage_category: null,
+        },
+        'n0119500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Повідомлення НБУ',
+          document_type_slug: 'nbu_letter',
+          storage_category: 'finance',
+        },
+        'n0121500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Повідомлення НБУ',
+          document_type_slug: 'nbu_letter',
+          storage_category: 'finance',
+        },
+        'n0123500-26': {
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'banking_currency',
+          document_type: 'Повідомлення НБУ',
+          document_type_slug: 'nbu_letter',
+          storage_category: 'finance',
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected unique date-matched recurring act to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected unique date-matched recurring act to clear coverage gap, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final[0]?.rada_nreg !== 'n0119500-26') {
+    throw new Error(`Expected date-matched recurring act to be selected, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  console.log('[OK] calendar-scoped recurring act converges when one candidate has unique date identity match');
+}
+
 async function testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle(): Promise<void> {
   const result = await resolveSingleGoalSelectedActs({
     query:
@@ -7767,6 +8445,624 @@ async function testResolveSingleGoalSelectedActsRejectsSupportOnlySecondaryActFo
     throw new Error(`Expected explicit law-title query not to confirm support-only non-primary scope, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] explicit law-title queries do not treat support-only secondary acts as grounded success');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversSoftNonPrimaryAmendmentOrderAfterExplicitScopeClear(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким актом Кабмін скоригував розпорядження №625 від 25.06.2025?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/4',
+        json_path: '$.chunks[4]',
+        score: 0.67,
+        ordering_score: 0.53,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '250-2026-р',
+        r2_key: 'r2://250/1',
+        json_path: '$.chunks[1]',
+        score: 0.71,
+        ordering_score: 0.42,
+        title: 'Про внесення змін до розпорядження Кабінету Міністрів України від 25 червня 2025 р. № 625',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/31',
+        json_path: '$.chunks[31]',
+        score: 0.65,
+        ordering_score: 0.51,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/2',
+        json_path: '$.chunks[2]',
+        score: 0.63,
+        ordering_score: 0.49,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '250-2026-р',
+        title: 'Про внесення змін до розпорядження Кабінету Міністрів України від 25 червня 2025 р. № 625',
+        score: 3.3,
+        category: 'public_administration',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['document_number_match', 'rada_datred_match', 'title_match'],
+      },
+      {
+        rada_nreg: '950-2007-п',
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        score: 2.4,
+        category: 'public_administration',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['250-2026-р', '950-2007-п']),
+    actsSearchNregs: ['250-2026-р', '950-2007-п'],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 2,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.71,
+    avgScore: 0.665,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 6,
+        avg_score_in_top30: 0.65,
+        max_score: 0.67,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.83,
+        max_ordering_score: 0.53,
+      },
+      {
+        rada_nreg: '250-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.71,
+        max_score: 0.71,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.5,
+        max_ordering_score: 0.42,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      if (rada_nreg === '250-2026-р') {
+        return {
+          rada_nreg,
+          title: 'Про внесення змін до розпорядження Кабінету Міністрів України від 25 червня 2025 р. № 625',
+          category: 'public_administration',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+          summary: null,
+          aliases: [],
+          validity_status: 'in_force',
+        };
+      }
+      if (rada_nreg === '950-2007-п') {
+        return {
+          rada_nreg,
+          title: 'Про затвердження Регламенту Кабінету Міністрів України',
+          category: 'public_administration',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+          summary: null,
+          aliases: [],
+          validity_status: 'in_force',
+        };
+      }
+      return null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected recovered soft non-primary amendment order to clear low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected recovered soft non-primary amendment order to map to none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final[0]?.rada_nreg !== '250-2026-р') {
+    throw new Error(`Expected recovered soft non-primary amendment order to select 250-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    !result.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED') &&
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_RECOVERED')
+  ) {
+    throw new Error(`Expected bounded non-primary recovery reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (
+    !result.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED') &&
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected bounded non-primary confirmation reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers explicit soft non-primary amendment orders after low-confidence clear');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversDateScopedRecurringNonPrimaryActAfterFrameworkDrift(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Де НБУ на 24.03.2026 закріпив офіційний курс гривні щодо іноземних валют?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500/5',
+        json_path: '$.chunks[5]',
+        score: 0.66,
+        ordering_score: 0.48,
+        title: 'Про затвердження Положення про встановлення офіційного курсу гривні до іноземних валют та розрахунку довідкового значення курсу гривні до долара США',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'n0117500-26',
+        r2_key: 'r2://n0117500/1',
+        json_path: '$.chunks[1]',
+        score: 0.69,
+        ordering_score: 0.4,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500/7',
+        json_path: '$.chunks[7]',
+        score: 0.64,
+        ordering_score: 0.46,
+        title: 'Про затвердження Положення про встановлення офіційного курсу гривні до іноземних валют та розрахунку довідкового значення курсу гривні до долара США',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500/2',
+        json_path: '$.chunks[2]',
+        score: 0.62,
+        ordering_score: 0.45,
+        title: 'Про затвердження Положення про встановлення офіційного курсу гривні до іноземних валют та розрахунку довідкового значення курсу гривні до долара США',
+        unit_type: 'point',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: 'n0117500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 3.1,
+        category: 'finance',
+        document_type: 'Постанова НБУ',
+        document_type_slug: 'nbu_resolution',
+        reasons: ['title_match', 'rada_datred_match'],
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        title: 'Про затвердження Положення про встановлення офіційного курсу гривні до іноземних валют та розрахунку довідкового значення курсу гривні до долара США',
+        score: 2.2,
+        category: 'finance',
+        document_type: 'Постанова НБУ',
+        document_type_slug: 'nbu_resolution',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['n0117500-26', 'v0001500-19']),
+    actsSearchNregs: ['n0117500-26', 'v0001500-19'],
+    domainHint: 'finance',
+    documentTypeHints: [],
+    taxonomyActCount: 2,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.69,
+    avgScore: 0.652,
+    categoryHintsCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: 'v0001500-19',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.64,
+        max_score: 0.66,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.92,
+        max_ordering_score: 0.48,
+      },
+      {
+        rada_nreg: 'n0117500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.69,
+        max_score: 0.69,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.5,
+        max_ordering_score: 0.4,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      if (rada_nreg === 'n0117500-26') {
+        return {
+          rada_nreg,
+          title: 'Про офіційний курс гривні щодо іноземних валют',
+          category: 'finance',
+          document_type: 'Постанова НБУ',
+          document_type_slug: 'nbu_resolution',
+          storage_category: null,
+          summary: null,
+          aliases: [],
+          validity_status: 'in_force',
+        };
+      }
+      if (rada_nreg === 'v0001500-19') {
+        return {
+          rada_nreg,
+          title: 'Про затвердження Положення про встановлення офіційного курсу гривні до іноземних валют та розрахунку довідкового значення курсу гривні до долара США',
+          category: 'finance',
+          document_type: 'Постанова НБУ',
+          document_type_slug: 'nbu_resolution',
+          storage_category: null,
+          summary: null,
+          aliases: [],
+          validity_status: 'in_force',
+        };
+      }
+      return null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected recovered date-scoped recurring non-primary act to clear low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.selected_acts_final[0]?.rada_nreg !== 'n0117500-26') {
+    throw new Error(`Expected recovered date-scoped recurring act to select n0117500-26, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    !result.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED') &&
+    !result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_RECOVERED') &&
+    !result.reasonCodes.includes('METADATA_ACT_SCOPE_RECOVERED')
+  ) {
+    throw new Error(`Expected recurring non-primary recovery reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers date-scoped recurring non-primary acts after framework drift');
+}
+
+async function testResolveSingleGoalSelectedActsConfirmsRecoveredLiveLikeNbuDailyActCluster(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Де НБУ на 24.03.2026 закріпив офіційний курс гривні щодо іноземних валют?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500-19/27',
+        json_path: '$.points[27]',
+        score: 0.5861674,
+        ordering_score: 0.49267761416478406,
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500-19/35',
+        json_path: '$.points[35]',
+        score: 0.57,
+        ordering_score: 0.486,
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        r2_key: 'r2://v0001500-19/101',
+        json_path: '$.points[101]',
+        score: 0.56,
+        ordering_score: 0.451,
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: 'n0117500-26',
+        r2_key: 'r2://n0117500-26/1',
+        json_path: '$.paragraphs[1]',
+        score: 0.7701485,
+        ordering_score: 0.4338653400000001,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: 'n0117500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 59.356456885330765,
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: [
+          'rada_datred_match',
+          'summary_match',
+          'keyword_match',
+          'title_match',
+          'alias_match',
+          'exact_alias_match',
+          'validity_in_force',
+          'hits_evidence',
+        ],
+      },
+      {
+        rada_nreg: 'n0119500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 55.58525245664431,
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: [
+          'rada_datred_penalty',
+          'keyword_match',
+          'summary_match',
+          'title_match',
+          'alias_match',
+          'exact_alias_match',
+          'validity_in_force',
+          'hits_evidence',
+        ],
+      },
+      {
+        rada_nreg: 'v0001500-19',
+        title:
+          'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+        score: 0.14999999999999983,
+        category: 'finance_banking',
+        document_type: 'Постанова НБУ',
+        document_type_slug: 'nbu_resolution',
+        reasons: [
+          'rada_datred_penalty',
+          'referenced_rada_datred_penalty',
+          'keyword_match',
+          'validity_in_force',
+          'chunks_evidence_meta',
+        ],
+      },
+      {
+        rada_nreg: 'n0121500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 53.90000000000003,
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: [
+          'rada_datred_penalty',
+          'alias_match',
+          'keyword_match',
+          'title_match',
+          'exact_alias_match',
+          'summary_match',
+          'validity_in_force',
+          'chunks_evidence_meta',
+        ],
+      },
+      {
+        rada_nreg: 'n0033500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 55.15000000000003,
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: [
+          'rada_datred_penalty',
+          'alias_match',
+          'keyword_match',
+          'title_match',
+          'exact_alias_match',
+          'summary_match',
+          'validity_in_force',
+          'chunks_evidence_meta',
+        ],
+      },
+      {
+        rada_nreg: 'n0031500-26',
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        score: 52.65000000000003,
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        reasons: [
+          'rada_datred_penalty',
+          'alias_match',
+          'keyword_match',
+          'title_match',
+          'exact_alias_match',
+          'summary_match',
+          'validity_in_force',
+          'chunks_evidence_meta',
+        ],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['n0117500-26', 'n0119500-26', 'v0001500-19', 'n0121500-26', 'n0033500-26', 'n0031500-26']),
+    actsSearchNregs: ['n0117500-26', 'n0119500-26', 'v0001500-19', 'n0121500-26', 'n0033500-26', 'n0031500-26'],
+    domainHint: 'general',
+    documentTypeHints: [],
+    taxonomyActCount: 6,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.7701485,
+    avgScore: 0.566043026,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: 'v0001500-19',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.566043026,
+        max_score: 0.5861674,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9388888888888889,
+        max_ordering_score: 0.49267761416478406,
+      },
+      {
+        rada_nreg: 'n0117500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.7701485,
+        max_score: 0.7701485,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.25,
+        max_ordering_score: 0.4338653400000001,
+      },
+      {
+        rada_nreg: 'n0121500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.7682724,
+        max_score: 0.7682724,
+        best_rank_in_top30: 5,
+        rank_mass_top30: 0.2,
+        max_ordering_score: 0.43303985600000006,
+      },
+      {
+        rada_nreg: 'n0119500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.765533,
+        max_score: 0.765533,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.16666666666666666,
+        max_ordering_score: 0.4318345200000001,
+      },
+      {
+        rada_nreg: 'n0033500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.7651565,
+        max_score: 0.7651565,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.14285714285714285,
+        max_ordering_score: 0.43166886000000004,
+      },
+      {
+        rada_nreg: 'n0031500-26',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.7645441,
+        max_score: 0.7645441,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.125,
+        max_ordering_score: 0.431399404,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      if (rada_nreg === 'v0001500-19') {
+        return {
+          rada_nreg,
+          title:
+            'Про затвердження Положення про структуру валютного ринку України, умови та порядок торгівлі іноземною валютою та банківськими металами на валютному ринку України',
+          category: 'finance_banking',
+          document_type: 'Постанова НБУ',
+          document_type_slug: 'nbu_resolution',
+          storage_category: 'other',
+          summary: null,
+          aliases: [],
+          validity_status: 'in_force',
+        };
+      }
+      return {
+        rada_nreg,
+        title: 'Про офіційний курс гривні щодо іноземних валют',
+        category: 'finance_banking',
+        document_type: 'Повідомлення НБУ',
+        document_type_slug: 'nbu_letter',
+        storage_category: 'finance',
+        summary: null,
+        aliases: [],
+        validity_status: 'in_force',
+      };
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected live-like recovered NBU daily act cluster to clear low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected live-like recovered NBU daily act cluster to clear coverage gap, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final[0]?.rada_nreg !== 'n0117500-26') {
+    throw new Error(`Expected live-like recovered NBU daily act cluster to select n0117500-26, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED')) {
+    throw new Error(`Expected live-like recovered NBU daily act cluster to keep recovery reason code, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (!result.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED')) {
+    throw new Error(`Expected live-like recovered NBU daily act cluster to confirm recovered act, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer confirms recovered live-like NBU daily-act clusters');
 }
 
 async function testResolveSingleGoalSelectedActsRejectsSemanticNeighborForAbsentExplicitLawTitle(): Promise<void> {
@@ -8284,6 +9580,254 @@ async function testResolveSingleGoalSelectedActsRejectsPersonnelOrderNeighborFor
   console.log('[OK] single-goal finalizer rejects neighboring personnel-order fallback for absent explicit dismissal query');
 }
 
+async function testResolveSingleGoalSelectedActsRejectsGenericGovernmentRegulationFallbackForAbsentExplicitContractExtensionOrder(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким актом Кабінету Міністрів у березні 2026 року подовжено контракт із директором ДП "Енергоринок" Гнатюком Ю.Л.?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/4',
+        json_path: '$.chunks[4]',
+        score: 0.488,
+        ordering_score: 0.477,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/2',
+        json_path: '$.chunks[2]',
+        score: 0.444,
+        ordering_score: 0.471,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/531',
+        json_path: '$.chunks[531]',
+        score: 0.444,
+        ordering_score: 0.459,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '43-2026-п',
+        r2_key: 'r2://43/6',
+        json_path: '$.chunks[6]',
+        score: 0.528,
+        ordering_score: 0.504,
+        title:
+          'Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '41-2026-р',
+        r2_key: 'r2://41/1',
+        json_path: '$.chunks[1]',
+        score: 0.535,
+        ordering_score: 0.28,
+        title:
+          'Про передачу повноважень з управління корпоративними правами держави акціонерного товариства “Науково-технічний комплекс “Електронприлад”',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '36-2026-р',
+        r2_key: 'r2://36/1',
+        json_path: '$.chunks[1]',
+        score: 0.502,
+        ordering_score: 0.266,
+        title:
+          'Про призначення Куцевола А.А. заступником Міністра енергетики України з питань європейської інтеграції',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '950-2007-п',
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        score: 3.4,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '43-2026-п',
+        title:
+          'Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39',
+        score: 2.9,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '41-2026-р',
+        title:
+          'Про передачу повноважень з управління корпоративними правами держави акціонерного товариства “Науково-технічний комплекс “Електронприлад”',
+        score: 2.2,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '36-2026-р',
+        title:
+          'Про призначення Куцевола А.А. заступником Міністра енергетики України з питань європейської інтеграції',
+        score: 2.0,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['950-2007-п', '43-2026-п', '41-2026-р', '36-2026-р']),
+    actsSearchNregs: [],
+    domainHint: 'administrative',
+    documentTypeHints: ['cmu_order', 'cmu_resolution'],
+    taxonomyActCount: 4,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.5539477,
+    avgScore: 0.49,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.46,
+        max_score: 0.488,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.95,
+        max_ordering_score: 0.477,
+      },
+      {
+        rada_nreg: '43-2026-п',
+        count_in_top30: 2,
+        avg_score_in_top30: 0.528,
+        max_score: 0.528,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.58,
+        max_ordering_score: 0.504,
+      },
+      {
+        rada_nreg: '41-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.535,
+        max_score: 0.535,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.08,
+        max_ordering_score: 0.28,
+      },
+      {
+        rada_nreg: '36-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.502,
+        max_score: 0.502,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.06,
+        max_ordering_score: 0.266,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '950-2007-п': {
+          title: 'Про затвердження Регламенту Кабінету Міністрів України',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '43-2026-п': {
+          title:
+            'Про внесення змін до постанов Кабінету Міністрів України від 8 липня 2020 р. № 573 і від 15 січня 2026 р. № 39',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '41-2026-р': {
+          title:
+            'Про передачу повноважень з управління корпоративними правами держави акціонерного товариства “Науково-технічний комплекс “Електронприлад”',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '36-2026-р': {
+          title:
+            'Про призначення Куцевола А.А. заступником Міністра енергетики України з питань європейської інтеграції',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (!result.low_confidence_final) {
+    throw new Error(`Expected absent contract-extension order query to stay low confidence, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'likely_missing_act') {
+    throw new Error(`Expected absent contract-extension order query to map to likely_missing_act, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.some((act) => act.rada_nreg === '950-2007-п')) {
+    throw new Error(`Expected generic CMU regulation fallback to be cleared, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') ||
+    result.reasonCodes.includes('EVIDENCE_ACT_SCOPE_CONFIRMED')
+  ) {
+    throw new Error(`Expected absent contract-extension order query not to confirm generic CMU regulation fallback, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer rejects generic CMU regulation fallback for absent explicit contract-extension order query');
+}
+
 async function testResolveSingleGoalSelectedActsRecoversExplicitPersonnelOrderWithMatchingIdentity(): Promise<void> {
   const result = await resolveSingleGoalSelectedActs({
     query: 'Яким розпорядженням Кабінету Міністрів України звільнено Клочка А.О. з посади заступника Міністра оборони України?',
@@ -8469,6 +10013,719 @@ async function testResolveSingleGoalSelectedActsRecoversExplicitPersonnelOrderWi
     throw new Error(`Expected explicit personnel-order query to confirm act scope, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] single-goal finalizer keeps only the personnel order with matching named identity under noisy same-family evidence');
+}
+
+async function testResolveSingleGoalSelectedActsRecoversSoftPersonnelAppointmentOrderWithMatchingIdentity(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Яким рішенням Кабміну призначили Компанійця О.С. державним секретарем Міністерства цифрової трансформації України?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/4',
+        json_path: '$.chunks[4]',
+        score: 0.547,
+        ordering_score: 0.511,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/31',
+        json_path: '$.chunks[31]',
+        score: 0.549,
+        ordering_score: 0.508,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/3',
+        json_path: '$.chunks[3]',
+        score: 0.538,
+        ordering_score: 0.499,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/2',
+        json_path: '$.chunks[2]',
+        score: 0.541,
+        ordering_score: 0.485,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '950-2007-п',
+        r2_key: 'r2://950/1',
+        json_path: '$.chunks[1]',
+        score: 0.531,
+        ordering_score: 0.453,
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '235-2026-р',
+        r2_key: 'r2://235/1',
+        json_path: '$.chunks[1]',
+        score: 0.77,
+        ordering_score: 0.384,
+        title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '16-2026-р',
+        r2_key: 'r2://16/1',
+        json_path: '$.chunks[1]',
+        score: 0.548,
+        ordering_score: 0.336,
+        title: 'Про тимчасове покладення виконання обов’язків Міністра цифрової трансформації України на Борнякова О.С.',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '34-2026-р',
+        r2_key: 'r2://34/1',
+        json_path: '$.chunks[1]',
+        score: 0.584,
+        ordering_score: 0.302,
+        title: 'Про звільнення Турчака І.М. з посади державного секретаря Міністерства цифрової трансформації України',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '950-2007-п',
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        score: 4.2,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '235-2026-р',
+        title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+        score: 3.6,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['title_match', 'summary_match'],
+      },
+      {
+        rada_nreg: '34-2026-р',
+        title: 'Про звільнення Турчака І.М. з посади державного секретаря Міністерства цифрової трансформації України',
+        score: 2.5,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '16-2026-р',
+        title: 'Про тимчасове покладення виконання обов’язків Міністра цифрової трансформації України на Борнякова О.С.',
+        score: 2.2,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['950-2007-п', '235-2026-р', '34-2026-р', '16-2026-р']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['cmu_resolution', 'cmu_order'],
+    taxonomyActCount: 4,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.7699319,
+    avgScore: 0.589,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.541,
+        max_score: 0.549,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.72,
+        max_ordering_score: 0.511,
+      },
+      {
+        rada_nreg: '235-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.77,
+        max_score: 0.77,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.09,
+        max_ordering_score: 0.384,
+      },
+      {
+        rada_nreg: '34-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.584,
+        max_score: 0.584,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.05,
+        max_ordering_score: 0.302,
+      },
+      {
+        rada_nreg: '16-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.548,
+        max_score: 0.548,
+        best_rank_in_top30: 7,
+        rank_mass_top30: 0.06,
+        max_ordering_score: 0.336,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '950-2007-п': {
+          title: 'Про затвердження Регламенту Кабінету Міністрів України',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '235-2026-р': {
+          title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '34-2026-р': {
+          title: 'Про звільнення Турчака І.М. з посади державного секретаря Міністерства цифрової трансформації України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '16-2026-р': {
+          title: 'Про тимчасове покладення виконання обов’язків Міністра цифрової трансформації України на Борнякова О.С.',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected soft personnel-appointment query with matching identity to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected soft personnel-appointment query with matching identity to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '235-2026-р') {
+    throw new Error(`Expected soft personnel-appointment query to recover 235-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (
+    result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED') !== true &&
+    result.reasonCodes.includes('METADATA_ACT_SCOPE_CONFIRMED') !== true
+  ) {
+    throw new Error(`Expected soft personnel-appointment query to confirm non-primary act scope, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer recovers soft personnel-appointment order from generic CMU regulation noise when named identity converges');
+}
+
+async function testResolveSingleGoalSelectedActsRealignsSoftAmendmentOrderWhenChunksFavorSemanticNeighbor(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query:
+      'Де Кабмін у березні 2026 року скоригував порядок експериментального проекту допомоги покупцям товарів і послуг українського виробництва?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '342-2026-п',
+        r2_key: 'r2://342/6',
+        json_path: '$.chunks[6]',
+        score: 0.52452344,
+        ordering_score: 0.4970839284547802,
+        title:
+          'Про внесення змін до Порядку реалізації експериментального проекту щодо надання державної грошової допомоги покупцям товарів та послуг українського виробництва в рамках Всеукраїнської економічної платформи “Зроблено в Україні”',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '353-2026-п',
+        r2_key: 'r2://353/5',
+        json_path: '$.chunks[5]',
+        score: 0.48764837,
+        ordering_score: 0.49178923484059267,
+        title:
+          'Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '353-2026-п',
+        r2_key: 'r2://353/22',
+        json_path: '$.chunks[22]',
+        score: 0.5332604,
+        ordering_score: 0.489861,
+        title:
+          'Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        r2_key: 'r2://1178/8',
+        json_path: '$.chunks[8]',
+        score: 0.482,
+        ordering_score: 0.48679557218666786,
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+        unit_type: 'point',
+      },
+      {
+        rada_nreg: '23-2026-п',
+        r2_key: 'r2://23/5',
+        json_path: '$.chunks[5]',
+        score: 0.503,
+        ordering_score: 0.40792775064358444,
+        title:
+          'Про реалізацію експериментального проекту щодо збирання, накопичення, оброблення та відображення в реальному часі та в динаміці інформації про стан реалізації державної політики',
+        unit_type: 'point',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '342-2026-п',
+        title:
+          'Про внесення змін до Порядку реалізації експериментального проекту щодо надання державної грошової допомоги покупцям товарів та послуг українського виробництва в рамках Всеукраїнської економічної платформи “Зроблено в Україні”',
+        score: 32.90853360601289,
+        category: 'finance_banking',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['title_match', 'summary_match', 'keyword_match', 'validity_in_force', 'amendment_act_penalty', 'hits_evidence'],
+      },
+      {
+        rada_nreg: '353-2026-п',
+        title:
+          'Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва',
+        score: 4.08,
+        category: 'energy_utilities',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match', 'title_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '23-2026-п',
+        title:
+          'Про реалізацію експериментального проекту щодо збирання, накопичення, оброблення та відображення в реальному часі та в динаміці інформації про стан реалізації державної політики',
+        score: 4.53,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match', 'title_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        title:
+          'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+        score: 3.93,
+        category: 'procurement',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['summary_match', 'title_match', 'validity_in_force'],
+      },
+      {
+        rada_nreg: '950-2007-п',
+        title: 'Про затвердження Регламенту Кабінету Міністрів України',
+        score: 0.55,
+        category: 'administrative',
+        document_type: 'Постанова КМУ',
+        document_type_slug: 'cmu_resolution',
+        reasons: ['validity_in_force'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['342-2026-п', '353-2026-п', '23-2026-п', '1178-2022-п', '950-2007-п']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['cmu_resolution', 'cmu_order'],
+    taxonomyActCount: 5,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.57841873,
+    avgScore: 0.4849302939,
+    categoryHintsCount: 0,
+    entitiesCount: 0,
+    anchorsCount: 1,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '353-2026-п',
+        count_in_top30: 12,
+        avg_score_in_top30: 0.48824658,
+        max_score: 0.57841873,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.7029318476580142,
+        max_ordering_score: 0.49178923484059267,
+      },
+      {
+        rada_nreg: '342-2026-п',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.52523451,
+        max_score: 0.53429925,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.1244306418219463,
+        max_ordering_score: 0.4970839284547802,
+      },
+      {
+        rada_nreg: '1178-2022-п',
+        count_in_top30: 7,
+        avg_score_in_top30: 0.4924692457142857,
+        max_score: 0.52415276,
+        best_rank_in_top30: 4,
+        rank_mass_top30: 0.6744627594627594,
+        max_ordering_score: 0.48679557218666786,
+      },
+      {
+        rada_nreg: '23-2026-п',
+        count_in_top30: 5,
+        avg_score_in_top30: 0.502179542,
+        max_score: 0.56750804,
+        best_rank_in_top30: 11,
+        rank_mass_top30: 0.3014952153110048,
+        max_ordering_score: 0.40792775064358444,
+      },
+      {
+        rada_nreg: '950-2007-п',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.5206867,
+        max_score: 0.5206867,
+        best_rank_in_top30: 8,
+        rank_mass_top30: 0.125,
+        max_ordering_score: 0.46206895718344976,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '342-2026-п': {
+          title:
+            'Про внесення змін до Порядку реалізації експериментального проекту щодо надання державної грошової допомоги покупцям товарів та послуг українського виробництва в рамках Всеукраїнської економічної платформи “Зроблено в Україні”',
+          category: 'finance_banking',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '353-2026-п': {
+          title:
+            'Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва',
+          category: 'energy_utilities',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '23-2026-п': {
+          title:
+            'Про реалізацію експериментального проекту щодо збирання, накопичення, оброблення та відображення в реальному часі та в динаміці інформації про стан реалізації державної політики',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '1178-2022-п': {
+          title:
+            'Про затвердження особливостей здійснення публічних закупівель товарів, робіт і послуг для замовників, передбачених Законом України “Про публічні закупівлі”, на період дії правового режиму воєнного стану в Україні та протягом 90 днів з дня його припинення або скасування',
+          category: 'procurement',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+        '950-2007-п': {
+          title: 'Про затвердження Регламенту Кабінету Міністрів України',
+          category: 'administrative',
+          document_type: 'Постанова КМУ',
+          document_type_slug: 'cmu_resolution',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected soft amendment-order query with dominant title identity to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected soft amendment-order query with dominant title identity to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '342-2026-п') {
+    throw new Error(`Expected soft amendment-order query to realign to 342-2026-п, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE')) {
+    throw new Error(`Expected soft amendment-order query to record metadata/evidence realignment, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer realigns soft amendment-order query back to the title-dominant act when chunk count favors a semantic neighbor');
+}
+
+async function testResolveSingleGoalSelectedActsConfirmsSoftPersonnelAppointmentOrderWithAbbreviatedOffice(): Promise<void> {
+  const result = await resolveSingleGoalSelectedActs({
+    query: 'Де уряд оформив призначення Компанійця О.С. держсекретарем Мінцифри?',
+    goalId: 'goal_0',
+    finalHits: [
+      {
+        rada_nreg: '235-2026-р',
+        r2_key: 'r2://235/1',
+        json_path: '$.chunks[1]',
+        score: 0.634,
+        ordering_score: 0.374,
+        title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '37-2026-р',
+        r2_key: 'r2://37/1',
+        json_path: '$.chunks[1]',
+        score: 0.404,
+        ordering_score: 0.223,
+        title: 'Про призначення Малашкіна М.А. державним секретарем Міністерства енергетики України',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '66/2026',
+        r2_key: 'r2://66/1',
+        json_path: '$.chunks[1]',
+        score: 0.375,
+        ordering_score: 0.21,
+        title: 'Про призначення О. Кубракова Радником Президента України з питань інфраструктури та взаємодії з громадами',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '6-2026-р',
+        r2_key: 'r2://6/1',
+        json_path: '$.chunks[1]',
+        score: 0.321,
+        ordering_score: 0.186,
+        title: 'Про призначення Шапірка В.Г. заступником Голови Державної служби України з питань геодезії, картографії та кадастру з питань цифрового розвитку, цифрових трансформацій і цифровізації',
+        unit_type: 'paragraph',
+      },
+      {
+        rada_nreg: '18-2026-р',
+        r2_key: 'r2://18/1',
+        json_path: '$.chunks[1]',
+        score: 0.308,
+        ordering_score: 0.18,
+        title: 'Про призначення Голубоша В.В. заступником Голови Державної служби України з безпеки на транспорті',
+        unit_type: 'paragraph',
+      },
+    ] as never,
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '235-2026-р',
+        title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+        score: 2.8,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '37-2026-р',
+        title: 'Про призначення Малашкіна М.А. державним секретарем Міністерства енергетики України',
+        score: 2.1,
+        category: 'administrative',
+        document_type: 'Розпорядження КМУ',
+        document_type_slug: 'cmu_order',
+        reasons: ['summary_match'],
+      },
+      {
+        rada_nreg: '66/2026',
+        title: 'Про призначення О. Кубракова Радником Президента України з питань інфраструктури та взаємодії з громадами',
+        score: 1.8,
+        category: 'administrative',
+        document_type: 'Розпорядження Президента України',
+        document_type_slug: 'presidential_order',
+        reasons: ['summary_match'],
+      },
+    ],
+    plannerRationaleByNreg: new Map(),
+    taxonomyNregs: new Set(['235-2026-р', '37-2026-р', '66/2026']),
+    actsSearchNregs: [],
+    domainHint: 'general',
+    documentTypeHints: ['cmu_order'],
+    taxonomyActCount: 3,
+    aliasHitCount: 0,
+    exactActHitCount: 0,
+    exactActNregs: [],
+    groundedActHitCount: 0,
+    groundedActNregs: [],
+    actSelectionLowConfidence: false,
+    reasonCodes: [],
+    useLowConfidenceFallback: false,
+    queryRewriteMeta: { called: false, used: false, not_used_reason_codes: [] },
+    topScore: 0.63398093,
+    avgScore: 0.408,
+    categoryHintsCount: 0,
+    entitiesCount: 1,
+    anchorsCount: 0,
+    domainWeak: false,
+    precomputedChunksEvidenceTopActs: [
+      {
+        rada_nreg: '235-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.634,
+        max_score: 0.634,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.21,
+        max_ordering_score: 0.374,
+      },
+      {
+        rada_nreg: '37-2026-р',
+        count_in_top30: 1,
+        avg_score_in_top30: 0.404,
+        max_score: 0.404,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.1,
+        max_ordering_score: 0.223,
+      },
+    ],
+    getActMeta: async (rada_nreg) => {
+      const byNreg: Record<
+        string,
+        {
+          title: string;
+          category: string;
+          document_type: string;
+          document_type_slug: string;
+          storage_category: string | null;
+        }
+      > = {
+        '235-2026-р': {
+          title: 'Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '37-2026-р': {
+          title: 'Про призначення Малашкіна М.А. державним секретарем Міністерства енергетики України',
+          category: 'administrative',
+          document_type: 'Розпорядження КМУ',
+          document_type_slug: 'cmu_order',
+          storage_category: null,
+        },
+        '66/2026': {
+          title: 'Про призначення О. Кубракова Радником Президента України з питань інфраструктури та взаємодії з громадами',
+          category: 'administrative',
+          document_type: 'Розпорядження Президента України',
+          document_type_slug: 'presidential_order',
+          storage_category: null,
+        },
+      };
+      return byNreg[rada_nreg]
+        ? {
+            rada_nreg,
+            ...byNreg[rada_nreg],
+            summary: null,
+            aliases: [],
+            validity_status: 'in_force',
+          }
+        : null;
+    },
+    hydrateSelectedActsMeta: async (acts, confidence) =>
+      acts.map((act) => ({
+        ...act,
+        act_kind: classifyActKind(
+          act.act_title ?? '',
+          act.document_type ?? null,
+          act.category ?? null,
+          act.document_type_slug ?? null
+        ),
+        confidence,
+      })),
+    searchActsForRouting: async () => [],
+  });
+  if (result.low_confidence_final) {
+    throw new Error(`Expected abbreviated-office personnel-order query to resolve confidently, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  if (result.coverageGap !== 'none') {
+    throw new Error(`Expected abbreviated-office personnel-order query to keep coverage_gap=none, got ${result.coverageGap}`);
+  }
+  if (result.selected_acts_final.length !== 1 || result.selected_acts_final[0]?.rada_nreg !== '235-2026-р') {
+    throw new Error(`Expected abbreviated-office personnel-order query to keep 235-2026-р, got ${JSON.stringify(result.selected_acts_final)}`);
+  }
+  if (!result.reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_CONFIRMED')) {
+    throw new Error(`Expected abbreviated-office personnel-order query to confirm authoritative non-primary scope, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] single-goal finalizer confirms soft personnel-appointment order with abbreviated office when named identity and early evidence converge');
 }
 
 async function testResolveSingleGoalSelectedActsFlagsUngroundedGeneralChunksOnlyPrimaryFallback(): Promise<void> {
@@ -9892,6 +12149,62 @@ async function testScoreActCandidatePrefersDatedNbuDailyActOverGenericCurrencyRe
   console.log('[OK] scoreActCandidate prefers dated NBU daily acts over generic framework regulations');
 }
 
+async function testScoreActCandidatePrefersExactDateRecurringSeriesMemberOverSameTitleNeighbors(): Promise<void> {
+  const exactDateAct = await getActMeta('n0116500-26');
+  const laterNeighbor = await getActMeta('n0120500-26');
+  if (!exactDateAct || !laterNeighbor) {
+    console.log('[SKIP] recurring exact-date same-title scoring test (n0116500-26 or n0120500-26 not present in current LLDBI snapshot)');
+    return;
+  }
+  const query = 'Де Нацбанк на 23 березня 2026 року зафіксував облікову ціну банківських металів?';
+  const taxonomySignals = buildTaxonomyQuerySignals(query);
+  const querySignals = uniqueStrings([
+    query,
+    ...extractActReferenceSignals(query),
+    ...extractQuotedActTitleFragments(query),
+    ...taxonomySignals.phrases,
+    ...taxonomySignals.tokens,
+  ]);
+  const [exactDateScore, laterNeighborScore] = await Promise.all([
+    scoreActCandidate('n0116500-26', querySignals, 'general'),
+    scoreActCandidate('n0120500-26', querySignals, 'general'),
+  ]);
+  if (exactDateScore.score <= laterNeighborScore.score) {
+    throw new Error(
+      `Expected exact-date recurring same-title act to outrank later same-title neighbor, got ${JSON.stringify({ exactDateScore, laterNeighborScore })}`
+    );
+  }
+  if (!exactDateScore.reasons.includes('recurring_series_rada_datred_match')) {
+    throw new Error(`Expected recurring-series exact-date reason on target act, got ${JSON.stringify(exactDateScore)}`);
+  }
+  console.log('[OK] scoreActCandidate prefers exact-date recurring same-title act over neighboring daily acts');
+}
+
+async function testGetTaxonomyCandidatesInjectsCompatibleProcedureFamilyForSoftErdrBundle(): Promise<void> {
+  const criminalProcedureCode = await getActMeta('4651-17');
+  if (!criminalProcedureCode) {
+    console.log('[SKIP] ERDR soft procedural taxonomy test (4651-17 not present in current LLDBI snapshot)');
+    return;
+  }
+  const query =
+    'До якого суду і в який строк скаржаться на невнесення відомостей до ЄРДР після заяви про злочин?';
+  const result = await getTaxonomyCandidates({
+    query,
+    domainHint: 'criminal',
+  });
+  if (!result.category_hints.includes('criminal_procedure')) {
+    throw new Error(
+      `Expected criminal domain envelope to include criminal_procedure category hint, got ${JSON.stringify(result.category_hints)}`
+    );
+  }
+  if (!result.rada_nreg_candidates.includes('4651-17')) {
+    throw new Error(
+      `Expected taxonomy candidates to include КПК for soft ЄРДР bundle, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 12))}`
+    );
+  }
+  console.log('[OK] taxonomy injects compatible criminal procedure family for soft ЄРДР procedural bundle');
+}
+
 async function testGetTaxonomyCandidatesGroundsCuedNumericRepealOrderWithDateContext(): Promise<void> {
   const target = await getActMeta('262-2026-р');
   const neighbor = await getActMeta('15-2026-р');
@@ -9917,6 +12230,127 @@ async function testGetTaxonomyCandidatesGroundsCuedNumericRepealOrderWithDateCon
     );
   }
   console.log('[OK] taxonomy grounding resolves cue+number repeal-order queries using title/date context');
+}
+
+async function testGetTaxonomyCandidatesRanksAmendmentOrderByReferencedBaseActIdentity(): Promise<void> {
+  const target = await getActMeta('250-2026-р');
+  if (!target) {
+    console.log('[SKIP] amendment-order referenced-identity taxonomy test (250-2026-р not present in current LLDBI snapshot)');
+    return;
+  }
+  const result = await getTaxonomyCandidates({
+    query: 'Яким актом Кабмін скоригував розпорядження №625 від 25.06.2025?',
+    domainHint: 'general',
+    documentTypeHints: ['cmu_order'],
+  });
+  const targetRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === '250-2026-р');
+  const neighborRanks = ['3-2026-р', '4-2026-р', '15-2026-р']
+    .map((radaNreg) => result.rada_nreg_candidates.findIndex((candidate) => candidate.toLowerCase() === radaNreg))
+    .filter((rank) => rank >= 0);
+  if (targetRank === -1 || targetRank > 4) {
+    throw new Error(
+      `Expected amendment-order query to keep 250-2026-р near the top candidates, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  if (neighborRanks.length > 0 && neighborRanks.some((rank) => targetRank > rank)) {
+    throw new Error(
+      `Expected referenced-base-act identity to rank 250-2026-р ahead of generic neighboring CMU orders, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  console.log('[OK] taxonomy ranking prefers amendment orders when query identity matches the referenced base act');
+}
+
+async function testGetTaxonomyCandidatesRanksDatedNbuDailyActOverSameTitleNeighbors(): Promise<void> {
+  const target = await getActMeta('n0117500-26');
+  const genericFramework = await getActMeta('v0001500-19');
+  if (!target || !genericFramework) {
+    console.log('[SKIP] dated NBU daily-act taxonomy ranking test (n0117500-26 or v0001500-19 not present in current LLDBI snapshot)');
+    return;
+  }
+  const result = await getTaxonomyCandidates({
+    query: 'Де НБУ на 24.03.2026 закріпив офіційний курс гривні щодо іноземних валют?',
+    domainHint: 'general',
+  });
+  const targetRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'n0117500-26');
+  const frameworkRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'v0001500-19');
+  const neighborRanks = ['n0021500-26', 'n0029500-26', 'n0033500-26']
+    .map((radaNreg) => result.rada_nreg_candidates.findIndex((candidate) => candidate.toLowerCase() === radaNreg))
+    .filter((rank) => rank >= 0);
+  if (targetRank === -1 || targetRank > 4) {
+    throw new Error(
+      `Expected exact-date NBU daily act to stay near the top candidates, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  if (frameworkRank !== -1 && targetRank > frameworkRank) {
+    throw new Error(
+      `Expected dated daily act to outrank generic NBU framework regulation, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  if (neighborRanks.some((rank) => targetRank > rank)) {
+    throw new Error(
+      `Expected exact-date daily act to outrank same-title neighboring daily acts, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 8))}`
+    );
+  }
+  console.log('[OK] taxonomy ranking prefers the date-matched NBU daily act over same-title neighbors');
+}
+
+async function testGetTaxonomyCandidatesGroundsRecurringSameTitleDailyActByDateScopedSoftQuery(): Promise<void> {
+  const target = await getActMeta('n0116500-26');
+  const neighbor = await getActMeta('n0120500-26');
+  if (!target || !neighbor) {
+    console.log('[SKIP] recurring same-title date-scoped grounding test (n0116500-26 or n0120500-26 not present in current LLDBI snapshot)');
+    return;
+  }
+  const result = await getTaxonomyCandidates({
+    query: 'Де Нацбанк на 23 березня 2026 року зафіксував облікову ціну банківських металів?',
+    domainHint: 'general',
+    documentTypeHints: ['nbu_letter'],
+  });
+  if (!result.grounded_act_nregs.some((radaNreg) => radaNreg.toLowerCase() === 'n0116500-26')) {
+    throw new Error(
+      `Expected date-scoped recurring daily-act soft query to ground onto n0116500-26, got ${JSON.stringify(result)}`
+    );
+  }
+  const targetRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'n0116500-26');
+  const neighborRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'n0120500-26');
+  if (targetRank === -1 || neighborRank === -1 || targetRank > neighborRank) {
+    throw new Error(
+      `Expected date-scoped recurring daily-act query to rank n0116500-26 ahead of same-title neighbor, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 10))}`
+    );
+  }
+  console.log('[OK] taxonomy grounds recurring same-title daily acts from date-scoped soft queries');
+}
+
+async function testGetTaxonomyCandidatesGroundsRecurringFxDailyActByLawyerStyleQuery(): Promise<void> {
+  const target = await getActMeta('n0115500-26');
+  const framework = await getActMeta('v0001500-19');
+  if (!target || !framework) {
+    console.log('[SKIP] recurring FX daily-act lawyer-style grounding test (n0115500-26 or v0001500-19 not present in current LLDBI snapshot)');
+    return;
+  }
+  const result = await getTaxonomyCandidates({
+    query: 'Яким документом НБУ на 23.03.2026 встановлено офіційний валютний курс гривні для щоденного застосування?',
+    domainHint: 'general',
+    documentTypeHints: ['nbu_letter'],
+  });
+  if (!result.grounded_act_nregs.some((radaNreg) => radaNreg.toLowerCase() === 'n0115500-26')) {
+    throw new Error(
+      `Expected lawyer-style recurring FX query to ground onto n0115500-26, got ${JSON.stringify(result)}`
+    );
+  }
+  const targetRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'n0115500-26');
+  const frameworkRank = result.rada_nreg_candidates.findIndex((radaNreg) => radaNreg.toLowerCase() === 'v0001500-19');
+  if (targetRank === -1 || targetRank > 4) {
+    throw new Error(
+      `Expected lawyer-style recurring FX query to keep n0115500-26 near the top candidates, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 10))}`
+    );
+  }
+  if (frameworkRank !== -1 && targetRank > frameworkRank) {
+    throw new Error(
+      `Expected lawyer-style recurring FX query to rank n0115500-26 ahead of generic currency framework noise, got ${JSON.stringify(result.rada_nreg_candidates.slice(0, 10))}`
+    );
+  }
+  console.log('[OK] taxonomy grounds lawyer-style recurring FX daily-act queries ahead of framework noise');
 }
 
 function testExtractActReferenceSignalsCapturesExplicitDocumentTitles(): void {
@@ -10995,7 +13429,7 @@ function testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage(): v
   console.log('[OK] partial goal support does not override distinct multi-goal coverage when support map is incomplete');
 }
 
-function testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoals(): void {
+function testSelectedActsAllowsProceduralSingleActCoverageWhenMixedGoalTailIsWeak(): void {
   const result = buildSelectedActs({
     finalHits: [
       {
@@ -11056,31 +13490,34 @@ function testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoal
       },
       {
         rada_nreg: '435-15',
-        count_in_top30: 1,
-        avg_score_in_top30: 0.43,
-        max_score: 0.43,
-        best_rank_in_top30: 12,
-        rank_mass_top30: 0.08,
-        max_ordering_score: 0.34,
+        count_in_top30: 2,
+        avg_score_in_top30: 0.52,
+        max_score: 0.59,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 0.31,
+        max_ordering_score: 0.49,
       },
     ],
   });
-  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
     throw new Error(
-      `Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED for mixed-goal procedural fallback, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+      `Expected MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED for weak mixed-goal procedural tail, got ${JSON.stringify(result.selected_acts_reason_codes)}`
     );
   }
-  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')) {
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')) {
     throw new Error(
-      `Expected MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+      `Did not expect MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED for weak mixed-goal procedural tail, got ${JSON.stringify(result.selected_acts_reason_codes)}`
     );
   }
-  if ((result.selected_acts_confidence ?? 0) > 0.75) {
+  if (result.selected_acts.length !== 1 || result.selected_acts[0]?.rada_nreg !== '2747-15') {
+    throw new Error(`Expected dominant procedural code to remain selected, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  if ((result.selected_acts_confidence ?? 0) < 0.75) {
     throw new Error(
-      `Did not expect high confidence after blocking mixed-goal procedural fallback, got ${result.selected_acts_confidence}`
+      `Expected materially confident single-act procedural coverage after trimming weak tail, got ${result.selected_acts_confidence}`
     );
   }
-  console.log('[OK] mixed-goal procedural fallback does not count as full act coverage');
+  console.log('[OK] weak mixed-goal procedural tail does not block single-act procedural coverage');
 }
 
 function testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProceduralCompanionRemains(): void {
@@ -13392,6 +15829,39 @@ function testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCover
   console.log('[OK] multi-goal confidence helper keeps covered definition-goal bundles');
 }
 
+function testShouldNotFlagUngroundedMultiGoalFallbackForStrongSingleActProceduralBundle(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'criminal',
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'procedure' },
+      { goal_id: 'goal_1', goal_type: 'definition' },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['4651-17', new Set(['goal_0', 'goal_1'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['4651-17'],
+    },
+    topScore: 0.56,
+    mismatchSignalsPresent: true,
+    explicitActScopeCue: false,
+  });
+  if (flagged) {
+    throw new Error('Did not expect strong same-act procedural bundle to be flagged as ungrounded fallback');
+  }
+  console.log('[OK] multi-goal confidence helper keeps strong same-act procedural bundles');
+}
+
 function testShouldFlagUngroundedMultiGoalFallbackWhenSameFamilyBundleMasksStrongSecondaryCompetition(): void {
   const flagged = shouldFlagUngroundedMultiGoalFallback({
     domainHint: 'general',
@@ -13701,7 +16171,7 @@ async function main(): Promise<void> {
   testFamilyGuardDoesNotInjectUnsupportedPrimaryLaw();
   testHasMultiClauseStructure();
   testGoalSplitMultiClauseWithoutPlannerDependency();
-  testGoalSplitCarriesSharedTailAcrossClauses();
+  testGoalSplitKeepsSingleQuestionCoordinatedObjectBundleAsOneGoal();
   testGoalSplitKeepsAnchoredActTitleWithInternalConjunctionAsSingleGoal();
   testGoalSplitKeepsCompactTitleFragmentWithInternalConjunctionAsSingleGoal();
   testGoalSplitKeepsQuotedRatificationTitleWithInternalConjunctionAsSingleGoal();
@@ -13720,6 +16190,8 @@ async function main(): Promise<void> {
   testGoalSplitDoesNotOverSplitSelectorBundleOnGenericDeadlineWording();
   testGoalSplitCarriesSubjectIntoProceduralQuestion();
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
+  testGoalSplitCarriesActorSubjectIntoPoliceFollowUp();
+  testGoalSplitCarriesActorSubjectIntoLaborNeedFollowUp();
   testGoalSplitAddsSpecificTaxAppealSignals();
   testGoalSplitCompactsExplicitActBundleAcrossQuestions();
   testGoalSplitCompactsExplicitActClauseBundle();
@@ -13744,11 +16216,13 @@ async function main(): Promise<void> {
   await testTaxonomyPrefersInForceLogicalActSuccessorForTruncatedQuotedLawTitle();
   testStrongTaxonomySignalTreatsExactActHitAsStrong();
   testStrongTaxonomySignalTreatsGroundedAliasAsStrong();
+  testStrongTaxonomySignalRejectsCalendarScopedVolumeWithoutGrounding();
   testStrongTaxonomySignalRejectsFuzzyAliasVolumeOnly();
   testDomainHintAlignedFamilyHelper();
   testSingleGoalFirstPassPlanSkipsActsSearchOnStrongTaxonomySignal();
   testSingleGoalFirstPassPlanKeepsActsSearchWhenTaxonomyWeak();
   testSingleGoalFirstPassPlanKeepsActsSearchForDescriptiveActTitleScope();
+  testSingleGoalFirstPassPlanKeepsActsSearchForCalendarScopedTaxonomyVolume();
   testSingleGoalFirstPassPlanKeepsActsSearchOnFuzzyAliasVolumeOnly();
   testSingleGoalFirstPassPlanRespectsExplicitChunksOnlyRequest();
   testSingleGoalFirstPassPlanPreservesExplicitActsOnlyRequest();
@@ -13812,9 +16286,12 @@ async function main(): Promise<void> {
   testClassifyActKindUnknown();
   testClassifyActKindBillDraftNeedsMetadata();
   testClassifyActKindUsesDocumentTypeSlug();
+  testDocumentTypeHintMatchesSupportsSlugHints();
   await testTaxonomyKeywordTopicNotInScore();
   await testFindActByTitleFragmentExport();
   await testFindActByTitleFragmentRecoversLongOfficialTitleVariant();
+  await testFindActByTitleFragmentUsesFullQueryDateToResolveRecurringSeriesAmbiguity();
+  await testFindActByTitleFragmentRecoversCurrencyRateAliasVariant();
   await testQuotedActTitleFragmentsSupportGroundingSignals();
   testQuotedActTitleFragmentsRemainStableAcrossCallsForShortLawTitles();
   testQuotedActTitleFragmentsPreserveOuterNestedQuotedLawTitles();
@@ -13835,6 +16312,9 @@ async function main(): Promise<void> {
   testSingleGoalDegradedTraceMarksWeakEvidenceHonestly();
   testNormalizeSingleGoalLowConfidenceSelectionClearsOutOfScopeNoise();
   testNormalizeSingleGoalLowConfidenceSelectionKeepsSingleDomainAlignedPrimaryLaw();
+  testNormalizeSingleGoalLowConfidenceSelectionKeepsDominantDomainAlignedProceduralPrimaryLaw();
+  testShouldConfirmSoftProceduralSingleAct();
+  testShouldConfirmSoftPrimarySingleAct();
   testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbackNoise();
   testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivilBundle();
   testNormalizeSingleGoalLowConfidenceSelectionPreservesTaxonomyBackedCivilBundle();
@@ -13862,12 +16342,20 @@ async function main(): Promise<void> {
   await testResolveSingleGoalSelectedActsPrefersEarlyRankMassLawOverCoverageTailForSoftLocator();
   await testResolveSingleGoalSelectedActsRecoversInterrogativePrimaryLawLocatorAfterLowConfidenceNarrowing();
   await testResolveSingleGoalSelectedActsRejectsCalendarScopedRecurringActWithoutUniqueConvergence();
+  await testResolveSingleGoalSelectedActsRecoversCalendarScopedRecurringActWithUniqueDateMatch();
   await testResolveSingleGoalSelectedActsRejectsDomainAlignedPrimaryFallbackForAbsentExplicitLawTitle();
   await testResolveSingleGoalSelectedActsRejectsSupportOnlySecondaryActForAbsentExplicitLawTitle();
+  await testResolveSingleGoalSelectedActsRecoversSoftNonPrimaryAmendmentOrderAfterExplicitScopeClear();
+  await testResolveSingleGoalSelectedActsRecoversDateScopedRecurringNonPrimaryActAfterFrameworkDrift();
+  await testResolveSingleGoalSelectedActsConfirmsRecoveredLiveLikeNbuDailyActCluster();
   await testResolveSingleGoalSelectedActsRejectsSemanticNeighborForAbsentExplicitLawTitle();
   await testResolveSingleGoalSelectedActsRejectsBaseOrderFallbackForAbsentExplicitAmendmentOrder();
   await testResolveSingleGoalSelectedActsRejectsPersonnelOrderNeighborForAbsentExplicitDismissalOrder();
+  await testResolveSingleGoalSelectedActsRejectsGenericGovernmentRegulationFallbackForAbsentExplicitContractExtensionOrder();
   await testResolveSingleGoalSelectedActsRecoversExplicitPersonnelOrderWithMatchingIdentity();
+  await testResolveSingleGoalSelectedActsRecoversSoftPersonnelAppointmentOrderWithMatchingIdentity();
+  await testResolveSingleGoalSelectedActsRealignsSoftAmendmentOrderWhenChunksFavorSemanticNeighbor();
+  await testResolveSingleGoalSelectedActsConfirmsSoftPersonnelAppointmentOrderWithAbbreviatedOffice();
   await testResolveSingleGoalSelectedActsFlagsUngroundedGeneralChunksOnlyPrimaryFallback();
   await testResolveSingleGoalSelectedActsFlagsUngroundedPrimaryCompanionFallback();
   await testResolveSingleGoalSelectedActsFlagsBroadSameFamilyChunksOnlyFallback();
@@ -13901,6 +16389,7 @@ async function main(): Promise<void> {
   testStickySingleGoalLowConfidenceReasonsBlockRecovery();
   testProceduralPrimaryWithoutGroundingRequiresActSignals();
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
+  testShouldConfirmSoftNonPrimarySingleAct();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
   testBuildTaxonomyQuerySignalsCanonicalizesInflectedLawCuePhrase();
@@ -13908,7 +16397,13 @@ async function main(): Promise<void> {
   await testScoreActCandidateUsesTokenizedSignalsForSpecialLawLocator();
   await testScoreActCandidatePrefersHigherEducationLawForAcademicMobilityLocator();
   await testScoreActCandidatePrefersDatedNbuDailyActOverGenericCurrencyRegulation();
+  await testScoreActCandidatePrefersExactDateRecurringSeriesMemberOverSameTitleNeighbors();
+  await testGetTaxonomyCandidatesInjectsCompatibleProcedureFamilyForSoftErdrBundle();
   await testGetTaxonomyCandidatesGroundsCuedNumericRepealOrderWithDateContext();
+  await testGetTaxonomyCandidatesRanksAmendmentOrderByReferencedBaseActIdentity();
+  await testGetTaxonomyCandidatesRanksDatedNbuDailyActOverSameTitleNeighbors();
+  await testGetTaxonomyCandidatesGroundsRecurringSameTitleDailyActByDateScopedSoftQuery();
+  await testGetTaxonomyCandidatesGroundsRecurringFxDailyActByLawyerStyleQuery();
   testExtractActReferenceSignalsCapturesExplicitDocumentTitles();
   testExtractActReferenceSignalsCapturesModifiedGovernmentDecisionCue();
   testExtractActReferenceSignalsTrimsMetadataTailFromInterrogativeLocator();
@@ -13945,7 +16440,7 @@ async function main(): Promise<void> {
   testSelectedActsKeepsEarlyProceduralPrimaryLawForMultiGoal();
   testSelectedActsMarksCoverageMissWhenGoalSupportIsIncomplete();
   testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage();
-  testSelectedActsBlocksUngroundedProceduralSingleActCoverageForMixedGoals();
+  testSelectedActsAllowsProceduralSingleActCoverageWhenMixedGoalTailIsWeak();
   testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProceduralCompanionRemains();
   testSelectedActsRecoversMixedGoalPrimaryCompanionFromHitBackfill();
   testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft();
@@ -13979,6 +16474,7 @@ async function main(): Promise<void> {
   testShouldFlagUngroundedMultiGoalFallbackOnThreeFamilyChunksOnlyBundleWithoutMismatchSignal();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenGoalCoverageIsReal();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCovered();
+  testShouldNotFlagUngroundedMultiGoalFallbackForStrongSingleActProceduralBundle();
   testShouldFlagUngroundedMultiGoalFallbackWhenSameFamilyBundleMasksStrongSecondaryCompetition();
   testShouldFlagUngroundedMultiGoalFallbackWhenSpecificDomainMapsToOffFamilyActs();
   testShouldFlagUngroundedMultiGoalFallbackWhenOnlyTaxonomyBacksBroadOffFamilyBundle();

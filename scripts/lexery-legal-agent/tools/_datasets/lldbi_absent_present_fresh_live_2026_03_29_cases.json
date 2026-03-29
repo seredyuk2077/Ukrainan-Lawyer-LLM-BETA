@@ -1,0 +1,68 @@
+[
+  {
+    "case_id": "nbu_bank_metals_2026_03_20_fresh_live_absent",
+    "rada_nreg": "n0114500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_daily_price",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 20 березня 2026 року зафіксував облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким актом НБУ станом на 20.03.2026 визначено облікову ціну банківських металів для офіційного застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_fx_rate_2026_03_20_fresh_live_absent",
+    "rada_nreg": "n0113500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_daily_fx",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 20 березня 2026 року закріпив офіційний курс гривні до іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким документом НБУ на 20.03.2026 встановлено офіційний валютний курс гривні для щоденного застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_resolution_790_point4_amendment_348_2026_fresh_live_absent",
+    "rada_nreg": "348-2026-п",
+    "title": "Про внесення зміни до пункту 4 постанови Кабінету Міністрів України від 28 липня 2023 р. № 790",
+    "bucket": "cmu_targeted_amendment",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким урядовим актом у березні 2026 року точково підправили одну з норм постанови Кабміну № 790 від липня 2023 року?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Де Кабмін у березні 2026 року вніс зміну саме до пункту 4 постанови № 790?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

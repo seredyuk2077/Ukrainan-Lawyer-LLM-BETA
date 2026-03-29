@@ -4,6 +4,7 @@ import {
   extractActReferenceSignals,
   extractQuotedActTitleFragments,
   isAmendmentLikeActTitle,
+  queryLooksAmendmentFocused,
   looksLikeStructuredActIdentifier,
   normalizeActReferenceCue,
   type ActMeta,
@@ -13,8 +14,10 @@ import {
   hasExplicitActScopeCue,
   looksLikeCompactActTitleFragmentQuery,
 } from './goal-splitter.js';
+import { isDomainHintAlignedFamily, isProceduralFamilyKey, toFamilyKey } from './family-alignment.js';
 import {
   classifyActKind,
+  documentTypeHintMatches,
   hasStrongNonPrimarySupportEvidence,
   isExplicitlyHintedNonPrimaryAct,
   type ActCandidateInput,
@@ -328,7 +331,7 @@ function extractCapitalizedIdentityTokens(value: string): string[] {
   return [...out];
 }
 
-function candidateMatchesExplicitPersonIdentityQuery(
+export function candidateMatchesExplicitPersonIdentityQuery(
   candidateTitle: string | undefined | null,
   query: string
 ): boolean {
@@ -350,6 +353,10 @@ function candidateMatchesExplicitPersonIdentityQuery(
     if (!requestedSignature.initials || !sameSurnameSignature.initials) return true;
     return requestedSignature.initials === sameSurnameSignature.initials;
   });
+}
+
+export function queryHasExplicitPersonIdentityCue(query: string): boolean {
+  return extractPersonIdentitySignatures(query).length > 0;
 }
 
 function isGenericSupportCueToken(token: string, documentCueTokens: string[]): boolean {
@@ -525,7 +532,7 @@ function candidateMatchesStrictExplicitActScopeQuery(
   return true;
 }
 
-function isTrustedExplicitGroundedActScopeCandidate(
+export function isTrustedExplicitGroundedActScopeCandidate(
   candidate:
     | Pick<ActCandidateInput, 'rada_nreg' | 'title' | 'document_type' | 'document_type_slug' | 'reasons' | 'score'>
     | undefined,
@@ -563,67 +570,6 @@ function hasExplicitActTitleSignalOverlap(
     hasCompactCueSignalOverlap(signals, title, documentType) ||
     hasSingleDiscriminativeCueTokenOverlap(signals, title, documentType)
   );
-}
-
-function normalizeFamilyKey(value: string | null | undefined): string {
-  return (value ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim();
-}
-
-function normalizeDomainHintKey(value: string | null | undefined): string {
-  const normalized = (value ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim();
-  if (normalized === 'admin') return 'administrative';
-  return normalized;
-}
-
-function isSpecificDomainHint(domainHint: string | null | undefined): boolean {
-  const normalized = normalizeDomainHintKey(domainHint);
-  return normalized.length > 0 && normalized !== 'general' && normalized !== 'unknown';
-}
-
-function isDomainHintAlignedFamily(domainHint: string | null | undefined, familyKey: string | null | undefined): boolean {
-  const normalizedDomain = normalizeDomainHintKey(domainHint);
-  const normalizedFamily = normalizeFamilyKey(familyKey);
-  if (!isSpecificDomainHint(normalizedDomain) || !normalizedFamily || normalizedFamily === 'unknown') return false;
-  if (normalizedFamily === normalizedDomain) return true;
-  if (normalizedFamily.startsWith(`${normalizedDomain}_`) || normalizedDomain.startsWith(`${normalizedFamily}_`)) {
-    return true;
-  }
-  if (normalizedDomain === 'tax_customs' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'tax' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'labor_social' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'labor' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'civil' && (normalizedFamily === 'civil' || normalizedFamily === 'civil_procedure')) {
-    return true;
-  }
-  if (normalizedDomain === 'family' && (normalizedFamily === 'family' || normalizedFamily === 'civil')) {
-    return true;
-  }
-  if (
-    normalizedDomain === 'criminal' &&
-    (normalizedFamily === 'criminal' || normalizedFamily === 'criminal_procedure')
-  ) {
-    return true;
-  }
-  if (
-    normalizedDomain === 'administrative' &&
-    (normalizedFamily === 'administrative' || normalizedFamily === 'administrative_offenses')
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function isProceduralFamilyKey(value: string | null | undefined): boolean {
-  const familyKey = normalizeFamilyKey(value);
-  return familyKey.includes('procedure') || familyKey === 'judiciary_justice';
 }
 
 function hasStrongProceduralSupportEvidence(
@@ -749,7 +695,7 @@ function sortEvidenceByCoverageWeighted(
 const UKRAINIAN_MONTH_GENITIVE_REGEX =
   /(?:січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)/iu;
 
-function queryHasExplicitCalendarDate(query: string): boolean {
+export function queryHasExplicitCalendarDate(query: string): boolean {
   return (
     /\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b/u.test(query) ||
     new RegExp(`\\b\\d{1,2}\\s+${UKRAINIAN_MONTH_GENITIVE_REGEX.source}\\s+\\d{4}(?:\\s*р(?:оку)?\\b)?`, 'iu').test(query)
@@ -779,6 +725,14 @@ function collectCalendarScopedAlignedEvidence(input: {
     if (!hasActTitleSupportOverlap(input.query, candidate.title, candidate.document_type)) continue;
     out.push({ evidence, candidate });
   }
+  const exactDateMatches = out.filter(({ candidate }) => (candidate.reasons ?? []).includes('rada_datred_match'));
+  if (exactDateMatches.length > 0) return exactDateMatches;
+  const monthMatches = out.filter(({ candidate }) => (candidate.reasons ?? []).includes('rada_month_match'));
+  if (monthMatches.length > 0) return monthMatches;
+  const documentNumberMatches = out.filter(({ candidate }) =>
+    (candidate.reasons ?? []).includes('document_number_match')
+  );
+  if (documentNumberMatches.length > 0) return documentNumberMatches;
   return out;
 }
 
@@ -1218,6 +1172,15 @@ export async function resolveSingleActScopeSelection(
     extractedActReferenceSignals.length > 0;
   const compactTitleFragmentQuery = looksLikeCompactActTitleFragmentQuery(query);
   const descriptiveActScopeQuery = explicitActScopeCueQuery || compactTitleFragmentQuery;
+  const calendarScopedAlignedEvidence = queryHasExplicitCalendarDate(query)
+    ? collectCalendarScopedAlignedEvidence({
+        rankedEvidence: sortEvidenceByCoverageWeighted(chunksEvidenceTopActs),
+        actCandidatesTopHydrated,
+        query,
+      })
+    : [];
+  const uniqueCalendarScopedAlignedEvidence =
+    calendarScopedAlignedEvidence.length === 1 ? calendarScopedAlignedEvidence[0] : undefined;
   const candidateByNreg = buildNormalizedNregMap(actCandidatesTopHydrated);
   const trustedGroundedScopeNreg =
     rawGroundedSingleActConverged
@@ -1255,19 +1218,86 @@ export async function resolveSingleActScopeSelection(
   const metadataGroundedActCandidates = actCandidatesTopHydrated.filter((candidate) =>
     isMetadataGroundedActCandidate(candidate, query, metadataGroundingReasonCodes)
   );
+  const queryHasExplicitPersonIdentity = queryHasExplicitPersonIdentityCue(query);
+  const personIdentityMatchingCandidates = queryHasExplicitPersonIdentity
+    ? actCandidatesTopHydrated.filter((candidate) =>
+        candidateMatchesExplicitPersonIdentityQuery(candidate.title ?? null, query)
+      )
+    : [];
+  const uniquePersonIdentityMatchingCandidate =
+    personIdentityMatchingCandidates.length === 1 ? personIdentityMatchingCandidates[0] : undefined;
+  const fallbackPersonIdentityScopeCandidate =
+    queryHasExplicitPersonIdentity &&
+    !!uniquePersonIdentityMatchingCandidate?.rada_nreg &&
+    hasActTitleSupportOverlap(
+      query,
+      uniquePersonIdentityMatchingCandidate.title ?? null,
+      uniquePersonIdentityMatchingCandidate.document_type ?? null
+    )
+      ? uniquePersonIdentityMatchingCandidate
+      : undefined;
   const metadataScopeActCandidate =
-    metadataGroundedActCandidates.length > 0 ? metadataGroundedActCandidates[0] : undefined;
+    (
+      queryHasExplicitPersonIdentity
+        ? metadataGroundedActCandidates.find((candidate) =>
+            candidateMatchesExplicitPersonIdentityQuery(candidate.title ?? null, query)
+          )
+        : undefined
+    ) ??
+    (metadataGroundedActCandidates.length > 0 ? metadataGroundedActCandidates[0] : undefined) ??
+    fallbackPersonIdentityScopeCandidate;
   const metadataScopeRunnerUpCandidate = metadataScopeActCandidate
     ? actCandidatesTopHydrated.find((candidate) => !sameRadaNreg(candidate.rada_nreg, metadataScopeActCandidate.rada_nreg))
     : undefined;
   const metadataScopeEvidence = metadataScopeActCandidate
     ? chunksEvidenceTopActs.find((item) => sameRadaNreg(item.rada_nreg, metadataScopeActCandidate.rada_nreg))
     : undefined;
+  const metadataScopeHasDistinctiveIdentityReason =
+    (metadataScopeActCandidate?.reasons ?? []).some((reasonCode) =>
+      [
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'keyword_match',
+        'topic_match',
+        'summary_match',
+      ].includes(reasonCode)
+    );
+  const metadataScopeHasStrongDistinctiveIdentityReason =
+    (metadataScopeActCandidate?.reasons ?? []).some((reasonCode) =>
+      [
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'keyword_match',
+        'topic_match',
+      ].includes(reasonCode)
+    );
+  const metadataScopeActKind = metadataScopeActCandidate
+    ? classifyActKind(
+        metadataScopeActCandidate.title ?? '',
+        metadataScopeActCandidate.document_type ?? null,
+        metadataScopeActCandidate.category ?? null,
+        metadataScopeActCandidate.document_type_slug ?? null
+      )
+    : 'UNKNOWN';
+  const metadataScopeHintCompatible =
+    !!metadataScopeActCandidate?.rada_nreg &&
+    documentTypeHintMatches(
+      metadataScopeActCandidate.document_type,
+      documentTypeHints ?? [],
+      metadataScopeActCandidate.document_type_slug
+    );
   const metadataTopActGrounded = isMetadataGroundedActCandidate(
     topActCandidate,
     query,
     metadataGroundingReasonCodes
   );
+  const metadataScopeMatchesExplicitPersonIdentity =
+    queryHasExplicitPersonIdentity &&
+    candidateMatchesExplicitPersonIdentityQuery(metadataScopeActCandidate?.title ?? null, query);
   const dominantMetadataScopeEvidenceSupport =
     !!metadataScopeActCandidate?.rada_nreg &&
     hasDominantSingleActEvidenceSupport({
@@ -1279,6 +1309,69 @@ export async function resolveSingleActScopeSelection(
     !!metadataScopeActCandidate?.rada_nreg &&
     (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&
     (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.4;
+  const softScopedTopMetadataEvidenceSupport =
+    sameRadaNreg(topActCandidate?.rada_nreg, metadataScopeActCandidate?.rada_nreg) &&
+    metadataScopeHasDistinctiveIdentityReason &&
+    (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+    (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.34;
+  const hintCompatibleNearHeadNonPrimaryMetadataCandidate =
+    explicitActScopeCueQuery &&
+    !queryHasExplicitCalendarDate(query) &&
+    !queryRequestsPrimaryLawLikeAct(query, documentTypeHints) &&
+    !!metadataScopeActCandidate?.rada_nreg &&
+    metadataScopeActKind !== 'PRIMARY_LAW' &&
+    metadataScopeHintCompatible &&
+    metadataScopeHasStrongDistinctiveIdentityReason &&
+    (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&
+    (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.34;
+  const softScopedNonPrimaryMetadataCandidate =
+    explicitActScopeCueQuery &&
+    !queryRequestsPrimaryLawLikeAct(query, documentTypeHints) &&
+    !!metadataScopeActCandidate?.rada_nreg &&
+    metadataScopeActKind !== 'PRIMARY_LAW' &&
+    (
+      queryHasExplicitCalendarDate(query) ||
+      queryLooksAmendmentFocused(query) ||
+      hintCompatibleNearHeadNonPrimaryMetadataCandidate ||
+      (
+        metadataScopeHasStrongDistinctiveIdentityReason &&
+        softScopedTopMetadataEvidenceSupport
+      )
+    ) &&
+    (
+      (
+        (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&
+        (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.32
+      ) ||
+      (
+        (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 8 &&
+        (metadataScopeEvidence?.count_in_top30 ?? 0) >= 2 &&
+        (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.28
+      )
+    ) &&
+      (
+        metadataGroundedActCandidates.length === 1 ||
+        (
+          metadataTopActGrounded &&
+          sameRadaNreg(topActCandidate?.rada_nreg, metadataScopeActCandidate.rada_nreg)
+        ) ||
+      (
+        !!uniquePersonIdentityMatchingCandidate?.rada_nreg &&
+        sameRadaNreg(uniquePersonIdentityMatchingCandidate.rada_nreg, metadataScopeActCandidate?.rada_nreg) &&
+        metadataScopeMatchesExplicitPersonIdentity
+      ) ||
+      hintCompatibleNearHeadNonPrimaryMetadataCandidate ||
+      softScopedTopMetadataEvidenceSupport ||
+      (
+        metadataScopeHasDistinctiveIdentityReason &&
+        (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+        (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.38
+      ) ||
+      (
+        (metadataScopeActCandidate?.score ?? 0) >=
+        Math.max(2, (metadataScopeRunnerUpCandidate?.score ?? 0) + 0.6)
+      )
+    );
   const evidenceDominantSingleActNregPreMetadata =
     descriptiveActScopeQuery &&
     !exactSingleActConverged &&
@@ -1292,13 +1385,29 @@ export async function resolveSingleActScopeSelection(
           metadataGroundingReasonCodes,
         })
       : null;
-  const calendarScopedRecurringActAmbiguous =
-    queryHasExplicitCalendarDate(query) &&
-    collectCalendarScopedAlignedEvidence({
-      rankedEvidence: sortEvidenceByCoverageWeighted(chunksEvidenceTopActs),
-      actCandidatesTopHydrated,
-      query,
-    }).length > 1;
+  const calendarScopedRecurringActAmbiguous = calendarScopedAlignedEvidence.length > 1;
+  const uniqueCalendarScopedActIdentityConverged =
+    !exactSingleActConverged &&
+    !groundedSingleActConverged &&
+    !!uniqueCalendarScopedAlignedEvidence?.candidate?.rada_nreg &&
+    documentTypeHintMatches(
+      uniqueCalendarScopedAlignedEvidence?.candidate?.document_type ?? null,
+      documentTypeHints ?? [],
+      uniqueCalendarScopedAlignedEvidence?.candidate?.document_type_slug ?? null
+    ) &&
+    classifyActKind(
+      uniqueCalendarScopedAlignedEvidence?.candidate?.title ?? '',
+      uniqueCalendarScopedAlignedEvidence?.candidate?.document_type ?? null,
+      uniqueCalendarScopedAlignedEvidence?.candidate?.category ?? null,
+      uniqueCalendarScopedAlignedEvidence?.candidate?.document_type_slug ?? null
+    ) !== 'PRIMARY_LAW' &&
+    (
+      (uniqueCalendarScopedAlignedEvidence?.candidate?.reasons ?? []).includes('rada_datred_match') ||
+      (uniqueCalendarScopedAlignedEvidence?.candidate?.reasons ?? []).includes('rada_month_match') ||
+      (uniqueCalendarScopedAlignedEvidence?.candidate?.reasons ?? []).includes('document_number_match')
+    ) &&
+    (uniqueCalendarScopedAlignedEvidence?.evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 8 &&
+    (uniqueCalendarScopedAlignedEvidence?.evidence?.max_ordering_score ?? 0) >= 0.38;
   const metadataSingleActConverged =
     (explicitActScopeCueQuery || compactTitleFragmentQuery) &&
     !exactSingleActConverged &&
@@ -1310,20 +1419,30 @@ export async function resolveSingleActScopeSelection(
     ) &&
     (
       metadataTopActGrounded ||
-      metadataGroundedActCandidates.length === 1
+      metadataGroundedActCandidates.length === 1 ||
+      softScopedNonPrimaryMetadataCandidate
     ) &&
     (
       (metadataScopeActCandidate?.score ?? 0) >= ((metadataScopeRunnerUpCandidate?.score ?? 0) + 2) ||
       dominantMetadataScopeEvidenceSupport ||
-      uniqueMetadataScopeEarlyEvidenceSupport
+      uniqueMetadataScopeEarlyEvidenceSupport ||
+      softScopedNonPrimaryMetadataCandidate
     );
   const leadEvidenceActNreg = getLeadEvidenceActNreg(chunksEvidenceTopActs);
+  const topActCandidateMatchesStrictExplicitScope = candidateMatchesStrictExplicitActScopeQuery(
+    topActCandidate,
+    query
+  );
   const consensusSingleActEvidenceConverged =
     explicitActScopeCueQuery &&
     !exactSingleActConverged &&
     !groundedSingleActConverged &&
     !metadataSingleActConverged &&
     !!topActCandidate?.rada_nreg &&
+    (
+      !descriptiveActScopeQuery ||
+      topActCandidateMatchesStrictExplicitScope
+    ) &&
     sameRadaNreg(topActCandidate.rada_nreg, leadEvidenceActNreg) &&
     hasDominantSingleActEvidenceSupport({
       radaNreg: topActCandidate.rada_nreg,
@@ -1331,11 +1450,13 @@ export async function resolveSingleActScopeSelection(
     }) &&
     (topActCandidate.score ?? 0) >= Math.max(3, (runnerUpActCandidate?.score ?? 0) + 0.4);
   const evidenceSingleActNreg =
-    descriptiveActScopeQuery &&
+    (descriptiveActScopeQuery || uniqueCalendarScopedActIdentityConverged) &&
     !exactSingleActConverged &&
     !groundedSingleActConverged &&
     !metadataSingleActConverged
-      ? evidenceDominantSingleActNregPreMetadata ?? (consensusSingleActEvidenceConverged ? topActCandidate?.rada_nreg ?? null : null)
+      ? uniqueCalendarScopedAlignedEvidence?.candidate?.rada_nreg ??
+        evidenceDominantSingleActNregPreMetadata ??
+        (consensusSingleActEvidenceConverged ? topActCandidate?.rada_nreg ?? null : null)
       : null;
   const evidenceSingleActConverged = !!evidenceSingleActNreg;
 
@@ -1359,7 +1480,7 @@ export async function resolveSingleActScopeSelection(
             ? evidenceSingleActNreg
           : null;
   const scopeAnchorFamilyKey = scopeAnchorNreg
-    ? normalizeFamilyKey(
+    ? toFamilyKey(
         getByNormalizedNreg(candidateByNreg, scopeAnchorNreg)?.category ??
           selectedActsFinal.find((act) => sameRadaNreg(act.rada_nreg, scopeAnchorNreg))?.category
       )
@@ -1387,7 +1508,7 @@ export async function resolveSingleActScopeSelection(
           .map((act) => {
             const candidate = getByNormalizedNreg(candidateByNreg, act.rada_nreg);
             const evidence = getByNormalizedNreg(chunksEvidenceByNreg, act.rada_nreg);
-            const familyKey = normalizeFamilyKey(candidate?.category ?? act.category);
+            const familyKey = toFamilyKey(candidate?.category ?? act.category);
             return { act, candidate, evidence, familyKey };
           })
           .filter(
@@ -1537,17 +1658,95 @@ export async function resolveSingleActScopeSelection(
 
   const leadSelectedActBeforeScopeTrim = selectedActsFinal[0];
   const secondSelectedActBeforeScopeTrim = selectedActsFinal[1];
+  const leadSelectedCandidateBeforeScopeTrim = leadSelectedActBeforeScopeTrim
+    ? getByNormalizedNreg(candidateByNreg, leadSelectedActBeforeScopeTrim.rada_nreg)
+    : undefined;
+  const leadSelectedHasStrongDistinctiveIdentityReason =
+    (leadSelectedCandidateBeforeScopeTrim?.reasons ?? []).some((reasonCode) =>
+      [
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'keyword_match',
+        'topic_match',
+      ].includes(reasonCode)
+    );
+  const leadSelectedHintCompatible =
+    !!leadSelectedCandidateBeforeScopeTrim?.rada_nreg &&
+    documentTypeHintMatches(
+      leadSelectedCandidateBeforeScopeTrim.document_type,
+      documentTypeHints ?? [],
+      leadSelectedCandidateBeforeScopeTrim.document_type_slug
+    );
   const leadSelectedEvidenceBeforeScopeTrim = leadSelectedActBeforeScopeTrim
     ? chunksEvidenceByNreg.get(leadSelectedActBeforeScopeTrim.rada_nreg)
     : undefined;
+  const leadSelectedMatchesExplicitPersonIdentityBeforeScopeTrim =
+    queryHasExplicitPersonIdentity &&
+    candidateMatchesExplicitPersonIdentityQuery(
+      leadSelectedCandidateBeforeScopeTrim?.title ?? leadSelectedActBeforeScopeTrim?.act_title ?? null,
+      query
+    );
   const secondSelectedEvidenceBeforeScopeTrim = secondSelectedActBeforeScopeTrim
     ? chunksEvidenceByNreg.get(secondSelectedActBeforeScopeTrim.rada_nreg)
     : undefined;
+  const uniquePersonIdentityMetadataNonPrimaryScope =
+    queryHasExplicitPersonIdentity &&
+    !queryRequestsPrimaryLawLikeAct(query, documentTypeHints) &&
+    !!metadataScopeActCandidate?.rada_nreg &&
+    metadataScopeActKind !== 'PRIMARY_LAW' &&
+    metadataScopeMatchesExplicitPersonIdentity &&
+    !!uniquePersonIdentityMatchingCandidate?.rada_nreg &&
+    sameRadaNreg(uniquePersonIdentityMatchingCandidate.rada_nreg, metadataScopeActCandidate.rada_nreg) &&
+    selectedActsFinal.length === 1 &&
+    nonPrimaryAuthoritativeKinds.has(leadSelectedActBeforeScopeTrim?.act_kind ?? '') &&
+    (
+      explicitActScopeCueQuery ||
+      (documentTypeHints?.length ?? 0) > 0 ||
+      extractActReferenceSignals(query).length > 0
+    ) &&
+    !sameRadaNreg(leadSelectedActBeforeScopeTrim?.rada_nreg, metadataScopeActCandidate.rada_nreg) &&
+    !leadSelectedMatchesExplicitPersonIdentityBeforeScopeTrim &&
+    (
+      (metadataScopeEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 8 &&
+      (metadataScopeEvidence?.max_ordering_score ?? 0) >= 0.3
+    );
+  const preferredDistinctMetadataNonPrimaryScope =
+    (explicitActScopeCueQuery || uniquePersonIdentityMetadataNonPrimaryScope) &&
+    !queryRequestsPrimaryLawLikeAct(query, documentTypeHints) &&
+    !metadataSingleActConverged &&
+    !!metadataScopeActCandidate?.rada_nreg &&
+    metadataScopeActKind !== 'PRIMARY_LAW' &&
+    selectedActsFinal.length === 1 &&
+    nonPrimaryAuthoritativeKinds.has(leadSelectedActBeforeScopeTrim?.act_kind ?? '') &&
+    !sameRadaNreg(leadSelectedActBeforeScopeTrim?.rada_nreg, metadataScopeActCandidate.rada_nreg) &&
+      (
+        queryHasExplicitCalendarDate(query) ||
+        queryLooksAmendmentFocused(query) ||
+        uniquePersonIdentityMetadataNonPrimaryScope ||
+        (
+          hintCompatibleNearHeadNonPrimaryMetadataCandidate &&
+          metadataScopeHintCompatible &&
+        !leadSelectedHintCompatible
+      ) ||
+      (
+        metadataScopeHasStrongDistinctiveIdentityReason &&
+        softScopedTopMetadataEvidenceSupport
+      )
+    ) &&
+    (softScopedTopMetadataEvidenceSupport || uniquePersonIdentityMetadataNonPrimaryScope) &&
+    (metadataScopeHasStrongDistinctiveIdentityReason || uniquePersonIdentityMetadataNonPrimaryScope) &&
+    !leadSelectedHasStrongDistinctiveIdentityReason;
   const dominantExplicitNonPrimaryScope =
     explicitActScopeCueQuery &&
     !queryRequestsPrimaryLawLikeAct(query, documentTypeHints) &&
     selectedActsFinal.length > 1 &&
     !selectedActsFinal.some((act) => act.act_kind === 'PRIMARY_LAW') &&
+    (
+      !descriptiveActScopeQuery ||
+      candidateMatchesStrictExplicitActScopeQuery(leadSelectedCandidateBeforeScopeTrim, query)
+    ) &&
     nonPrimaryAuthoritativeKinds.has(leadSelectedActBeforeScopeTrim?.act_kind ?? '') &&
     (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.75 &&
     (leadSelectedEvidenceBeforeScopeTrim?.count_in_top30 ?? 0) >= 5 &&
@@ -1587,6 +1786,8 @@ export async function resolveSingleActScopeSelection(
         ? groundedActNregSet
         : metadataSingleActConverged && metadataScopeActCandidate?.rada_nreg
           ? new Set([metadataScopeActCandidate.rada_nreg])
+          : preferredDistinctMetadataNonPrimaryScope && metadataScopeActCandidate?.rada_nreg
+            ? new Set([metadataScopeActCandidate.rada_nreg])
           : evidenceSingleActConverged && evidenceSingleActNreg
             ? new Set([evidenceSingleActNreg])
         : null;
@@ -1605,6 +1806,8 @@ export async function resolveSingleActScopeSelection(
         ? 'GROUNDED_ACT_SCOPE_FORCED'
         : metadataSingleActConverged && metadataScopeActCandidate?.rada_nreg
           ? 'METADATA_ACT_SCOPE_FORCED'
+          : preferredDistinctMetadataNonPrimaryScope && metadataScopeActCandidate?.rada_nreg
+            ? 'METADATA_ACT_SCOPE_FORCED'
           : evidenceSingleActConverged && evidenceSingleActNreg
             ? 'EVIDENCE_ACT_SCOPE_FORCED'
         : null;
@@ -1615,6 +1818,8 @@ export async function resolveSingleActScopeSelection(
         ? 'GROUNDED_ACT_SCOPE_RECOVERED'
         : metadataSingleActConverged && metadataScopeActCandidate?.rada_nreg
           ? 'METADATA_ACT_SCOPE_RECOVERED'
+          : preferredDistinctMetadataNonPrimaryScope && metadataScopeActCandidate?.rada_nreg
+            ? 'METADATA_ACT_SCOPE_RECOVERED'
           : evidenceSingleActConverged && evidenceSingleActNreg
             ? 'EVIDENCE_ACT_SCOPE_RECOVERED'
         : null;
@@ -1662,6 +1867,8 @@ export async function resolveSingleActScopeSelection(
             radaNreg: scopeNreg,
             chunksEvidenceTopActs,
           }) ||
+          softScopedTopMetadataEvidenceSupport ||
+          softScopedNonPrimaryMetadataCandidate ||
           (
             metadataGroundedActCandidates.length === 1 &&
             (evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&

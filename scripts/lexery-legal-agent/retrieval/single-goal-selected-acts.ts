@@ -7,15 +7,27 @@ import {
   extractStructuredActIdentifiers,
   extractActReferenceSignals,
   extractQuotedActTitleFragments,
+  queryLooksAmendmentFocused,
   type ActMeta,
 } from './act-taxonomy-store.js';
 import { deriveCoverageGap } from './coverage-gap.js';
+import {
+  isDomainHintAlignedFamily,
+  isProceduralFamilyKey,
+  isSpecificDomainHint,
+  toFamilyKey,
+} from './family-alignment.js';
 import { computeFamilyEvidence, toFamilyEvidenceSummary, type FamilyEvidence } from './family-evidence.js';
 import { hasExplicitActScopeCue } from './goal-splitter.js';
 import {
+  candidateMatchesExplicitPersonIdentityQuery,
+  hasActTitleSupportOverlap,
   isExplicitlyHintedSupportActCandidate,
   isInterrogativePrimaryLawLocatorQuery,
   isMetadataGroundedActCandidate,
+  queryHasExplicitPersonIdentityCue,
+  isTrustedExplicitGroundedActScopeCandidate,
+  queryHasExplicitCalendarDate,
   queryRequestsPrimaryLawLikeAct,
   resolveSingleActScopeSelection,
 } from './single-goal-act-scope.js';
@@ -35,6 +47,7 @@ import {
   buildSelectedActs,
   classifyActKind,
   computeChunksEvidenceTopActs,
+  documentTypeHintMatches,
   isExplicitlyHintedNonPrimaryAct,
   SELECTED_ACTS_MAX_OUT,
   type ActCandidateInput,
@@ -48,6 +61,7 @@ import {
 } from './selected-acts-finalizer.js';
 import type { CoverageGap, RawHit } from './types.js';
 import { normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
+export { isDomainHintAlignedFamily } from './family-alignment.js';
 
 type QueryRewriteMetaLike = {
   called?: boolean;
@@ -213,60 +227,330 @@ export function normalizeFinalReasonCodes(reasonCodes: string[], lowConfidence: 
   return normalized.filter((code) => !LOW_CONFIDENCE_FINAL_ONLY_REASON_CODES.has(code));
 }
 
-function toFamilyKey(category: string | undefined | null): string {
-  return (category ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim() || 'unknown';
+export function shouldConfirmSoftProceduralSingleAct(input: {
+  query: string;
+  domainHint?: string;
+  reasonCodes: string[];
+  topScore?: number | null;
+  selectedActsCount: number;
+  leadAct?:
+    | {
+        act_kind?: string | null;
+        category?: string | null;
+      }
+    | null;
+  leadEvidence?:
+    | {
+        count_in_top30?: number;
+        best_rank_in_top30?: number;
+        rank_mass_top30?: number;
+        max_ordering_score?: number;
+      }
+    | null;
+  familyDominantOk: boolean;
+  proceduralOnlyPrimarySelection: boolean;
+  interrogativePrimaryLawLocatorQuery: boolean;
+}): boolean {
+  if (input.selectedActsCount !== 1) return false;
+  if (input.leadAct?.act_kind !== 'PRIMARY_LAW') return false;
+  if (!isProceduralFamilyKey(input.leadAct?.category)) return false;
+  if (!input.proceduralOnlyPrimarySelection) return false;
+  if (!input.familyDominantOk) return false;
+  if (input.interrogativePrimaryLawLocatorQuery) return false;
+  if (hasExplicitActScopeCue(input.query)) return false;
+
+  const blockingReasonCodes = new Set([
+    'OUT_OF_SCOPE',
+    'NO_STRONG_ACT_EVIDENCE',
+    'MISSING_TAXONOMY_CONVERGENCE',
+    'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+    'GROUNDED_ACT_SCOPE_NO_CONVERGENCE',
+    'METADATA_ACT_SCOPE_NO_CONVERGENCE',
+    'EVIDENCE_ACT_SCOPE_NO_CONVERGENCE',
+    'COVERAGE_MISS_SELECTED_ACTS',
+    'COVERAGE_GUARD_FAILED',
+    'FAMILY_GUARD_NO_EVIDENCE',
+    'FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE',
+    'NO_ACT_GROUNDING_PROCEDURAL_PRIMARY_ONLY',
+    'UNGROUNDED_PRIMARY_FALLBACK',
+    'UNGROUNDED_PRIMARY_COMPANION_FALLBACK',
+  ]);
+  if (input.reasonCodes.some((reasonCode) => blockingReasonCodes.has(reasonCode))) return false;
+
+  const recoveryReasonCodes = new Set([
+    'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+    'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+    'LOW_EVIDENCE',
+    'ACT_SELECTION_LOW_CONFIDENCE',
+    'CHUNKS_FAMILY_MISMATCH_DEMOTED',
+    'SUPPORT_FAMILY_MISMATCH_BLOCKED',
+  ]);
+  if (!input.reasonCodes.some((reasonCode) => recoveryReasonCodes.has(reasonCode))) return false;
+
+  const bestRank = input.leadEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const countInTop30 = input.leadEvidence?.count_in_top30 ?? 0;
+  const rankMassTop30 = input.leadEvidence?.rank_mass_top30 ?? 0;
+  const maxOrderingScore = input.leadEvidence?.max_ordering_score ?? 0;
+  const topScore = input.topScore ?? 0;
+
+  return (
+    bestRank <= 3 &&
+    countInTop30 >= 5 &&
+    rankMassTop30 >= 1.2 &&
+    maxOrderingScore >= 0.52 &&
+    topScore >= 0.56 &&
+    isDomainHintAlignedFamily(input.domainHint, input.leadAct?.category)
+  );
 }
 
-function normalizeDomainHintKey(domainHint: string | undefined | null): string {
-  const normalized = (domainHint ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim();
-  if (normalized === 'admin') return 'administrative';
-  return normalized;
+export function shouldConfirmSoftPrimarySingleAct(input: {
+  query?: string;
+  domainHint?: string;
+  reasonCodes: string[];
+  topScore?: number | null;
+  selectedActsCount: number;
+  leadAct?:
+    | {
+        act_kind?: string | null;
+        category?: string | null;
+      }
+    | null;
+  leadEvidence?:
+    | {
+        count_in_top30?: number;
+        best_rank_in_top30?: number;
+        rank_mass_top30?: number;
+        max_ordering_score?: number;
+      }
+    | null;
+  familyDominantOk: boolean;
+}): boolean {
+  if (input.selectedActsCount !== 1) return false;
+  if (input.leadAct?.act_kind !== 'PRIMARY_LAW') return false;
+  if (input.query && hasExplicitActScopeCue(input.query)) return false;
+  if (!input.familyDominantOk) return false;
+
+  const blockingReasonCodes = new Set([
+    'OUT_OF_SCOPE',
+    'MISSING_TAXONOMY_CONVERGENCE',
+    'COVERAGE_MISS_SELECTED_ACTS',
+    'COVERAGE_GUARD_FAILED',
+    'FAMILY_GUARD_NO_EVIDENCE',
+    'FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE',
+    'DOMAIN_HINT_PRIMARY_FAMILY_MISMATCH',
+    'DOMAIN_HINT_NO_ALIGNED_PRIMARY_FAMILY',
+    'NO_ACT_GROUNDING_PROCEDURAL_PRIMARY_ONLY',
+    'UNGROUNDED_MULTI_FAMILY_SELECTION',
+  ]);
+  if (input.reasonCodes.some((reasonCode) => blockingReasonCodes.has(reasonCode))) return false;
+
+  const recoveryReasonCodes = new Set([
+    'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+    'LOW_EVIDENCE',
+    'ACT_SELECTION_LOW_CONFIDENCE',
+    'CHUNKS_FAMILY_MISMATCH_DEMOTED',
+    'SUPPORT_FAMILY_MISMATCH_BLOCKED',
+    'UNGROUNDED_PRIMARY_FALLBACK',
+    'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+  ]);
+  if (!input.reasonCodes.some((reasonCode) => recoveryReasonCodes.has(reasonCode))) return false;
+
+  const bestRank = input.leadEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const countInTop30 = input.leadEvidence?.count_in_top30 ?? 0;
+  const rankMassTop30 = input.leadEvidence?.rank_mass_top30 ?? 0;
+  const maxOrderingScore = input.leadEvidence?.max_ordering_score ?? 0;
+  const topScore = input.topScore ?? 0;
+  const domainAligned =
+    !isSpecificDomainHint(input.domainHint) || isDomainHintAlignedFamily(input.domainHint, input.leadAct?.category);
+  if (!domainAligned) return false;
+
+  return (
+    (
+      bestRank <= 2 &&
+      countInTop30 >= 6 &&
+      rankMassTop30 >= 2 &&
+      maxOrderingScore >= 0.44 &&
+      topScore >= 0.56
+    ) ||
+    (
+      bestRank <= 4 &&
+      countInTop30 >= 8 &&
+      rankMassTop30 >= 3 &&
+      maxOrderingScore >= 0.42 &&
+      topScore >= 0.54
+    )
+  );
 }
 
-function isSpecificDomainHint(domainHint: string | undefined | null): boolean {
-  const normalized = normalizeDomainHintKey(domainHint);
-  return normalized.length > 0 && normalized !== 'general' && normalized !== 'unknown';
-}
-
-export function isDomainHintAlignedFamily(
-  domainHint: string | undefined | null,
-  familyKey: string | undefined | null
-): boolean {
-  const normalizedDomain = normalizeDomainHintKey(domainHint);
-  const normalizedFamily = toFamilyKey(familyKey);
-  if (!isSpecificDomainHint(normalizedDomain) || !normalizedFamily || normalizedFamily === 'unknown') return false;
-  if (normalizedFamily === normalizedDomain) return true;
-  if (normalizedFamily.startsWith(`${normalizedDomain}_`) || normalizedDomain.startsWith(`${normalizedFamily}_`)) {
-    return true;
+export function shouldConfirmSoftNonPrimarySingleAct(input: {
+  query?: string;
+  reasonCodes: string[];
+  topScore?: number | null;
+  selectedActsCount: number;
+  leadAct?:
+    | {
+        rada_nreg?: string | null;
+        act_title?: string | null;
+        document_type?: string | null;
+        act_kind?: string | null;
+      }
+    | null;
+  leadCandidate?:
+    | {
+        rada_nreg?: string | null;
+        title?: string | null;
+        document_type?: string | null;
+        document_type_slug?: string | null;
+        reasons?: string[] | null;
+        score?: number | null;
+      }
+    | null;
+  leadEvidence?:
+    | {
+        count_in_top30?: number;
+        best_rank_in_top30?: number;
+        rank_mass_top30?: number;
+        max_ordering_score?: number;
+      }
+    | null;
+}): boolean {
+  if (input.selectedActsCount !== 1) return false;
+  if (!input.leadAct?.act_kind || input.leadAct.act_kind === 'PRIMARY_LAW') return false;
+  if (input.query && hasExplicitActScopeCue(input.query)) {
+    const strictExplicitScopedCandidate =
+      input.leadCandidate &&
+      isTrustedExplicitGroundedActScopeCandidate(
+        {
+          rada_nreg: input.leadCandidate.rada_nreg ?? input.leadAct.rada_nreg ?? '',
+          title: input.leadCandidate.title ?? input.leadAct.act_title ?? null,
+          document_type: input.leadCandidate.document_type ?? input.leadAct.document_type ?? null,
+          document_type_slug: input.leadCandidate.document_type_slug ?? null,
+          reasons: input.leadCandidate.reasons ?? [],
+          score: input.leadCandidate.score ?? 0,
+        },
+        input.query,
+        METADATA_GROUNDING_REASON_CODES
+      );
+    if (!strictExplicitScopedCandidate) return false;
   }
-  if (normalizedDomain === 'tax_customs' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'tax' && normalizedFamily.startsWith('tax')) return true;
-  if (normalizedDomain === 'labor_social' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'labor' && normalizedFamily.startsWith('labor')) return true;
-  if (normalizedDomain === 'civil' && (normalizedFamily === 'civil' || normalizedFamily === 'civil_procedure')) {
-    return true;
+
+  const scopeConfirmationReasonCodes = new Set([
+    'GROUNDED_ACT_SCOPE_CONFIRMED',
+    'METADATA_ACT_SCOPE_CONFIRMED',
+    'EVIDENCE_ACT_SCOPE_CONFIRMED',
+    'GROUNDED_ACT_SCOPE_RECOVERED',
+    'METADATA_ACT_SCOPE_RECOVERED',
+    'EVIDENCE_ACT_SCOPE_RECOVERED',
+  ]);
+  const hasScopeConfirmation = input.reasonCodes.some((reasonCode) => scopeConfirmationReasonCodes.has(reasonCode));
+  const hasSoftDateScopedRecurringSurface =
+    !!input.query &&
+    !hasExplicitActScopeCue(input.query) &&
+    queryHasExplicitCalendarDate(input.query) &&
+    hasActTitleSupportOverlap(
+      input.query,
+      input.leadCandidate?.title ?? input.leadAct?.act_title ?? '',
+      input.leadCandidate?.document_type ?? input.leadAct?.document_type ?? null
+    );
+  if (!hasScopeConfirmation && !hasSoftDateScopedRecurringSurface) {
+    return false;
   }
+
+  const blockingReasonCodes = new Set([
+    'OUT_OF_SCOPE',
+    'MISSING_TAXONOMY_CONVERGENCE',
+    'COVERAGE_MISS_SELECTED_ACTS',
+    'COVERAGE_GUARD_FAILED',
+    'FAMILY_GUARD_NO_EVIDENCE',
+    'FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE',
+  ]);
+  if (input.reasonCodes.some((reasonCode) => blockingReasonCodes.has(reasonCode))) return false;
+
+  const recoveryReasonCodes = new Set([
+    'CALENDAR_SCOPED_ACT_NO_UNIQUE_CONVERGENCE',
+    'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+    'LOW_EVIDENCE',
+    'NO_STRONG_ACT_EVIDENCE',
+    'ACT_SELECTION_LOW_CONFIDENCE',
+    'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+    'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+    'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+  ]);
+  const recurringRecoveryReasonCodes = new Set([
+    'NON_PRIMARY_ONLY_WEAK_CONFIDENCE',
+    'NO_PRIMARY_LAW_EVIDENCE',
+    'LOW_EVIDENCE',
+  ]);
   if (
-    normalizedDomain === 'criminal' &&
-    (normalizedFamily === 'criminal' || normalizedFamily === 'criminal_procedure')
+    !input.reasonCodes.some((reasonCode) => recoveryReasonCodes.has(reasonCode)) &&
+    !(hasSoftDateScopedRecurringSurface && input.reasonCodes.some((reasonCode) => recurringRecoveryReasonCodes.has(reasonCode)))
   ) {
-    return true;
+    return false;
   }
-  if (
-    normalizedDomain === 'administrative' &&
-    (normalizedFamily === 'administrative' || normalizedFamily === 'administrative_offenses')
-  ) {
-    return true;
+
+  const bestRank = input.leadEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const countInTop30 = input.leadEvidence?.count_in_top30 ?? 0;
+  const rankMassTop30 = input.leadEvidence?.rank_mass_top30 ?? 0;
+  const maxOrderingScore = input.leadEvidence?.max_ordering_score ?? 0;
+  const topScore = input.topScore ?? 0;
+  const recoveredDateScopedRecurringSingleAct =
+    hasSoftDateScopedRecurringSurface &&
+    input.reasonCodes.includes('SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED') &&
+    countInTop30 >= 1 &&
+    bestRank <= 4;
+  const hasExplicitDateScopedIdentityMatch =
+    !!input.query &&
+    queryHasExplicitCalendarDate(input.query) &&
+    (
+      (input.leadCandidate?.reasons ?? []).includes('rada_datred_match') ||
+      (input.leadCandidate?.reasons ?? []).includes('referenced_rada_datred_match') ||
+      (input.leadCandidate?.reasons ?? []).includes('rada_month_match') ||
+      (input.leadCandidate?.reasons ?? []).includes('referenced_rada_month_match')
+    );
+
+  if (hasSoftDateScopedRecurringSurface && !hasScopeConfirmation) {
+    return (
+      bestRank <= 4 &&
+      countInTop30 >= 1 &&
+      maxOrderingScore >= 0.39 &&
+      topScore >= 0.68 &&
+      (rankMassTop30 >= 0.2 || bestRank <= 2)
+    );
   }
-  return false;
+
+  if (hasScopeConfirmation && hasExplicitDateScopedIdentityMatch) {
+    if (recoveredDateScopedRecurringSingleAct) {
+      return (
+        bestRank <= 4 &&
+        countInTop30 >= 1 &&
+        maxOrderingScore >= 0.39 &&
+        topScore >= 0.68 &&
+        (rankMassTop30 >= 0.2 || bestRank <= 2)
+      );
+    }
+    return (
+      bestRank <= 2 &&
+      countInTop30 >= 1 &&
+      maxOrderingScore >= 0.39 &&
+      topScore >= 0.68 &&
+      rankMassTop30 >= 0.24
+    );
+  }
+
+  return (
+    (
+      bestRank <= 2 &&
+      maxOrderingScore >= 0.44 &&
+      topScore >= 0.52 &&
+      (countInTop30 >= 1 || rankMassTop30 >= 0.35)
+    ) ||
+    (
+      bestRank <= 5 &&
+      countInTop30 >= 3 &&
+      maxOrderingScore >= 0.38 &&
+      topScore >= 0.5
+    )
+  );
 }
 
 const METADATA_GROUNDING_REASON_CODES = new Set([
@@ -275,6 +559,214 @@ const METADATA_GROUNDING_REASON_CODES = new Set([
   'alias_match',
   'title_match',
 ]);
+
+type SoftNonPrimaryRecoveryCandidate = {
+  candidate: ActCandidateInput;
+  evidence?: BuildSelectedActsOutput['chunks_evidence_top_acts'][number];
+  reasonCode: 'METADATA_ACT_SCOPE_RECOVERED' | 'EVIDENCE_ACT_SCOPE_RECOVERED';
+};
+
+function getSoftNonPrimaryRecoveryCandidate(input: {
+  query: string;
+  reasonCodes: string[];
+  topScore?: number | null;
+  selectedActsFinal: SelectedActTraceItem[];
+  topActCandidate?: ActCandidateInput;
+  chunksEvidenceTopActs: BuildSelectedActsOutput['chunks_evidence_top_acts'];
+  metadataSingleActConverged: boolean;
+  metadataLeadEvidence?: BuildSelectedActsOutput['chunks_evidence_top_acts'][number];
+  evidenceSingleActConverged: boolean;
+  evidenceSingleActNreg?: string | null;
+  evidenceLeadEvidence?: BuildSelectedActsOutput['chunks_evidence_top_acts'][number];
+  actCandidatesTopHydrated: ActCandidateInput[];
+  documentTypeHints?: string[];
+}): SoftNonPrimaryRecoveryCandidate | null {
+  const blockingReasonCodes = new Set([
+    'OUT_OF_SCOPE',
+    'COVERAGE_MISS_SELECTED_ACTS',
+    'COVERAGE_GUARD_FAILED',
+    'FAMILY_GUARD_NO_EVIDENCE',
+    'FAMILY_GUARD_SKIPPED_STRONG_PRIMARY_COVERAGE',
+    'MISSING_TAXONOMY_CONVERGENCE',
+  ]);
+  if (input.reasonCodes.some((reasonCode) => blockingReasonCodes.has(reasonCode))) return null;
+  if (queryRequestsPrimaryLawLikeAct(input.query, input.documentTypeHints)) return null;
+
+  const recoveryReasonCodes = new Set([
+    'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+    'CALENDAR_SCOPED_ACT_NO_UNIQUE_CONVERGENCE',
+    'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+    'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+    'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+    'ACT_SELECTION_LOW_CONFIDENCE',
+    'LOW_EVIDENCE',
+    'NO_STRONG_ACT_EVIDENCE',
+    'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT',
+    'NON_PRIMARY_EVIDENCE_BLOCKED_PRIMARY_PRESENT',
+    'NON_PRIMARY_ONLY_WEAK_CONFIDENCE',
+    'NO_PRIMARY_LAW_EVIDENCE',
+  ]);
+  if (!input.reasonCodes.some((reasonCode) => recoveryReasonCodes.has(reasonCode))) return null;
+
+  const hasExplicitScopeCue = hasExplicitActScopeCue(input.query);
+  const hasSoftDateScopedRecurringSurface = queryHasExplicitCalendarDate(input.query);
+  const evidenceForCandidate = (radaNreg: string | null | undefined) =>
+    input.chunksEvidenceTopActs.find((item) => sameRadaNreg(item.rada_nreg, radaNreg));
+
+  const tryCandidate = (
+    candidate: ActCandidateInput | undefined,
+    evidence: BuildSelectedActsOutput['chunks_evidence_top_acts'][number] | undefined,
+    reasonCode: SoftNonPrimaryRecoveryCandidate['reasonCode']
+  ): SoftNonPrimaryRecoveryCandidate | null => {
+    if (!candidate?.rada_nreg) return null;
+    const kind = classifyActKind(
+      candidate.title ?? '',
+      candidate.document_type ?? null,
+      candidate.category ?? null,
+      candidate.document_type_slug ?? null
+    );
+    if (kind === 'PRIMARY_LAW' || kind === 'UNKNOWN') return null;
+    if (input.selectedActsFinal.some((act) => sameRadaNreg(act.rada_nreg, candidate.rada_nreg))) return null;
+
+    const strictExplicitScopedCandidate =
+      hasExplicitScopeCue &&
+      isTrustedExplicitGroundedActScopeCandidate(
+        {
+          rada_nreg: candidate.rada_nreg,
+          title: candidate.title ?? null,
+          document_type: candidate.document_type ?? null,
+          document_type_slug: candidate.document_type_slug ?? null,
+          reasons: candidate.reasons ?? [],
+          score: candidate.score ?? 0,
+        },
+        input.query,
+        METADATA_GROUNDING_REASON_CODES
+      );
+    const dateScopedRecurringSurface =
+      !hasExplicitScopeCue &&
+      hasSoftDateScopedRecurringSurface &&
+      hasActTitleSupportOverlap(
+        input.query,
+        candidate.title ?? '',
+        candidate.document_type ?? null
+      );
+    if (!strictExplicitScopedCandidate && !dateScopedRecurringSurface) return null;
+
+    const bestRank = evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+    const countInTop30 = evidence?.count_in_top30 ?? 0;
+    const rankMassTop30 = evidence?.rank_mass_top30 ?? 0;
+    const maxOrderingScore = evidence?.max_ordering_score ?? 0;
+    const topScore = input.topScore ?? 0;
+
+    if (dateScopedRecurringSurface && !strictExplicitScopedCandidate) {
+      if (bestRank > 4 || maxOrderingScore < 0.39 || topScore < 0.62) return null;
+      if (countInTop30 < 1 && rankMassTop30 < 0.24) return null;
+      return { candidate, evidence, reasonCode };
+    }
+
+    if (bestRank > 3 || maxOrderingScore < 0.36 || topScore < 0.48) return null;
+    if (countInTop30 < 1 && rankMassTop30 < 0.35 && (candidate.score ?? 0) < 2.5) return null;
+    return { candidate, evidence, reasonCode };
+  };
+
+  if (input.metadataSingleActConverged) {
+    const recoveredFromMetadata = tryCandidate(
+      input.topActCandidate,
+      input.metadataLeadEvidence,
+      'METADATA_ACT_SCOPE_RECOVERED'
+    );
+    if (recoveredFromMetadata) return recoveredFromMetadata;
+  }
+
+  if (input.evidenceSingleActConverged && input.evidenceSingleActNreg) {
+    const evidenceCandidate = input.actCandidatesTopHydrated.find((candidate) =>
+      sameRadaNreg(candidate.rada_nreg, input.evidenceSingleActNreg)
+    );
+    const recoveredFromEvidence = tryCandidate(
+      evidenceCandidate,
+      input.evidenceLeadEvidence,
+      'EVIDENCE_ACT_SCOPE_RECOVERED'
+    );
+    if (recoveredFromEvidence) return recoveredFromEvidence;
+  }
+
+  if (hasExplicitScopeCue) {
+    const trustedExplicitScopedCandidates = input.actCandidatesTopHydrated.filter((candidate) => {
+      const kind = classifyActKind(
+        candidate.title ?? '',
+        candidate.document_type ?? null,
+        candidate.category ?? null,
+        candidate.document_type_slug ?? null
+      );
+      if (kind === 'PRIMARY_LAW' || kind === 'UNKNOWN') return false;
+      return isTrustedExplicitGroundedActScopeCandidate(
+        {
+          rada_nreg: candidate.rada_nreg,
+          title: candidate.title ?? null,
+          document_type: candidate.document_type ?? null,
+          document_type_slug: candidate.document_type_slug ?? null,
+          reasons: candidate.reasons ?? [],
+          score: candidate.score ?? 0,
+        },
+        input.query,
+        METADATA_GROUNDING_REASON_CODES
+      );
+    });
+    const leadTrustedExplicitScopedCandidate = trustedExplicitScopedCandidates[0];
+    const runnerUpTrustedExplicitScopedCandidate = trustedExplicitScopedCandidates[1];
+    if (
+      leadTrustedExplicitScopedCandidate &&
+      (
+        !runnerUpTrustedExplicitScopedCandidate ||
+        (leadTrustedExplicitScopedCandidate.score ?? 0) >=
+          ((runnerUpTrustedExplicitScopedCandidate.score ?? 0) + 0.6)
+      )
+    ) {
+      const recoveredExplicitScopedCandidate = tryCandidate(
+        leadTrustedExplicitScopedCandidate,
+        evidenceForCandidate(leadTrustedExplicitScopedCandidate.rada_nreg),
+        'METADATA_ACT_SCOPE_RECOVERED'
+      );
+      if (recoveredExplicitScopedCandidate) return recoveredExplicitScopedCandidate;
+    }
+  }
+
+  if (hasSoftDateScopedRecurringSurface) {
+    const dateScopedRecurringCandidates = input.actCandidatesTopHydrated.filter((candidate) => {
+      const kind = classifyActKind(
+        candidate.title ?? '',
+        candidate.document_type ?? null,
+        candidate.category ?? null,
+        candidate.document_type_slug ?? null
+      );
+      if (kind === 'PRIMARY_LAW' || kind === 'UNKNOWN') return false;
+      if (!hasActTitleSupportOverlap(input.query, candidate.title ?? '', candidate.document_type ?? null)) {
+        return false;
+      }
+      const reasons = new Set(candidate.reasons ?? []);
+      return reasons.has('rada_datred_match') || reasons.has('rada_month_match');
+    });
+    const exactDateCandidates = dateScopedRecurringCandidates.filter((candidate) =>
+      (candidate.reasons ?? []).includes('rada_datred_match')
+    );
+    const recurringRecoveryCandidate =
+      exactDateCandidates.length === 1
+        ? exactDateCandidates[0]
+        : dateScopedRecurringCandidates.length === 1
+          ? dateScopedRecurringCandidates[0]
+          : undefined;
+    if (recurringRecoveryCandidate) {
+      const recoveredRecurringCandidate = tryCandidate(
+        recurringRecoveryCandidate,
+        evidenceForCandidate(recurringRecoveryCandidate.rada_nreg),
+        'EVIDENCE_ACT_SCOPE_RECOVERED'
+      );
+      if (recoveredRecurringCandidate) return recoveredRecurringCandidate;
+    }
+  }
+
+  return null;
+}
 
 export async function resolveSingleGoalSelectedActs(
   input: ResolveSingleGoalSelectedActsInput
@@ -897,6 +1389,175 @@ export async function resolveSingleGoalSelectedActs(
   const evidenceSingleActNreg = singleActScopeSelection.evidenceSingleActNreg;
   const calendarScopedRecurringActAmbiguous = singleActScopeSelection.calendarScopedRecurringActAmbiguous;
   const topActCandidate = singleActScopeSelection.topActCandidate;
+  const topActCandidateActKind = topActCandidate
+    ? classifyActKind(
+        topActCandidate.title ?? '',
+        topActCandidate.document_type,
+        topActCandidate.category,
+        topActCandidate.document_type_slug
+      )
+    : 'UNKNOWN';
+  const topActCandidateEvidence = topActCandidate?.rada_nreg
+    ? getByNormalizedNreg(chunksEvidenceByNreg, topActCandidate.rada_nreg)
+    : undefined;
+  const topActCandidateIdentityReasons = new Set(topActCandidate?.reasons ?? []);
+  const topActCandidateMetadataGrounded =
+    !!topActCandidate?.rada_nreg &&
+    isMetadataGroundedActCandidate(topActCandidate, query, METADATA_GROUNDING_REASON_CODES);
+  const topActCandidateDistinctiveIdentityGrounded =
+    topActCandidateMetadataGrounded &&
+    (
+      hasActTitleSupportOverlap(query, topActCandidate?.title ?? null, topActCandidate?.document_type ?? null) ||
+      [
+        'exact_identifier_match',
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'document_number_match',
+        'rada_datred_match',
+        'rada_month_match',
+      ].some((reasonCode) => topActCandidateIdentityReasons.has(reasonCode))
+    );
+  const topActCandidateTitleIdentityDominant =
+    !!topActCandidate?.rada_nreg &&
+    hasActTitleSupportOverlap(query, topActCandidate?.title ?? null, topActCandidate?.document_type ?? null) &&
+    [
+      'exact_identifier_match',
+      'exact_alias_match',
+      'exact_title_match',
+      'alias_match',
+      'title_match',
+      'document_number_match',
+      'rada_datred_match',
+      'rada_month_match',
+    ].some((reasonCode) => topActCandidateIdentityReasons.has(reasonCode));
+  const leadSelectedActBeforeAuthoritativeRealign = selected_acts_final[0];
+  const leadSelectedCandidateBeforeAuthoritativeRealign = leadSelectedActBeforeAuthoritativeRealign
+    ? actCandidatesTopHydrated.find((candidate) =>
+        sameRadaNreg(candidate.rada_nreg, leadSelectedActBeforeAuthoritativeRealign.rada_nreg)
+      )
+    : undefined;
+  const leadSelectedEvidenceBeforeAuthoritativeRealign = leadSelectedActBeforeAuthoritativeRealign
+    ? getByNormalizedNreg(chunksEvidenceByNreg, leadSelectedActBeforeAuthoritativeRealign.rada_nreg)
+    : undefined;
+  const leadSelectedIdentityReasonsBeforeAuthoritativeRealign = new Set(
+    leadSelectedCandidateBeforeAuthoritativeRealign?.reasons ?? []
+  );
+  const leadSelectedDistinctiveIdentityBeforeAuthoritativeRealign =
+    !!leadSelectedCandidateBeforeAuthoritativeRealign?.rada_nreg &&
+    isMetadataGroundedActCandidate(
+      leadSelectedCandidateBeforeAuthoritativeRealign,
+      query,
+      METADATA_GROUNDING_REASON_CODES
+    ) &&
+    (
+      hasActTitleSupportOverlap(
+        query,
+        leadSelectedCandidateBeforeAuthoritativeRealign?.title ??
+          leadSelectedActBeforeAuthoritativeRealign?.act_title ??
+          null,
+        leadSelectedCandidateBeforeAuthoritativeRealign?.document_type ??
+          leadSelectedActBeforeAuthoritativeRealign?.document_type ??
+          null
+      ) ||
+      [
+        'exact_identifier_match',
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'document_number_match',
+        'rada_datred_match',
+        'rada_month_match',
+      ].some((reasonCode) => leadSelectedIdentityReasonsBeforeAuthoritativeRealign.has(reasonCode))
+    );
+  const topActCandidateStrongEvidenceBackedIdentityLead =
+    !!topActCandidate?.rada_nreg &&
+    nonPrimaryAuthoritativeKinds.has(topActCandidateActKind) &&
+    topActCandidateTitleIdentityDominant &&
+    (topActCandidate.score ?? 0) >=
+      Math.max(3.5, (leadSelectedCandidateBeforeAuthoritativeRealign?.score ?? 0) + 2.5) &&
+    (topActCandidateEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&
+    (topActCandidateEvidence?.max_ordering_score ?? 0) + 0.015 >=
+      (leadSelectedEvidenceBeforeAuthoritativeRealign?.max_ordering_score ?? 0) &&
+    (
+      queryHasExplicitCalendarDate(query) ||
+      queryLooksAmendmentFocused(query) ||
+      explicitActScopeCueQuery
+    );
+  const topActCandidateCompetitiveAgainstChunksLead =
+    topActCandidateStrongEvidenceBackedIdentityLead ||
+    (
+      (topActCandidateEvidence?.rank_mass_top30 ?? 0) >=
+        (leadSelectedEvidenceBeforeAuthoritativeRealign?.rank_mass_top30 ?? 0) - 0.08 ||
+      (topActCandidateEvidence?.count_in_top30 ?? 0) >=
+        (leadSelectedEvidenceBeforeAuthoritativeRealign?.count_in_top30 ?? 0) - 1
+    );
+  const shouldRealignSingleNonPrimaryLeadToTopMetadataCandidate =
+    selected_acts_final.length === 1 &&
+    !selected_acts_final.some((act) => act.act_kind === 'PRIMARY_LAW') &&
+    !!topActCandidate?.rada_nreg &&
+    nonPrimaryAuthoritativeKinds.has(topActCandidateActKind) &&
+    !sameRadaNreg(topActCandidate.rada_nreg, leadSelectedActBeforeAuthoritativeRealign?.rada_nreg) &&
+    (
+      topActCandidateDistinctiveIdentityGrounded ||
+      topActCandidateStrongEvidenceBackedIdentityLead
+    ) &&
+    (topActCandidateEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <=
+      (leadSelectedEvidenceBeforeAuthoritativeRealign?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) &&
+    topActCandidateCompetitiveAgainstChunksLead &&
+    (
+      topActCandidateStrongEvidenceBackedIdentityLead ||
+      !leadSelectedDistinctiveIdentityBeforeAuthoritativeRealign ||
+      (topActCandidateEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) + 1 <=
+        (leadSelectedEvidenceBeforeAuthoritativeRealign?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY)
+    );
+  if (shouldRealignSingleNonPrimaryLeadToTopMetadataCandidate && topActCandidate) {
+    selected_acts_final = [
+      {
+        rada_nreg: topActCandidate.rada_nreg,
+        act_title: topActCandidate.title,
+        score: topActCandidate.score,
+        source_tags: uniqueStrings([
+          'TAXONOMY',
+          topActCandidateEvidence ? 'CHUNKS_EVIDENCE' : undefined,
+        ]),
+        document_type: topActCandidate.document_type ?? null,
+        category: topActCandidate.category ?? null,
+        act_kind: topActCandidateActKind,
+      },
+    ];
+    selected_acts_sources_breakdown_final = {
+      ...selected_acts_sources_breakdown_final,
+      from_taxonomy: uniqueStrings([
+        ...selected_acts_sources_breakdown_final.from_taxonomy,
+        topActCandidate.rada_nreg,
+      ]),
+      from_chunks_evidence: topActCandidateEvidence
+        ? uniqueStrings([
+            ...selected_acts_sources_breakdown_final.from_chunks_evidence,
+            topActCandidate.rada_nreg,
+          ])
+        : selected_acts_sources_breakdown_final.from_chunks_evidence,
+    };
+    const summary = summarizeSelectedActs(selected_acts_final as SelectedActOutput[]);
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_final: selected_acts_final as SelectedActOutput[],
+      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final ?? 0, 0.62),
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: uniqueStrings([
+          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
+          'AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE',
+        ]),
+      },
+      selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
+      selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
+    };
+    pushUnique(reasonCodes, 'AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE');
+  }
   const interrogativePrimaryLawLocatorQuery =
     isInterrogativePrimaryLawLocatorQuery(query) &&
     queryRequestsPrimaryLawLikeAct(query, documentTypeHints);
@@ -1035,14 +1696,80 @@ export async function resolveSingleGoalSelectedActs(
         sameRadaNreg(candidate.rada_nreg, leadSelectedActForAuthoritativeScope.rada_nreg)
       )
     : undefined;
+  const explicitPersonIdentityCueQuery = queryHasExplicitPersonIdentityCue(query);
   const leadSelectedMetadataGroundedForAuthoritativeScope = isMetadataGroundedActCandidate(
     leadSelectedCandidateForAuthoritativeScope,
     query,
     METADATA_GROUNDING_REASON_CODES
   );
+  const personIdentityMatchingCandidatesForAuthoritativeScope = explicitPersonIdentityCueQuery
+    ? actCandidatesTopHydrated.filter((candidate) =>
+        candidateMatchesExplicitPersonIdentityQuery(candidate.title ?? null, query)
+      )
+    : [];
+  const leadSelectedMatchesExplicitPersonIdentity =
+    explicitPersonIdentityCueQuery &&
+    candidateMatchesExplicitPersonIdentityQuery(
+      leadSelectedCandidateForAuthoritativeScope?.title ?? leadSelectedActForAuthoritativeScope?.act_title ?? null,
+      query
+    );
+  const uniqueLeadSelectedExplicitPersonIdentity =
+    leadSelectedMatchesExplicitPersonIdentity &&
+    personIdentityMatchingCandidatesForAuthoritativeScope.length === 1 &&
+    sameRadaNreg(
+      personIdentityMatchingCandidatesForAuthoritativeScope[0]?.rada_nreg,
+      leadSelectedActForAuthoritativeScope?.rada_nreg
+    );
+  const leadSelectedAuthoritativeHintCompatible =
+    !!leadSelectedCandidateForAuthoritativeScope?.rada_nreg &&
+    documentTypeHintMatches(
+      leadSelectedCandidateForAuthoritativeScope.document_type,
+      documentTypeHints ?? [],
+      leadSelectedCandidateForAuthoritativeScope.document_type_slug
+    );
   const leadSelectedAuthoritativeIdentityReasons = new Set(leadSelectedCandidateForAuthoritativeScope?.reasons ?? []);
+  const leadSelectedAuthoritativeTitleSupportOverlap = hasActTitleSupportOverlap(
+    query,
+    leadSelectedCandidateForAuthoritativeScope?.title ?? leadSelectedActForAuthoritativeScope?.act_title ?? null,
+    leadSelectedCandidateForAuthoritativeScope?.document_type ??
+      leadSelectedActForAuthoritativeScope?.document_type ??
+      null
+  );
+  const leadSelectedDistinctiveMetadataIdentityGrounded =
+    leadSelectedMetadataGroundedForAuthoritativeScope &&
+    (
+      leadSelectedAuthoritativeTitleSupportOverlap ||
+      leadSelectedMatchesExplicitPersonIdentity ||
+      [
+        'exact_alias_match',
+        'exact_title_match',
+        'alias_match',
+        'title_match',
+        'keyword_match',
+        'topic_match',
+      ].some((reasonCode) => leadSelectedAuthoritativeIdentityReasons.has(reasonCode))
+    );
+  const leadSelectedDistinctPersonIdentityGrounded =
+    leadSelectedMatchesExplicitPersonIdentity &&
+    (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+    (leadSelectedEvidence?.count_in_top30 ?? 0) >= 1 &&
+    (leadSelectedEvidence?.max_ordering_score ?? 0) >= 0.32 &&
+    (topScore ?? 0) >= 0.52;
+  const leadSelectedBoundedPersonIdentityScopeGrounded =
+    uniqueLeadSelectedExplicitPersonIdentity &&
+    leadSelectedAuthoritativeTitleSupportOverlap &&
+    (
+      (documentTypeHints?.length ?? 0) === 0 ||
+      leadSelectedAuthoritativeHintCompatible
+    ) &&
+    (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 8 &&
+    (leadSelectedEvidence?.count_in_top30 ?? 0) >= 1 &&
+    (leadSelectedEvidence?.max_ordering_score ?? 0) >= 0.3 &&
+    (topScore ?? 0) >= 0.62;
   const leadSelectedStrongDocumentIdentityGrounded =
-    leadSelectedMetadataGroundedForAuthoritativeScope ||
+    leadSelectedDistinctiveMetadataIdentityGrounded ||
+    leadSelectedDistinctPersonIdentityGrounded ||
+    leadSelectedBoundedPersonIdentityScopeGrounded ||
     [
       'exact_identifier_match',
       'exact_alias_match',
@@ -1051,11 +1778,19 @@ export async function resolveSingleGoalSelectedActs(
       'rada_datred_match',
       'rada_month_match',
     ].some((reasonCode) => leadSelectedAuthoritativeIdentityReasons.has(reasonCode));
+  const leadSelectedAuthoritativeScopeTrimmed =
+    reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED');
+  const leadSelectedAuthoritativeMetadataRealigned =
+    reasonCodes.includes('AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE');
   const softAuthoritativeNonPrimaryScopeResolved =
     !explicitPrimaryLawCueQuery &&
     !hasPrimarySelectedAct &&
     selected_acts_final.length === 1 &&
     nonPrimaryAuthoritativeKinds.has(selected_acts_final[0]?.act_kind ?? '') &&
+    (
+      (documentTypeHints?.length ?? 0) === 0 ||
+      leadSelectedAuthoritativeHintCompatible
+    ) &&
     leadSelectedStrongDocumentIdentityGrounded &&
     (
       (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.66 ||
@@ -1070,6 +1805,16 @@ export async function resolveSingleGoalSelectedActs(
         (leadSelectedEvidence?.count_in_top30 ?? 0) >= 3 &&
         (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 3 &&
         (leadSelectedEvidence?.max_ordering_score ?? 0) >= 0.45
+      ) ||
+      (
+        leadSelectedDistinctPersonIdentityGrounded &&
+        (topScore ?? 0) >= 0.5 &&
+        (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+        (leadSelectedEvidence?.count_in_top30 ?? 0) >= 1
+      ) ||
+      (
+        leadSelectedBoundedPersonIdentityScopeGrounded &&
+        (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.4
       )
     );
   const authoritativeNonPrimaryScopeResolved =
@@ -1079,10 +1824,31 @@ export async function resolveSingleGoalSelectedActs(
       !hasPrimarySelectedAct &&
       selected_acts_final.length === 1 &&
       nonPrimaryAuthoritativeKinds.has(selected_acts_final[0]?.act_kind ?? '') &&
-      (!strictExplicitActScopeReference || leadSelectedMetadataGroundedForAuthoritativeScope) &&
+      (
+        (documentTypeHints?.length ?? 0) === 0 ||
+        leadSelectedAuthoritativeHintCompatible
+      ) &&
+      (leadSelectedStrongDocumentIdentityGrounded || leadSelectedAuthoritativeScopeTrimmed) &&
       (selectedActsFinalMeta.selected_acts_confidence_final ?? 0) >= 0.75 &&
       (leadSelectedEvidence?.count_in_top30 ?? 0) >= 5 &&
       (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+      (topScore ?? 0) >= 0.5
+    ) ||
+    (
+      explicitActScopeCueQuery &&
+      !explicitPrimaryLawCueQuery &&
+      !hasPrimarySelectedAct &&
+      selected_acts_final.length === 1 &&
+      nonPrimaryAuthoritativeKinds.has(selected_acts_final[0]?.act_kind ?? '') &&
+      leadSelectedAuthoritativeMetadataRealigned &&
+      leadSelectedAuthoritativeTitleSupportOverlap &&
+      (
+        (documentTypeHints?.length ?? 0) === 0 ||
+        leadSelectedAuthoritativeHintCompatible
+      ) &&
+      (leadSelectedEvidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 2 &&
+      (leadSelectedEvidence?.count_in_top30 ?? 0) >= 1 &&
+      (leadSelectedEvidence?.max_ordering_score ?? 0) >= 0.39 &&
       (topScore ?? 0) >= 0.5
     ) ||
     softAuthoritativeNonPrimaryScopeResolved;
@@ -1438,14 +2204,104 @@ export async function resolveSingleGoalSelectedActs(
       evidenceActScopeResolved ||
       authoritativeNonPrimaryScopeResolved,
     preferPrimaryLawRetention: interrogativePrimaryLawLocatorQuery,
+    explicitActScopeCueQuery,
   });
   selected_acts_final = lowConfidenceSelectionNormalization.selectedActsFinal as SelectedActTraceItem[];
   selectedActsFinalMeta = lowConfidenceSelectionNormalization.selectedActsFinalMeta;
   reasonCodes.splice(0, reasonCodes.length, ...lowConfidenceSelectionNormalization.reasonCodes);
 
+  const softNonPrimaryRecoveryCandidate = getSoftNonPrimaryRecoveryCandidate({
+    query,
+    reasonCodes,
+    topScore,
+    selectedActsFinal: selected_acts_final,
+    topActCandidate,
+    chunksEvidenceTopActs,
+    metadataSingleActConverged,
+    metadataLeadEvidence,
+    evidenceSingleActConverged,
+    evidenceSingleActNreg,
+    evidenceLeadEvidence,
+    actCandidatesTopHydrated,
+    documentTypeHints,
+  });
+  if (softNonPrimaryRecoveryCandidate) {
+    const recoveredCandidate = softNonPrimaryRecoveryCandidate.candidate;
+    const recoveredEvidence = softNonPrimaryRecoveryCandidate.evidence;
+    const recoveredActKind = classifyActKind(
+      recoveredCandidate.title ?? '',
+      recoveredCandidate.document_type ?? null,
+      recoveredCandidate.category ?? null,
+      recoveredCandidate.document_type_slug ?? null
+    );
+    const recoveredSelectedActsRaw = [
+      {
+        rada_nreg: recoveredCandidate.rada_nreg,
+        act_title: recoveredCandidate.title,
+        score: recoveredEvidence?.max_ordering_score ?? recoveredCandidate.score,
+        why_selected:
+          recoveredEvidence
+            ? `soft_non_primary_recovery best_rank=${recoveredEvidence.best_rank_in_top30 ?? '-'} max_score=${(recoveredEvidence.max_ordering_score ?? 0).toFixed(2)}`
+            : 'soft_non_primary_recovery',
+        reason_tag: 'SOFT_NON_PRIMARY_RECOVERY',
+        source_tags: uniqueStrings([
+          'SOFT_NON_PRIMARY_RECOVERY',
+          taxonomyNregs.has(recoveredCandidate.rada_nreg) ? 'TAXONOMY' : undefined,
+          actsSearchNregs.includes(recoveredCandidate.rada_nreg) ? 'ACTS_SEARCH' : undefined,
+          recoveredEvidence ? 'CHUNKS_EVIDENCE' : undefined,
+        ]),
+        document_type: recoveredCandidate.document_type ?? null,
+        category: recoveredCandidate.category ?? null,
+        act_kind: recoveredActKind,
+      },
+    ] satisfies SelectedActOutput[];
+    selected_acts_final = await hydrateSelectedActsMeta(
+      recoveredSelectedActsRaw,
+      Math.max(selectedActsFinalMeta.selected_acts_confidence_final ?? 0, 0.56)
+    );
+    selected_acts_sources_breakdown_final = {
+      ...selected_acts_sources_breakdown_final,
+      from_taxonomy: uniqueStrings([
+        ...selected_acts_sources_breakdown_final.from_taxonomy,
+        taxonomyNregs.has(recoveredCandidate.rada_nreg) ? recoveredCandidate.rada_nreg : undefined,
+      ]),
+      from_acts_search: uniqueStrings([
+        ...selected_acts_sources_breakdown_final.from_acts_search,
+        actsSearchNregs.includes(recoveredCandidate.rada_nreg) ? recoveredCandidate.rada_nreg : undefined,
+      ]),
+      from_chunks_evidence: uniqueStrings([
+        ...selected_acts_sources_breakdown_final.from_chunks_evidence,
+        recoveredEvidence ? recoveredCandidate.rada_nreg : undefined,
+      ]),
+    };
+    pushUnique(reasonCodes, softNonPrimaryRecoveryCandidate.reasonCode);
+    pushUnique(reasonCodes, 'SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED');
+    const recoveredSummary = summarizeSelectedActs(selected_acts_final);
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_final: selected_acts_final,
+      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.56),
+      selected_acts_kinds_count_final: recoveredSummary.selected_acts_kinds_count,
+      selected_acts_document_types_top_final: recoveredSummary.selected_acts_document_types_top,
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: uniqueStrings([
+          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
+          softNonPrimaryRecoveryCandidate.reasonCode,
+          'SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED',
+        ]),
+      },
+    };
+  }
+
   const leadSelectedActAfterNormalization = selected_acts_final[0];
   const leadSelectedEvidenceAfterNormalization = leadSelectedActAfterNormalization
     ? getByNormalizedNreg(chunksEvidenceByNreg, leadSelectedActAfterNormalization.rada_nreg)
+    : undefined;
+  const leadSelectedCandidateAfterNormalization = leadSelectedActAfterNormalization
+    ? actCandidatesTopHydrated.find((candidate) =>
+        sameRadaNreg(candidate.rada_nreg, leadSelectedActAfterNormalization.rada_nreg)
+      )
     : undefined;
   const softPrimaryLawLocatorRecovered =
     interrogativePrimaryLawLocatorQuery &&
@@ -1501,6 +2357,139 @@ export async function resolveSingleGoalSelectedActs(
             'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
           ]
         ),
+      },
+    };
+  }
+
+  const softProceduralSingleActConfirmed = shouldConfirmSoftProceduralSingleAct({
+    query,
+    domainHint,
+    reasonCodes,
+    topScore,
+    selectedActsCount: selected_acts_final.length,
+    leadAct: leadSelectedActAfterNormalization,
+    leadEvidence: leadSelectedEvidenceAfterNormalization,
+    familyDominantOk: familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK'),
+    proceduralOnlyPrimarySelection,
+    interrogativePrimaryLawLocatorQuery,
+  });
+  if (softProceduralSingleActConfirmed) {
+    low_confidence_final = false;
+    reasonCodes.splice(
+      0,
+      reasonCodes.length,
+      ...removeReasonCodes(reasonCodes, [
+        'ACT_SELECTION_LOW_CONFIDENCE',
+        'LOW_EVIDENCE',
+        'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+        'DOMAIN_HINT_PRIMARY_FAMILY_MISMATCH',
+        'DOMAIN_HINT_NO_ALIGNED_PRIMARY_FAMILY',
+        'UNGROUNDED_MULTI_FAMILY_SELECTION',
+        'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+      ])
+    );
+    pushUnique(reasonCodes, 'SOFT_PROCEDURAL_SINGLE_ACT_CONFIRMED');
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.58),
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: [
+          ...removeReasonCodes(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? [], [
+            'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+          ]),
+          'SOFT_PROCEDURAL_SINGLE_ACT_CONFIRMED',
+        ],
+      },
+    };
+  }
+
+  const softPrimarySingleActConfirmed = shouldConfirmSoftPrimarySingleAct({
+    query,
+    domainHint,
+    reasonCodes,
+    topScore,
+    selectedActsCount: selected_acts_final.length,
+    leadAct: leadSelectedActAfterNormalization,
+    leadEvidence: leadSelectedEvidenceAfterNormalization,
+    familyDominantOk: familyEvidence.reason_codes.includes('FAMILY_DOMINANT_OK'),
+  });
+  if (softPrimarySingleActConfirmed) {
+    low_confidence_final = false;
+    reasonCodes.splice(
+      0,
+      reasonCodes.length,
+      ...removeReasonCodes(reasonCodes, [
+        'ACT_SELECTION_LOW_CONFIDENCE',
+        'LOW_EVIDENCE',
+        'FRAGMENTED_PRIMARY_FAMILY_SELECTION',
+        'UNGROUNDED_PRIMARY_FALLBACK',
+        'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+      ])
+    );
+    pushUnique(reasonCodes, 'SOFT_PRIMARY_SINGLE_ACT_CONFIRMED');
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.58),
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: [
+          ...removeReasonCodes(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? [], [
+            'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+          ]),
+          'SOFT_PRIMARY_SINGLE_ACT_CONFIRMED',
+        ],
+      },
+    };
+  }
+
+  const softNonPrimarySingleActConfirmed = shouldConfirmSoftNonPrimarySingleAct({
+    query,
+    reasonCodes,
+    topScore,
+    selectedActsCount: selected_acts_final.length,
+    leadAct: leadSelectedActAfterNormalization,
+    leadCandidate: leadSelectedCandidateAfterNormalization,
+    leadEvidence: leadSelectedEvidenceAfterNormalization,
+  });
+  if (softNonPrimarySingleActConfirmed) {
+    low_confidence_final = false;
+    reasonCodes.splice(
+      0,
+      reasonCodes.length,
+      ...removeReasonCodes(reasonCodes, [
+        'ACT_SELECTION_LOW_CONFIDENCE',
+        'LOW_EVIDENCE',
+        'NO_STRONG_ACT_EVIDENCE',
+        'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE',
+        'CALENDAR_SCOPED_ACT_NO_UNIQUE_CONVERGENCE',
+        'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+        'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+      ])
+    );
+    pushUnique(reasonCodes, 'SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED');
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.58),
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: [
+          ...removeReasonCodes(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? [], [
+            'LOW_CONFIDENCE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED',
+            'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
+          ]),
+          'SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED',
+        ],
       },
     };
   }
