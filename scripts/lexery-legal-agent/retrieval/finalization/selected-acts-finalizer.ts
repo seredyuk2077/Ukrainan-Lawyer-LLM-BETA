@@ -3,8 +3,12 @@ import {
   type BuildSelectedActsOutput,
   type SelectedActOutput,
   type SelectedActsKindsCount,
-} from './selected-acts.js';
-import { normalizeRadaNreg, uniqueStrings } from './retrieval-utils.js';
+} from '../selected-acts.js';
+import { normalizeRadaNreg, uniqueStrings } from '../retrieval-utils.js';
+
+export type SelectedActsSourcesBreakdownLike = BuildSelectedActsOutput['selected_acts_sources_breakdown'] & {
+  from_routing_hints?: string[];
+};
 
 export function summarizeSelectedActs(acts: SelectedActOutput[]): {
   selected_acts_kinds_count: SelectedActsKindsCount;
@@ -58,6 +62,74 @@ export interface FinalizeSelectedActsAfterRoutingOutput {
   selected_acts_kinds_count_final: SelectedActsKindsCount;
   selected_acts_document_types_top_final?: string[];
   routing_hints_recovered_with_retrieval_evidence: boolean;
+}
+
+export function updateSelectedActsFinalMeta(
+  selectedActsFinalMeta: FinalizeSelectedActsAfterRoutingOutput,
+  selectedActsFinal: SelectedActOutput[],
+  minConfidenceCap: number,
+  addedReasonCodes: string[]
+): FinalizeSelectedActsAfterRoutingOutput {
+  const summary = summarizeSelectedActs(selectedActsFinal);
+  const nextReasonCodes = uniqueStrings([
+    ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
+    ...addedReasonCodes,
+  ]);
+  return {
+    ...selectedActsFinalMeta,
+    selected_acts_final: selectedActsFinal,
+    selected_acts_confidence_final:
+      selectedActsFinal.length === 0
+        ? Math.min(selectedActsFinalMeta.selected_acts_confidence_final, minConfidenceCap)
+        : Math.min(selectedActsFinalMeta.selected_acts_confidence_final, Math.max(minConfidenceCap, 0.55)),
+    selected_acts_decision_final: {
+      ...selectedActsFinalMeta.selected_acts_decision_final,
+      reason_codes: nextReasonCodes,
+    },
+    selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
+    selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
+  };
+}
+
+export function syncSelectedActsSourcesBreakdown(
+  selectedActsSourcesBreakdown: SelectedActsSourcesBreakdownLike | undefined,
+  selectedActsFinal: Array<Pick<SelectedActOutput, 'rada_nreg' | 'source_tags'>>
+): SelectedActsSourcesBreakdownLike | undefined {
+  if (!selectedActsSourcesBreakdown && selectedActsFinal.length === 0) return undefined;
+
+  const selectedNregs = new Set(
+    selectedActsFinal.map((act) => normalizeRadaNreg(act.rada_nreg)).filter(Boolean)
+  );
+  const retainMatchingNregs = (values: Array<string | null | undefined>): string[] =>
+    uniqueStrings(values.filter((radaNreg) => selectedNregs.has(normalizeRadaNreg(radaNreg))));
+
+  const next: SelectedActsSourcesBreakdownLike = {
+    from_taxonomy: retainMatchingNregs(selectedActsSourcesBreakdown?.from_taxonomy ?? []),
+    from_acts_search: retainMatchingNregs(selectedActsSourcesBreakdown?.from_acts_search ?? []),
+    from_chunks_evidence: retainMatchingNregs(selectedActsSourcesBreakdown?.from_chunks_evidence ?? []),
+    from_routing_hints: retainMatchingNregs(selectedActsSourcesBreakdown?.from_routing_hints ?? []),
+  };
+
+  for (const act of selectedActsFinal) {
+    const radaNreg = act.rada_nreg?.trim();
+    const normalizedRadaNreg = normalizeRadaNreg(radaNreg);
+    if (!radaNreg || !normalizedRadaNreg) continue;
+    const sourceTags = new Set(act.source_tags ?? []);
+    if (sourceTags.has('TAXONOMY')) {
+      next.from_taxonomy = uniqueStrings([...(next.from_taxonomy ?? []), radaNreg]);
+    }
+    if (sourceTags.has('ACTS_SEARCH')) {
+      next.from_acts_search = uniqueStrings([...(next.from_acts_search ?? []), radaNreg]);
+    }
+    if (sourceTags.has('CHUNKS_EVIDENCE')) {
+      next.from_chunks_evidence = uniqueStrings([...(next.from_chunks_evidence ?? []), radaNreg]);
+    }
+    if (sourceTags.has('ROUTING_HINTS')) {
+      next.from_routing_hints = uniqueStrings([...(next.from_routing_hints ?? []), radaNreg]);
+    }
+  }
+
+  return next;
 }
 
 const ROUTING_HINTS_CONFIDENCE_FLOOR = 0.6;

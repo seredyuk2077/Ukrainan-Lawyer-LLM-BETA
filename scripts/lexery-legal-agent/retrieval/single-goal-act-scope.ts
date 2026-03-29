@@ -26,9 +26,11 @@ import {
   type SelectedActOutput,
 } from './selected-acts.js';
 import {
-  summarizeSelectedActs,
+  syncSelectedActsSourcesBreakdown,
+  updateSelectedActsFinalMeta,
   type FinalizeSelectedActsAfterRoutingOutput,
-} from './selected-acts-finalizer.js';
+  type SelectedActsSourcesBreakdownLike,
+} from './finalization/selected-acts-finalizer.js';
 import { normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
 import {
   buildNormalizedNregMap,
@@ -52,10 +54,6 @@ type SelectedActLike = {
   act_kind?: string;
   flags?: SelectedActOutput['flags'];
   confidence?: number;
-};
-
-type SelectedActsSourcesBreakdownLike = BuildSelectedActsOutput['selected_acts_sources_breakdown'] & {
-  from_routing_hints?: string[];
 };
 
 export interface ResolveSingleActScopeSelectionInput {
@@ -1783,21 +1781,12 @@ export async function resolveSingleActScopeSelection(
   if (dominantExplicitNonPrimaryScope && leadSelectedActBeforeScopeTrim) {
     selectedActsFinal = [leadSelectedActBeforeScopeTrim];
     pushUnique(reasonCodes, 'AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED');
-    const summary = summarizeSelectedActs(selectedActsFinal as SelectedActOutput[]);
-    selectedActsFinalMeta = {
-      ...selectedActsFinalMeta,
-      selected_acts_final: selectedActsFinal as SelectedActOutput[],
-      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.75),
-      selected_acts_decision_final: {
-        ...selectedActsFinalMeta.selected_acts_decision_final,
-        reason_codes: uniqueStrings([
-          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-          'AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED',
-        ]),
-      },
-      selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-      selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-    };
+    selectedActsFinalMeta = updateSelectedActsFinalMeta(
+      selectedActsFinalMeta,
+      selectedActsFinal as SelectedActOutput[],
+      0.75,
+      ['AUTHORITATIVE_NON_PRIMARY_SCOPE_TRIMMED']
+    );
   }
 
   const scopeConstrainedNregSet =
@@ -2052,46 +2041,32 @@ export async function resolveSingleActScopeSelection(
       }
     }
     if (hadOutOfScopeActs || selectedActsFinal.length > 0) {
-      const summary = summarizeSelectedActs(selectedActsFinal as SelectedActOutput[]);
-      selectedActsFinalMeta = {
-        ...selectedActsFinalMeta,
-        selected_acts_final: selectedActsFinal as SelectedActOutput[],
-        selected_acts_confidence_final:
-          selectedActsFinal.length > 0
-            ? Math.max(
-                selectedActsFinalMeta.selected_acts_confidence_final,
-                reasonCodes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY') ? 0.45 : 0.6
-              )
-            : Math.min(selectedActsFinalMeta.selected_acts_confidence_final, 0.5),
-        selected_acts_decision_final: {
-          ...selectedActsFinalMeta.selected_acts_decision_final,
-          reason_codes: uniqueStrings([
-            ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-            ...(scopeConstraintCode ? [scopeConstraintCode] : []),
-            ...(selectedActsFinal.length > 0 && scopeRecoveredCode ? [scopeRecoveredCode] : []),
-          ]),
-        },
-        selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-        selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-      };
+      selectedActsFinalMeta = updateSelectedActsFinalMeta(
+        selectedActsFinalMeta,
+        selectedActsFinal as SelectedActOutput[],
+        selectedActsFinal.length > 0
+          ? reasonCodes.includes('EMPTY_SELECTED_ACTS_RECOVERED_FROM_TAXONOMY')
+            ? 0.45
+            : 0.6
+          : 0.5,
+        [
+          ...(scopeConstraintCode ? [scopeConstraintCode] : []),
+          ...(selectedActsFinal.length > 0 && scopeRecoveredCode ? [scopeRecoveredCode] : []),
+        ]
+      );
     }
   }
 
-  const finalSelectedActNregs = new Set(selectedActsFinal.map((act) => normalizeRadaNreg(act.rada_nreg)).filter(Boolean));
-  selectedActsSourcesBreakdownFinal = {
-    from_taxonomy: selectedActsSourcesBreakdownFinal.from_taxonomy.filter((radaNreg) =>
-      finalSelectedActNregs.has(normalizeRadaNreg(radaNreg))
-    ),
-    from_acts_search: selectedActsSourcesBreakdownFinal.from_acts_search.filter((radaNreg) =>
-      finalSelectedActNregs.has(normalizeRadaNreg(radaNreg))
-    ),
-    from_chunks_evidence: selectedActsSourcesBreakdownFinal.from_chunks_evidence.filter((radaNreg) =>
-      finalSelectedActNregs.has(normalizeRadaNreg(radaNreg))
-    ),
-    from_routing_hints: selectedActsSourcesBreakdownFinal.from_routing_hints?.filter((radaNreg) =>
-      finalSelectedActNregs.has(normalizeRadaNreg(radaNreg))
-    ),
-  };
+  selectedActsSourcesBreakdownFinal =
+    syncSelectedActsSourcesBreakdown(
+      selectedActsSourcesBreakdownFinal,
+      selectedActsFinal as SelectedActOutput[]
+    ) ?? {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: [],
+      from_routing_hints: [],
+    };
 
   return {
     selectedActsFinal,

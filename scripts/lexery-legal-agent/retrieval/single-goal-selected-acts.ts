@@ -9,7 +9,7 @@ import {
   queryLooksAmendmentFocused,
   type ActMeta,
 } from './act-taxonomy-store.js';
-import { deriveCoverageGap } from './coverage-gap.js';
+import { deriveCoverageGap } from './finalization/coverage-gap.js';
 import {
   areCompatiblePrimaryFamilies,
   isDomainHintAlignedFamily,
@@ -36,8 +36,8 @@ import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
   shouldFlagProceduralPrimaryWithoutActGrounding,
-} from './single-goal-honesty.js';
-import { normalizeSingleGoalLowConfidenceSelection } from './single-goal-final-honesty.js';
+} from './finalization/single-goal-honesty.js';
+import { normalizeSingleGoalLowConfidenceSelection } from './finalization/single-goal-final-honesty.js';
 import {
   callRoutingHints,
   shouldCallRoutingHints,
@@ -57,9 +57,10 @@ import {
 } from './selected-acts.js';
 import {
   finalizeSelectedActsAfterRouting,
-  summarizeSelectedActs,
+  updateSelectedActsFinalMeta,
   type FinalizeSelectedActsAfterRoutingOutput,
-} from './selected-acts-finalizer.js';
+  type SelectedActsSourcesBreakdownLike,
+} from './finalization/selected-acts-finalizer.js';
 import type { CoverageGap, RawHit } from './types.js';
 import {
   buildNormalizedNregMap,
@@ -93,9 +94,7 @@ export type SelectedActTraceItem = {
   confidence?: number;
 };
 
-type SelectedActsSourcesBreakdown = BuildSelectedActsOutput['selected_acts_sources_breakdown'] & {
-  from_routing_hints?: string[];
-};
+type SelectedActsSourcesBreakdown = SelectedActsSourcesBreakdownLike;
 
 export type RoutingHintsUsedEffect = {
   added_act?: { rada_nreg: string; title: string; family_key: string; source: string };
@@ -1650,21 +1649,12 @@ export async function resolveSingleGoalSelectedActs(
           ])
         : selected_acts_sources_breakdown_final.from_chunks_evidence,
     };
-    const summary = summarizeSelectedActs(selected_acts_final as SelectedActOutput[]);
-    selectedActsFinalMeta = {
-      ...selectedActsFinalMeta,
-      selected_acts_final: selected_acts_final as SelectedActOutput[],
-      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final ?? 0, 0.62),
-      selected_acts_decision_final: {
-        ...selectedActsFinalMeta.selected_acts_decision_final,
-        reason_codes: uniqueStrings([
-          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-          'AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE',
-        ]),
-      },
-      selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-      selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-    };
+    selectedActsFinalMeta = updateSelectedActsFinalMeta(
+      selectedActsFinalMeta,
+      selected_acts_final as SelectedActOutput[],
+      0.62,
+      ['AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE']
+    );
     pushUnique(reasonCodes, 'AUTHORITATIVE_NON_PRIMARY_REALIGNED_TO_METADATA_EVIDENCE');
   }
   const interrogativePrimaryLawLocatorQuery =
@@ -2389,22 +2379,12 @@ export async function resolveSingleGoalSelectedActs(
     };
     pushUnique(reasonCodes, softNonPrimaryRecoveryCandidate.reasonCode);
     pushUnique(reasonCodes, 'SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED');
-    const recoveredSummary = summarizeSelectedActs(selected_acts_final);
-    selectedActsFinalMeta = {
-      ...selectedActsFinalMeta,
-      selected_acts_final: selected_acts_final,
-      selected_acts_confidence_final: Math.max(selectedActsFinalMeta.selected_acts_confidence_final, 0.56),
-      selected_acts_kinds_count_final: recoveredSummary.selected_acts_kinds_count,
-      selected_acts_document_types_top_final: recoveredSummary.selected_acts_document_types_top,
-      selected_acts_decision_final: {
-        ...selectedActsFinalMeta.selected_acts_decision_final,
-        reason_codes: uniqueStrings([
-          ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-          softNonPrimaryRecoveryCandidate.reasonCode,
-          'SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED',
-        ]),
-      },
-    };
+    selectedActsFinalMeta = updateSelectedActsFinalMeta(
+      selectedActsFinalMeta,
+      selected_acts_final,
+      0.56,
+      [softNonPrimaryRecoveryCandidate.reasonCode, 'SOFT_NON_PRIMARY_SINGLE_ACT_RECOVERED']
+    );
   }
 
   const leadSelectedActAfterNormalization = selected_acts_final[0];

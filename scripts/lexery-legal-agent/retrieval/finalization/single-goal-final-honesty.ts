@@ -1,13 +1,17 @@
-import type { FinalizeSelectedActsAfterRoutingOutput } from './selected-acts-finalizer.js';
-import { summarizeSelectedActs } from './selected-acts-finalizer.js';
-import type { SelectedActOutput } from './selected-acts.js';
-import { classifyActKind } from './selected-acts.js';
+import {
+  syncSelectedActsSourcesBreakdown,
+  updateSelectedActsFinalMeta,
+  type FinalizeSelectedActsAfterRoutingOutput,
+  type SelectedActsSourcesBreakdownLike,
+} from './selected-acts-finalizer.js';
+import type { SelectedActOutput } from '../selected-acts.js';
+import { classifyActKind } from '../selected-acts.js';
 import {
   areCompatiblePrimaryFamilies,
   isDomainHintAlignedFamily,
   toFamilyKey,
-} from './family-alignment.js';
-import { compareTrimEvidence, uniqueStrings } from './retrieval-utils.js';
+} from '../family-alignment.js';
+import { compareTrimEvidence, uniqueStrings } from '../retrieval-utils.js';
 
 type SelectedActLike = SelectedActOutput & {
   category?: string | null;
@@ -28,13 +32,6 @@ type ChunksEvidenceLike = {
   rank_mass_top30?: number;
   best_rank_in_top30?: number;
   max_ordering_score?: number;
-};
-
-type SelectedActsSourcesBreakdownLike = {
-  from_taxonomy?: string[];
-  from_acts_search?: string[];
-  from_chunks_evidence?: string[];
-  from_routing_hints?: string[];
 };
 
 export interface NormalizeSingleGoalLowConfidenceSelectionInput {
@@ -299,78 +296,6 @@ function buildRecoveredScopedPrimaryAct(
     score: recoveredCandidate.score,
     source_tags: ['TAXONOMY'],
   };
-}
-
-function updateSelectedActsFinalMeta(
-  selectedActsFinalMeta: FinalizeSelectedActsAfterRoutingOutput,
-  selectedActsFinal: SelectedActLike[],
-  minConfidenceCap: number,
-  addedReasonCodes: string[]
-): FinalizeSelectedActsAfterRoutingOutput {
-  const summary = summarizeSelectedActs(selectedActsFinal);
-  const nextReasonCodes = uniqueStrings([
-    ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
-    ...addedReasonCodes,
-  ]);
-  return {
-    ...selectedActsFinalMeta,
-    selected_acts_final: selectedActsFinal,
-    selected_acts_confidence_final:
-      selectedActsFinal.length === 0
-        ? Math.min(selectedActsFinalMeta.selected_acts_confidence_final, minConfidenceCap)
-        : Math.min(selectedActsFinalMeta.selected_acts_confidence_final, Math.max(minConfidenceCap, 0.55)),
-    selected_acts_decision_final: {
-      ...selectedActsFinalMeta.selected_acts_decision_final,
-      reason_codes: nextReasonCodes,
-    },
-    selected_acts_kinds_count_final: summary.selected_acts_kinds_count,
-    selected_acts_document_types_top_final: summary.selected_acts_document_types_top,
-  };
-}
-
-function syncSelectedActsSourcesBreakdown(
-  selectedActsSourcesBreakdown: SelectedActsSourcesBreakdownLike | undefined,
-  selectedActsFinal: SelectedActLike[]
-): SelectedActsSourcesBreakdownLike | undefined {
-  if (!selectedActsSourcesBreakdown && selectedActsFinal.length === 0) return undefined;
-
-  const selectedNregs = new Set(
-    selectedActsFinal.map((act) => act.rada_nreg?.trim()).filter(Boolean) as string[]
-  );
-  const next = {
-    from_taxonomy: uniqueStrings(
-      (selectedActsSourcesBreakdown?.from_taxonomy ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
-    ),
-    from_acts_search: uniqueStrings(
-      (selectedActsSourcesBreakdown?.from_acts_search ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
-    ),
-    from_chunks_evidence: uniqueStrings(
-      (selectedActsSourcesBreakdown?.from_chunks_evidence ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
-    ),
-    from_routing_hints: uniqueStrings(
-      (selectedActsSourcesBreakdown?.from_routing_hints ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
-    ),
-  };
-
-  for (const act of selectedActsFinal) {
-    const radaNreg = act.rada_nreg?.trim();
-    if (!radaNreg) continue;
-    const sourceTags = new Set(act.source_tags ?? []);
-    if (sourceTags.has('TAXONOMY')) {
-      next.from_taxonomy = uniqueStrings([...next.from_taxonomy, radaNreg]);
-    }
-    if (sourceTags.has('ACTS_SEARCH')) {
-      next.from_acts_search = uniqueStrings([...next.from_acts_search, radaNreg]);
-    }
-    if (sourceTags.has('CHUNKS_EVIDENCE')) {
-      next.from_chunks_evidence = uniqueStrings([...next.from_chunks_evidence, radaNreg]);
-    }
-    if (sourceTags.has('ROUTING_HINTS')) {
-      next.from_routing_hints = uniqueStrings([...next.from_routing_hints, radaNreg]);
-    }
-  }
-
-  return next;
 }
 
 export function normalizeSingleGoalLowConfidenceSelection(

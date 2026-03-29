@@ -77,7 +77,7 @@ import {
 import { decideWithinActExpansion } from './within-act-expansion-policy.js';
 import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
-import { deriveCoverageGap } from './coverage-gap.js';
+import { deriveCoverageGap } from './finalization/coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
 import { queryHasExplicitCalendarDate } from './single-goal-act-scope.js';
 import { buildSingleGoalDegradedTrace } from './single-goal-degraded-trace.js';

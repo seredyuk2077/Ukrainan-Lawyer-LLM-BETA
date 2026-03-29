@@ -1,6 +1,6 @@
 import { NOISE_PENALTY_POLICY_VERSION } from './hit-ranking.js';
 import { toFamilyEvidenceSummary, type FamilyEvidence } from './family-evidence.js';
-import type { FinalizeSelectedActsAfterRoutingOutput } from './selected-acts-finalizer.js';
+import type { FinalizeSelectedActsAfterRoutingOutput } from './finalization/selected-acts-finalizer.js';
 import type { CoverageGap, DegradedSources, RawHit, RetrievalTrace, SampleHit } from './types.js';
 import type {
   OodGuardResult,

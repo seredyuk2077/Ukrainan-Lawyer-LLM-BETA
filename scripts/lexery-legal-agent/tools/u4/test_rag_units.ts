@@ -74,10 +74,10 @@ import {
 import {
   finalizeSelectedActsAfterRouting,
   summarizeSelectedActs,
-} from '../../retrieval/selected-acts-finalizer.js';
-import { deriveCoverageGap } from '../../retrieval/coverage-gap.js';
+} from '../../retrieval/finalization/selected-acts-finalizer.js';
+import { deriveCoverageGap } from '../../retrieval/finalization/coverage-gap.js';
 import { buildSingleGoalDegradedTrace } from '../../retrieval/single-goal-degraded-trace.js';
-import { normalizeSingleGoalLowConfidenceSelection } from '../../retrieval/single-goal-final-honesty.js';
+import { normalizeSingleGoalLowConfidenceSelection } from '../../retrieval/finalization/single-goal-final-honesty.js';
 import {
   isDomainHintAlignedFamily,
   normalizeFinalReasonCodes,
@@ -98,7 +98,7 @@ import {
   canRelaxCoverageGuardWithActGrounding,
   hasStickySingleGoalLowConfidenceReason,
   shouldFlagProceduralPrimaryWithoutActGrounding,
-} from '../../retrieval/single-goal-honesty.js';
+} from '../../retrieval/finalization/single-goal-honesty.js';
 import {
   finalizeMultiGoalSelectedActs,
   hasStrongGoalSupportedMultiPrimaryCoverage,
