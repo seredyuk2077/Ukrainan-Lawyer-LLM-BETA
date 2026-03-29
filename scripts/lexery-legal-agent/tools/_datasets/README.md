@@ -35,6 +35,7 @@
 | `lldbi_absent_present_diverse_live_2026_03_28_cases.json` | verify_lldbi_absent_present | Diverse live absent→present batch з різними issuer-ами (`НБУ`, `КМУ`, `Голова ВРУ`, `Президент`) і soft legal wording без прямого naming акту; корисний для DocList-ready roundtrip rehearsal |
 | `soft_legal_prod_queries_2026_03_29.json` | run_final_manual_audit | Curated warm/lawyer-style soft production pack: law+bylaw, code+procedure, law+KSU, bylaw+bylaw, honest likely-missing-act surface |
 | `soft_legal_prod_queries_subagent_2026_03_29.json` | run_final_manual_audit | Subagent-generated soft production pack із природними lawyer-style питаннями по `code+procedure`, `law+procedure`, `law+bylaw`, `consumer/civil`, `admin/criminal contrast` |
+| `soft_legal_prod_queries_cicero_2026_03_29.json` | run_final_manual_audit | Jurist-subagent audit pack із особливо живими soft multi-question queries по `criminal+procedure`, `tax+admin court`, `family+property`, `labor+bylaw`, `public info`, `conflict of interest`, `DUI`, `mobilization boundary`, `enforcement`; корисний для ловлі over-split / false multi-goal regressions |
 
 ## Оновлення датасетів
 

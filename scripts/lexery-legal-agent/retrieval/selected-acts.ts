@@ -694,6 +694,17 @@ function hasMixedProcedureAndNonProcedureGoals(
   return goalTypes.has('procedure') && [...goalTypes].some((goalType) => goalType !== 'procedure');
 }
 
+function hasProcedureGoals(goalsSummary: Array<{ goal_type?: string }>): boolean {
+  return goalsSummary.some((goal) => String(goal.goal_type ?? '').trim().toLowerCase() === 'procedure');
+}
+
+function hasOnlyKnownNonProceduralGoals(goalsSummary: Array<{ goal_type?: string }>): boolean {
+  const normalizedGoalTypes = goalsSummary
+    .map((goal) => String(goal.goal_type ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  return normalizedGoalTypes.length === goalsSummary.length && normalizedGoalTypes.every((goalType) => goalType !== 'procedure');
+}
+
 function hasBlockingNonProceduralPrimaryCompanionEvidence(input: {
   item: ChunksEvidenceItem;
   candidateByNreg: Map<string, ActCandidateInput>;
@@ -717,8 +728,7 @@ function hasBlockingNonProceduralPrimaryCompanionEvidence(input: {
   const candidateFamilyKey = categoryToFamilyKey(candidate.category);
   if (
     input.topFamilyKey === 'unknown' ||
-    candidateFamilyKey === 'unknown' ||
-    input.topFamilyKey === candidateFamilyKey
+    candidateFamilyKey === 'unknown'
   ) {
     return false;
   }
@@ -806,6 +816,12 @@ function shouldAllowSingleActCoverageForMultiGoal(
   if (!topGoalSupport || topGoalSupport.size < goalsCount) return { allowed: false };
   const topIsProceduralPrimary =
     isProceduralPrimaryLawCandidate(topCandidate) && !candidateHasMetadataGrounding(topCandidate);
+  if (topIsProceduralPrimary && hasOnlyKnownNonProceduralGoals(goalsSummary)) {
+    return {
+      allowed: false,
+      blockedReason: 'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_OFF_GOAL',
+    };
+  }
   const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
   const hasBlockingNonProceduralPrimaryCompanion = chunksEvidenceTopActs.slice(1).some((item) =>
     hasBlockingNonProceduralPrimaryCompanionEvidence({

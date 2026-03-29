@@ -4,6 +4,26 @@ export function uniqueStrings(values: Array<string | null | undefined>): string[
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
+export function compareTrimEvidence(
+  left: {
+    score?: number;
+    rankMassTop30?: number;
+    bestRankInTop30?: number;
+  },
+  right: {
+    score?: number;
+    rankMassTop30?: number;
+    bestRankInTop30?: number;
+  }
+): number {
+  const rankMassDiff = (right.rankMassTop30 ?? 0) - (left.rankMassTop30 ?? 0);
+  if (rankMassDiff !== 0) return rankMassDiff;
+  const bestRankDiff =
+    (left.bestRankInTop30 ?? Number.POSITIVE_INFINITY) - (right.bestRankInTop30 ?? Number.POSITIVE_INFINITY);
+  if (bestRankDiff !== 0) return bestRankDiff;
+  return (right.score ?? 0) - (left.score ?? 0);
+}
+
 export function pushUnique(values: string[], value: string): void {
   if (!values.includes(value)) values.push(value);
 }

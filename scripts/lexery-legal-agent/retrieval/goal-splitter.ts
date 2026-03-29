@@ -793,8 +793,12 @@ function tryCompactSharedActorBundleGoals(
 ): EvidenceGoal[] | null {
   if (goals.length < 2) return null;
   if (countStrongActScopeCues(query) > 0) return null;
-  if (goals.some((goal) => goal.goal_type === 'liability')) return null;
   if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
+  const distinctGoalTypes = new Set(
+    goals.map((goal) => goal.goal_type).filter((goalType): goalType is EvidenceGoalType => Boolean(goalType))
+  );
+  const sharedActorLiabilityBundle = distinctGoalTypes.size === 1 && distinctGoalTypes.has('liability');
+  if (distinctGoalTypes.has('liability') && !sharedActorLiabilityBundle) return null;
   if (
     goals.some(
       (goal) =>
@@ -813,7 +817,10 @@ function tryCompactSharedActorBundleGoals(
   );
   if (distinctGoalDomains.size > 1) return null;
 
-  const actorSubject = extractLeadingActorSubject(extractSharedSubject(goals[0]?.subquery ?? query));
+  const baseSharedSubject = extractSharedSubject(goals[0]?.subquery ?? query);
+  const actorSubject = sharedActorLiabilityBundle
+    ? extractSubjectFocus(baseSharedSubject)
+    : extractLeadingActorSubject(baseSharedSubject);
   if (!actorSubject) return null;
   const sharedSubject = extractSubjectFocus(actorSubject);
   const normalizedSharedSubject = sharedSubject.toLowerCase();
@@ -842,9 +849,28 @@ function tryCompactSharedActorBundleGoals(
     }
     return false;
   };
+  const hasSharedLiabilityFollowUp = (subquery: string): boolean => {
+    const normalized = normalizeSubqueryForSemantics(subquery).toLowerCase();
+    if (normalized.startsWith(`${normalizedSharedSubject} `)) return true;
+    if (
+      /^(?:і\s+|та\s+)?(?:хто|де|коли|як|чи|скільки|які|який|яка|яке)(?:\s+взагалі)?(?=$|[^\p{L}\p{N}])/u.test(
+        normalized
+      )
+    ) {
+      return (
+        /так(?:у|ої|ою)\s+справ/u.test(normalized) ||
+        /(?:санкц|позбавлен|штраф|стягнен|розгляда|оскаржен|відповідальн)/u.test(normalized)
+      );
+    }
+    return false;
+  };
   if (
     followUpGoals.length === 0 ||
-    !followUpGoals.every((goal) => hasSharedActorFollowUp(goal.subquery))
+    !followUpGoals.every((goal) =>
+      sharedActorLiabilityBundle
+        ? hasSharedLiabilityFollowUp(goal.subquery)
+        : hasSharedActorFollowUp(goal.subquery)
+    )
   ) {
     return null;
   }
@@ -855,7 +881,10 @@ function tryCompactSharedActorBundleGoals(
   if (
     followUpGoals.some((goal) => {
       const normalized = normalizeSubqueryForSemantics(goal.subquery).toLowerCase();
-      return !hasSharedActorFollowUp(goal.subquery) && !normalized.includes(normalizedSharedSubject);
+      const matchesSharedFollowUp = sharedActorLiabilityBundle
+        ? hasSharedLiabilityFollowUp(goal.subquery)
+        : hasSharedActorFollowUp(goal.subquery);
+      return !matchesSharedFollowUp && !normalized.includes(normalizedSharedSubject);
     })
   ) {
     return null;
@@ -864,7 +893,12 @@ function tryCompactSharedActorBundleGoals(
   return [
     {
       id: 'goal_0',
-      goal_type: isComplianceContext ? 'compliance_check' : inferGoalType(query, false),
+      goal_type:
+        isComplianceContext
+          ? 'compliance_check'
+          : sharedActorLiabilityBundle
+            ? 'liability'
+            : inferGoalType(query, false),
       subquery: query.slice(0, 4000),
       domain_hint: domainHint,
       must_have_signals: mergeGoalSignals(goals),

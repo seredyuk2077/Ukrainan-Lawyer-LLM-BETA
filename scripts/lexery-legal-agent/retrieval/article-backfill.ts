@@ -11,6 +11,7 @@ import {
   type QueryCitationSelectors,
 } from './structural-citation.js';
 import type { RawHit } from './types.js';
+import { uniqueStrings } from './retrieval-utils.js';
 
 export interface ArticleBackfillMeta {
   added_count: number;
@@ -23,10 +24,6 @@ export interface ArticleBackfillMeta {
 }
 
 const STRUCTURAL_ONLY_BACKFILL_REF = '__structural_only__';
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
 
 export function deriveArticleBackfillPreferredNreg(
   taxonomyResult: TaxonomyCandidatesResult

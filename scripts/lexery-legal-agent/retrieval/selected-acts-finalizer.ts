@@ -45,7 +45,6 @@ export interface FinalizeSelectedActsAfterRoutingInput {
   selected_acts_final: SelectedActOutput[];
   base_confidence: number;
   base_decision: BuildSelectedActsOutput['selected_acts_decision'];
-  routing_hints_added_count: number;
   routing_hints_added_primary_law: boolean;
   routing_hints_added_nregs?: string[];
   retrieval_evidence_nregs?: string[];

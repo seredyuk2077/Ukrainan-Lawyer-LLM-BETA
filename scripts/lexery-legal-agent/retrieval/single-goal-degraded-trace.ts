@@ -1,4 +1,5 @@
 import type { CoverageGap, DegradedSources, RetrievalTrace } from './types.js';
+import { uniqueStrings } from './retrieval-utils.js';
 
 export interface BuildSingleGoalDegradedTraceInput {
   queryUsed: string;
@@ -11,10 +12,6 @@ export interface BuildSingleGoalDegradedTraceInput {
   coverageGap?: CoverageGap;
   reasonCodes?: string[];
   qdrantCallsCountTotal?: number;
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 export function buildSingleGoalDegradedTrace(

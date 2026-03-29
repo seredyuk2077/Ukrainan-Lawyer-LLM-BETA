@@ -146,6 +146,9 @@ export const RetrievalTraceSchema = z.object({
             act_candidates_top3: z.array(z.string()).optional(),
             hits_count: z.number().optional(),
             top_score: z.number().nullable().optional(),
+            split_source: z.string().optional(),
+            act_pool_size: z.number().optional(),
+            required_categories: z.array(z.string()).optional(),
           })
         )
         .optional(),
