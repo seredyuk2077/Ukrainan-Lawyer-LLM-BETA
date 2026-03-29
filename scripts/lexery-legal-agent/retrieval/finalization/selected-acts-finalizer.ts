@@ -4,7 +4,7 @@ import {
   type SelectedActOutput,
   type SelectedActsKindsCount,
 } from '../selected-acts.js';
-import { normalizeRadaNreg, uniqueStrings } from '../retrieval-utils.js';
+import { normalizeRadaNreg, uniqueStrings } from '../helpers/retrieval-utils.js';
 
 export type SelectedActsSourcesBreakdownLike = BuildSelectedActsOutput['selected_acts_sources_breakdown'] & {
   from_routing_hints?: string[];

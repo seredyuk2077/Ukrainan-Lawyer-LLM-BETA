@@ -1,5 +1,5 @@
-import type { RawHit, RawHitSource, SampleHit } from './types.js';
-import { buildHitCitationPath } from './structural-citation.js';
+import type { RawHit, RawHitSource, SampleHit } from '../types.js';
+import { buildHitCitationPath } from '../structural-citation.js';
 
 function readString(payload: Record<string, unknown>, key: string): string | null {
   const value = payload?.[key];

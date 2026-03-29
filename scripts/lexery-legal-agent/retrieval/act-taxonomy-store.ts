@@ -27,6 +27,7 @@ import {
   extractInterrogativeActLocatorSignals,
   looksLikeCompactActTitleFragmentQuery,
 } from './descriptive-act-title.js';
+import { uniqueStrings } from './helpers/retrieval-utils.js';
 
 const LEGISLATION_TABLE = 'legislation_documents';
 const MIN_TOKEN_LEN = 2;
@@ -1392,10 +1393,6 @@ export function extractQuotedActTitleFragments(value: string): string[] {
 
 export function shouldSkipApproximateActReferenceGrounding(signal: string): boolean {
   return extractQuotedActTitleFragments(signal).length > 0;
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
 function addToMap(map: Map<string, ActEntry[]>, key: string, entry: ActEntry): void {

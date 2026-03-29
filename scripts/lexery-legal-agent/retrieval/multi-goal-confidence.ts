@@ -26,7 +26,7 @@ import {
   type SelectedActOutput,
   type SelectedActsKindsCount,
 } from './selected-acts.js';
-import { compareTrimEvidence, sameRadaNreg, uniqueStrings } from './retrieval-utils.js';
+import { compareTrimEvidence, sameRadaNreg, uniqueStrings } from './helpers/retrieval-utils.js';
 import type { RawHit } from './types.js';
 
 type GoalSummaryLike = {

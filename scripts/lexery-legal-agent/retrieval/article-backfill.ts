@@ -2,7 +2,7 @@ import { extractArticleRefsStructured, type ArticleRefStructured } from '../lib/
 import type { TaxonomyCandidatesResult } from './act-taxonomy-store.js';
 import type { QdrantFilter, QdrantSearchOptions } from './qdrant-client.js';
 import { qdrantSearch } from './qdrant-client.js';
-import { payloadToRawHit } from './raw-hit-helpers.js';
+import { payloadToRawHit } from './helpers/raw-hit-helpers.js';
 import {
   countCitationMatches,
   extractQueryCitationSelectors,
@@ -11,7 +11,7 @@ import {
   type QueryCitationSelectors,
 } from './structural-citation.js';
 import type { RawHit } from './types.js';
-import { uniqueStrings } from './retrieval-utils.js';
+import { uniqueStrings } from './helpers/retrieval-utils.js';
 
 export interface ArticleBackfillMeta {
   added_count: number;

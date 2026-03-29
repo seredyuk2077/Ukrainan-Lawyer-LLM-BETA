@@ -12,7 +12,7 @@ import {
 } from './hit-ranking.js';
 import { qdrantSearch } from './qdrant-client.js';
 import type { QueryRewriteTraceMeta } from './query-rewrite-phase.js';
-import { payloadToRawHit } from './raw-hit-helpers.js';
+import { payloadToRawHit } from './helpers/raw-hit-helpers.js';
 import type { ReferenceExpansionMeta } from './reference-expander.js';
 import { expandReferences } from './reference-expander.js';
 import { computeChunksEvidenceTopActs } from './selected-acts.js';

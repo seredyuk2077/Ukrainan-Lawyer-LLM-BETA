@@ -1,7 +1,7 @@
 import type { SearchStep } from '../plan/types.js';
 import type { RawHit } from './types.js';
 import { qdrantSearch } from './qdrant-client.js';
-import { payloadToRawHit } from './raw-hit-helpers.js';
+import { payloadToRawHit } from './helpers/raw-hit-helpers.js';
 import { rrfMerge } from './rrf-merge.js';
 import {
   hasStrongSingleGoalTaxonomySignal,

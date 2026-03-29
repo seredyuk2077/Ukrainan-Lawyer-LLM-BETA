@@ -11,7 +11,7 @@ import {
   isDomainHintAlignedFamily,
   toFamilyKey,
 } from '../family-alignment.js';
-import { compareTrimEvidence, uniqueStrings } from '../retrieval-utils.js';
+import { compareTrimEvidence, uniqueStrings } from '../helpers/retrieval-utils.js';
 
 type SelectedActLike = SelectedActOutput & {
   category?: string | null;

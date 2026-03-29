@@ -39,7 +39,7 @@ import {
   pushUnique,
   sameRadaNreg,
   uniqueStrings,
-} from './retrieval-utils.js';
+} from './helpers/retrieval-utils.js';
 
 type SelectedActLike = {
   rada_nreg: string;

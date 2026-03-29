@@ -35,6 +35,7 @@ Retrieval-вузол Lexery Legal AI Agent. За вхідним `RunRecord` (que
 **Runtime (src):**
 - `scripts/lexery-legal-agent/retrieval/types.ts` — TypeScript типи + Zod схеми (RawHit, RetrievalTrace, MemoryRef)
 - `scripts/lexery-legal-agent/retrieval/cache-rag.ts` — runCacheRag: головний pipeline (embed → search → score → select → memory)
+- `scripts/lexery-legal-agent/retrieval/helpers/` — shared leaf helpers for raw-hit normalization, cache-rag support utilities, and cross-module retrieval primitives used by the hot path without dragging finalization logic back into `cache-rag.ts`
 - `scripts/lexery-legal-agent/retrieval/act-candidate-ranking.ts` — act candidate scoring/ranking (metadata + hits evidence + ACTS-2 fallback)
 - Act-candidate ranking now treats a specific U2 domain hint as a compatible family envelope, not only as an exact category string. For soft procedural queries this lets `criminal -> criminal_procedure`, `civil -> civil_procedure/family`, `administrative -> administrative_offenses/civil_procedure_administrative` compete before generic off-family process codes.
 - `scripts/lexery-legal-agent/retrieval/hit-ranking.ts` — hybrid ordering, coverage fusion, anti-noise, diversity cap

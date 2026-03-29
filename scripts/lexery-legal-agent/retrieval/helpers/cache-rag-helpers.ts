@@ -1,12 +1,12 @@
 import {
   getActMeta,
   type TaxonomyHintsUsed,
-} from './act-taxonomy-store.js';
-import { isProcedureCategory } from './goal-splitter.js';
+} from '../act-taxonomy-store.js';
+import { isProcedureCategory } from '../goal-splitter.js';
 import {
   classifyActKind,
   type SelectedActOutput,
-} from './selected-acts.js';
+} from '../selected-acts.js';
 
 export type RetrievalEntityInput =
   | { act_abbrev?: string; law_title?: string; article_ref?: string }

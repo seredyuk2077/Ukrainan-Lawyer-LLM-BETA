@@ -70,7 +70,7 @@ import {
   removeReasonCodes,
   sameRadaNreg,
   uniqueStrings,
-} from './retrieval-utils.js';
+} from './helpers/retrieval-utils.js';
 export { isDomainHintAlignedFamily } from './family-alignment.js';
 
 type QueryRewriteMetaLike = {

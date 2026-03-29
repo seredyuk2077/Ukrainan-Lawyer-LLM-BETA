@@ -75,7 +75,7 @@ import {
   summarizeChunkEvidenceActs,
 } from './within-act-pool.js';
 import { decideWithinActExpansion } from './within-act-expansion-policy.js';
-import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
+import { buildSampleHits, payloadToRawHit } from './helpers/raw-hit-helpers.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
 import { deriveCoverageGap } from './finalization/coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
@@ -104,14 +104,14 @@ import {
   runSingleGoalFirstPassSearch,
 } from './single-goal-first-pass.js';
 import { runSingleGoalHitPostprocess } from './single-goal-hit-postprocess.js';
-import { uniqueStrings } from './retrieval-utils.js';
+import { uniqueStrings } from './helpers/retrieval-utils.js';
 import {
   hasMixedProcedureAndNonProcedureGoals,
   hydrateSelectedActsMeta,
   normalizeRetrievalEntities,
   prioritizeProcedureActs,
   toLldbiHintsUsed,
-} from './cache-rag-helpers.js';
+} from './helpers/cache-rag-helpers.js';
 
 const u4PlannerSemaphore = new Semaphore(config.u4PlannerConcurrency);
 

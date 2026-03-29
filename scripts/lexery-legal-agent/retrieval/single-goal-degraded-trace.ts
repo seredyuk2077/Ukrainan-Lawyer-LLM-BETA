@@ -1,5 +1,5 @@
 import type { CoverageGap, DegradedSources, RetrievalTrace } from './types.js';
-import { uniqueStrings } from './retrieval-utils.js';
+import { uniqueStrings } from './helpers/retrieval-utils.js';
 
 export interface BuildSingleGoalDegradedTraceInput {
   queryUsed: string;

@@ -1,4 +1,4 @@
-import { normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
+import { normalizeStructuredActIdentifier } from '../../lib/structured-act-identifier.js';
 
 export function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
