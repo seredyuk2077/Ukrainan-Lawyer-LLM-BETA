@@ -628,6 +628,10 @@ export function shouldConfirmSoftPrimaryLawTwoActBundle(input: {
   if (!input.reasonCodes.some((reasonCode) => recoveryReasonCodes.has(reasonCode))) return false;
 
   const familyKeys = input.selectedActs.map((act) => toFamilyKey(act.category));
+  const hasDomainAlignedFamily = familyKeys.some((familyKey) =>
+    isDomainHintAlignedFamily(input.domainHint, familyKey)
+  );
+  if (isSpecificDomainHint(input.domainHint) && !hasDomainAlignedFamily) return false;
   if (!hasCompatibleSoftPrimaryBundleFamilies(input.domainHint, familyKeys)) return false;
 
   const evidenceItems = input.selectedActs.map((act) => input.evidenceByNreg.get(act.rada_nreg ?? ''));
@@ -639,6 +643,24 @@ export function shouldConfirmSoftPrimaryLawTwoActBundle(input: {
     (familyKey) => !isProceduralFamilyKey(familyKey)
   );
   return topScore >= (purelySubstantiveCompatibleBundle ? 0.45 : 0.5);
+}
+
+export function shouldForceSpecificDomainPrimarySelectionLowConfidence(input: {
+  domainHint?: string;
+  selectedActs: SoftBundleSelectedActLike[];
+  hasDomainAlignedPrimaryFamily: boolean;
+  leadSelectedMetadataGrounded: boolean;
+  exactActHitCount: number;
+  groundedActHitCount: number;
+  topScore?: number | null;
+}): boolean {
+  if (!isSpecificDomainHint(input.domainHint)) return false;
+  if (input.selectedActs.length === 0) return false;
+  if (!input.selectedActs.some((act) => act.act_kind === 'PRIMARY_LAW')) return false;
+  if (input.hasDomainAlignedPrimaryFamily) return false;
+  if (input.leadSelectedMetadataGrounded) return false;
+  if (input.exactActHitCount > 0 || input.groundedActHitCount > 0) return false;
+  return (input.topScore ?? 0) < 0.72;
 }
 
 const METADATA_GROUNDING_REASON_CODES = new Set([
@@ -1439,7 +1461,6 @@ export async function resolveSingleGoalSelectedActs(
     selected_acts_final,
     base_confidence: selectedActsResult.selected_acts_confidence,
     base_decision: selectedActsResult.selected_acts_decision,
-    routing_hints_added_count: routingHintsMeta.used_effect.added_count,
     routing_hints_added_primary_law: routingHintsAddedPrimaryLaw,
     routing_hints_added_nregs: selected_acts_sources_breakdown_final.from_routing_hints,
     retrieval_evidence_nregs: finalHits.slice(0, 30).map((hit) => hit.rada_nreg ?? '').filter(Boolean),
@@ -2630,6 +2651,50 @@ export async function resolveSingleGoalSelectedActs(
             'LOW_CONFIDENCE_SELECTED_ACTS_NARROWED',
           ]),
           'SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED',
+        ],
+      },
+    };
+  }
+
+  if (
+    shouldForceSpecificDomainPrimarySelectionLowConfidence({
+      domainHint,
+      selectedActs: selected_acts_final,
+      hasDomainAlignedPrimaryFamily,
+      leadSelectedMetadataGrounded,
+      exactActHitCount,
+      groundedActHitCount,
+      topScore,
+    })
+  ) {
+    low_confidence_final = true;
+    reasonCodes.splice(
+      0,
+      reasonCodes.length,
+      ...removeReasonCodes(reasonCodes, [
+        'SOFT_PROCEDURAL_SINGLE_ACT_CONFIRMED',
+        'SOFT_PRIMARY_SINGLE_ACT_CONFIRMED',
+        'SOFT_PRIMARY_TWO_ACT_BUNDLE_CONFIRMED',
+        'SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED',
+        'INTERROGATIVE_PRIMARY_LAW_LOCATOR_CONFIRMED',
+      ])
+    );
+    pushUnique(reasonCodes, 'DOMAIN_HINT_NO_ALIGNED_PRIMARY_FAMILY');
+    pushUnique(reasonCodes, 'LOW_EVIDENCE');
+    selectedActsFinalMeta = {
+      ...selectedActsFinalMeta,
+      selected_acts_confidence_final: Math.min(selectedActsFinalMeta.selected_acts_confidence_final, 0.54),
+      selected_acts_decision_final: {
+        ...selectedActsFinalMeta.selected_acts_decision_final,
+        reason_codes: [
+          ...removeReasonCodes(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? [], [
+            'SOFT_PROCEDURAL_SINGLE_ACT_CONFIRMED',
+            'SOFT_PRIMARY_SINGLE_ACT_CONFIRMED',
+            'SOFT_PRIMARY_TWO_ACT_BUNDLE_CONFIRMED',
+            'SOFT_NON_PRIMARY_SINGLE_ACT_CONFIRMED',
+            'INTERROGATIVE_PRIMARY_LAW_LOCATOR_CONFIRMED',
+          ]),
+          'DOMAIN_HINT_NO_ALIGNED_PRIMARY_FAMILY',
         ],
       },
     };

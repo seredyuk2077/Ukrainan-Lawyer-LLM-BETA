@@ -85,6 +85,7 @@ import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
 import {
   buildGoalSupportByActFromGoalsSummary,
   buildGoalSupportByActFromHits,
+  mergeGoalSupportMaps,
   preferEvidenceBackedGoalSupport,
   serializeGoalSupportMap,
 } from './goal-support.js';
@@ -1270,7 +1271,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     }
 
     const mergedMulti = dedupeHits(multiHits);
-    const goalSupportByAct = preferEvidenceBackedGoalSupport(
+    const goalSupportByAct = mergeGoalSupportMaps(
       buildGoalSupportByActFromHits(mergedMulti),
       goalSupportByActFromSummary
     );
@@ -1464,6 +1465,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         goalSupportByAct,
         domainHint,
         mismatchSignalsPresent: multiFamilyMismatchSignals,
+        finalHits: finalMulti,
       });
       multiReasonCodesFinal.push('LOW_CONFIDENCE_TAIL_TRIMMED');
     }
@@ -1500,6 +1502,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       groundedActHitCount: taxonomyResultEarly?.grounded_act_hit_count ?? 0,
       metadataGroundedActCount: finalizedMultiSelectedActs.metadataGroundedActCount,
       explicitActScopeCue: hasExplicitActScopeCue(query),
+      finalHits: finalMulti,
     });
     if (ungroundedMultiGoalFallback) {
       multiReasonCodesFinal.push('UNGROUNDED_MULTI_GOAL_FALLBACK');
@@ -1519,6 +1522,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         goalSupportByAct,
         domainHint,
         mismatchSignalsPresent: multiFamilyMismatchSignals,
+        finalHits: finalMulti,
       });
       const originalNormalizedNregs = [...new Set(selected_acts_multi.map((act) => act.rada_nreg))].sort();
       const updatedNormalizedNregs = [...new Set(normalizedMultiSelectedActs.map((act) => act.rada_nreg))].sort();
@@ -1539,9 +1543,26 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
         multiReasonCodesFinal.push('UNGROUNDED_MULTI_GOAL_TAIL_TRIMMED');
       }
     }
+    const relaxFinalFamilyConflictLowConfidence =
+      (
+        relaxFamilyConflictLowConfidence ||
+        (
+          !ungroundedMultiGoalFallback &&
+          selected_acts_multi.length >= 2 &&
+          finalizedMultiSelectedActs.metadataGroundedActCount > 0
+        )
+      ) &&
+      topLevelQuerySelectors.explicitSelectorCount === 0 &&
+      !topLevelQuerySelectors.noteMentioned;
+    if (
+      relaxFinalFamilyConflictLowConfidence &&
+      !multiReasonCodesFinal.includes('MULTI_GOAL_FAMILY_CONFLICT_EXPLAINED_BY_GOAL_COVERAGE')
+    ) {
+      multiReasonCodesFinal.push('MULTI_GOAL_FAMILY_CONFLICT_EXPLAINED_BY_GOAL_COVERAGE');
+    }
     const multiLowConfidence =
       finalizedMultiSelectedActs.selectedActsConfidence < 0.6 ||
-      (familyEvidenceMulti.family_conflict && !relaxFamilyConflictLowConfidence) ||
+      (familyEvidenceMulti.family_conflict && !relaxFinalFamilyConflictLowConfidence) ||
       multiPrimaryCoverageWeak ||
       multiWeakTailWithFamilyMismatch ||
       ungroundedMultiGoalFallback ||

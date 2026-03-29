@@ -26,17 +26,20 @@ import {
   type SelectedActOutput,
   type SelectedActsKindsCount,
 } from './selected-acts.js';
+import { compareTrimEvidence, sameRadaNreg, uniqueStrings } from './retrieval-utils.js';
+import type { RawHit } from './types.js';
 
 type GoalSummaryLike = {
   goal_id: string;
   goal_type?: string;
+  subquery_preview?: string;
   act_candidates_top3?: string[];
+  required_categories?: string[];
 };
 
 type GoalSummaryCoverageLike = GoalSummaryLike & {
   hits_count?: number;
   top_score?: number | null;
-  required_categories?: string[];
 };
 
 type SupportedActLike = {
@@ -127,10 +130,6 @@ const GENERIC_EXPLICIT_TITLE_ANCHOR_TOKENS = new Set([
   'саме',
   'цей',
 ]);
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
 
 function normalizeQuotedPrimaryAnchorKey(value: string | undefined | null): string {
   return String(value ?? '')
@@ -271,6 +270,165 @@ function countActsWithUniqueGoalContribution(
   }).length;
 }
 
+function countSummaryAnchoredGoalsForAct(
+  radaNreg: string,
+  goalsSummary: GoalSummaryLike[]
+): number {
+  return goalsSummary.filter((goal) =>
+    (goal.act_candidates_top3 ?? []).some((candidateRadaNreg) => sameRadaNreg(candidateRadaNreg, radaNreg))
+  ).length;
+}
+
+function countGoalLocalHitsForAct(
+  radaNreg: string,
+  hits: RawHit[],
+  requiredGoalIds: Set<string>
+): number {
+  return hits.filter(
+    (hit) =>
+      sameRadaNreg(hit.rada_nreg, radaNreg) &&
+      !!hit.goal_id &&
+      requiredGoalIds.has(String(hit.goal_id).trim())
+  ).length;
+}
+
+function countGoalAnchoredUniqueContributionsForAct(input: {
+  radaNreg: string;
+  selectedActs: SelectedActOutput[];
+  goalsSummary: GoalSummaryLike[];
+  goalSupportByAct: GoalSupportByAct;
+  requiredGoalIds: Set<string>;
+  finalHits: RawHit[];
+}): number {
+  const ownGoalIds = collectEffectiveGoalIdsForAct({
+    radaNreg: input.radaNreg,
+    goalsSummary: input.goalsSummary,
+    goalSupportByAct: input.goalSupportByAct,
+    requiredGoalIds: input.requiredGoalIds,
+    finalHits: input.finalHits,
+  });
+  if (ownGoalIds.size === 0) return 0;
+
+  const otherGoalIds = new Set<string>();
+  for (const act of input.selectedActs) {
+    if (sameRadaNreg(act.rada_nreg, input.radaNreg)) continue;
+    for (const goalId of collectEffectiveGoalIdsForAct({
+      radaNreg: act.rada_nreg,
+      goalsSummary: input.goalsSummary,
+      goalSupportByAct: input.goalSupportByAct,
+      requiredGoalIds: input.requiredGoalIds,
+      finalHits: input.finalHits,
+    })) {
+      otherGoalIds.add(goalId);
+    }
+  }
+
+  return [...ownGoalIds].filter((goalId) => {
+    if (otherGoalIds.has(goalId)) return false;
+    const summaryAnchored = input.goalsSummary.some(
+      (goal) =>
+        goal.goal_id === goalId &&
+        (goal.act_candidates_top3 ?? []).some((candidateRadaNreg) => sameRadaNreg(candidateRadaNreg, input.radaNreg))
+    );
+    if (summaryAnchored) return true;
+    return input.finalHits.some(
+      (hit) => sameRadaNreg(hit.rada_nreg, input.radaNreg) && String(hit.goal_id ?? '').trim() === goalId
+    );
+  }).length;
+}
+
+function collectEffectiveGoalIdsForAct(input: {
+  radaNreg: string;
+  goalsSummary: GoalSummaryLike[];
+  goalSupportByAct: GoalSupportByAct;
+  requiredGoalIds: Set<string>;
+  finalHits: RawHit[];
+}): Set<string> {
+  const goalIds = collectGoalIdsForAct(input.radaNreg, input.goalSupportByAct, input.requiredGoalIds);
+  for (const goal of input.goalsSummary) {
+    const goalId = goal.goal_id.trim();
+    if (!goalId || !input.requiredGoalIds.has(goalId)) continue;
+    if ((goal.act_candidates_top3 ?? []).some((candidateRadaNreg) => sameRadaNreg(candidateRadaNreg, input.radaNreg))) {
+      goalIds.add(goalId);
+      continue;
+    }
+    if (
+      input.finalHits.some(
+        (hit) => sameRadaNreg(hit.rada_nreg, input.radaNreg) && String(hit.goal_id ?? '').trim() === goalId
+      )
+    ) {
+      goalIds.add(goalId);
+    }
+  }
+  return goalIds;
+}
+
+function hasStrongGoalAnchoredCrossFamilyBundle(input: {
+  domainHint?: string;
+  goalsSummary: GoalSummaryLike[];
+  selectedActs: SelectedActOutput[];
+  goalSupportByAct: GoalSupportByAct;
+  finalHits?: RawHit[];
+  metadataGroundedActCount?: number;
+}): boolean {
+  const requiredGoalIds = new Set(
+    input.goalsSummary.map((goal) => goal.goal_id.trim()).filter(Boolean)
+  );
+  if (requiredGoalIds.size < 2 || input.selectedActs.length < 2) return false;
+
+  const distinctPrimaryFamilies = [
+    ...new Set(
+      input.selectedActs
+        .map((act) => toFamilyKey(act.category))
+        .filter((familyKey) => familyKey !== 'unknown')
+    ),
+  ];
+  if (distinctPrimaryFamilies.length < 2 || distinctPrimaryFamilies.length > 2) return false;
+
+  const coveredGoalIds = new Set<string>();
+  const finalHits = input.finalHits ?? [];
+  for (const act of input.selectedActs) {
+    for (const goalId of collectEffectiveGoalIdsForAct({
+      radaNreg: act.rada_nreg,
+      goalsSummary: input.goalsSummary,
+      goalSupportByAct: input.goalSupportByAct,
+      requiredGoalIds,
+      finalHits,
+    })) {
+      coveredGoalIds.add(goalId);
+    }
+  }
+  if (coveredGoalIds.size < requiredGoalIds.size) return false;
+
+  let anchoredActs = 0;
+  let uniquelyAnchoredActs = 0;
+  for (const act of input.selectedActs) {
+    const summaryAnchoredGoalCount = countSummaryAnchoredGoalsForAct(act.rada_nreg, input.goalsSummary);
+    const goalLocalHitCount = countGoalLocalHitsForAct(act.rada_nreg, finalHits, requiredGoalIds);
+    if (summaryAnchoredGoalCount === 0 && goalLocalHitCount === 0) continue;
+    anchoredActs += 1;
+    if (
+      countGoalAnchoredUniqueContributionsForAct({
+        radaNreg: act.rada_nreg,
+        selectedActs: input.selectedActs,
+        goalsSummary: input.goalsSummary,
+        goalSupportByAct: input.goalSupportByAct,
+        requiredGoalIds,
+        finalHits,
+      }) > 0
+    ) {
+      uniquelyAnchoredActs += 1;
+    }
+  }
+  if (anchoredActs < Math.min(2, input.selectedActs.length)) return false;
+  if (uniquelyAnchoredActs === 0) return false;
+
+  const hasDomainAlignedSelectedFamily = distinctPrimaryFamilies.some((familyKey) =>
+    isDomainHintAlignedFamily(input.domainHint, familyKey)
+  );
+  return hasDomainAlignedSelectedFamily || (input.metadataGroundedActCount ?? 0) > 0;
+}
+
 function collectGoalIdsForAct(
   radaNreg: string,
   goalSupportByAct: GoalSupportByAct,
@@ -279,26 +437,6 @@ function collectGoalIdsForAct(
   const supportedGoalIds = goalSupportByAct.get(radaNreg);
   if (!supportedGoalIds || supportedGoalIds.size === 0 || requiredGoalIds.size === 0) return new Set();
   return new Set([...supportedGoalIds].filter((goalId) => requiredGoalIds.has(goalId)));
-}
-
-function compareTrimEvidence(
-  left: {
-    score?: number;
-    rankMassTop30?: number;
-    bestRankInTop30?: number;
-  },
-  right: {
-    score?: number;
-    rankMassTop30?: number;
-    bestRankInTop30?: number;
-  }
-): number {
-  const rankMassDiff = (right.rankMassTop30 ?? 0) - (left.rankMassTop30 ?? 0);
-  if (rankMassDiff !== 0) return rankMassDiff;
-  const bestRankDiff =
-    (left.bestRankInTop30 ?? Number.POSITIVE_INFINITY) - (right.bestRankInTop30 ?? Number.POSITIVE_INFINITY);
-  if (bestRankDiff !== 0) return bestRankDiff;
-  return (right.score ?? 0) - (left.score ?? 0);
 }
 
 function hasStrongChunksEvidence(item: ChunksEvidenceItem | undefined): boolean {
@@ -902,6 +1040,7 @@ export function trimUngroundedMultiGoalFallbackSelection(input: {
   goalSupportByAct?: GoalSupportByAct;
   domainHint?: string;
   mismatchSignalsPresent?: boolean;
+  finalHits?: RawHit[];
 }): SelectedActOutput[] {
   const maxActs = Math.max(1, input.maxActs ?? 2);
   if (input.selectedActs.length === 0) return input.selectedActs;
@@ -938,11 +1077,22 @@ export function trimUngroundedMultiGoalFallbackSelection(input: {
       }
     }
     const evidence = evidenceByNreg.get(act.rada_nreg);
+    const summaryAnchoredGoalCount = countSummaryAnchoredGoalsForAct(act.rada_nreg, input.goalsSummary ?? []);
+    const goalLocalHitCount = countGoalLocalHitsForAct(act.rada_nreg, input.finalHits ?? [], requiredGoalIds);
+    const strongEvidence =
+      (evidence?.count_in_top30 ?? 0) >= CHUNKS_EVIDENCE_COUNT_THRESHOLD ||
+      (
+        (evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 5 &&
+        (evidence?.max_ordering_score ?? evidence?.max_score ?? act.score ?? 0) >= CHUNKS_EVIDENCE_SCORE_THRESHOLD
+      );
     return {
       act,
       coveredGoalIds,
       coveredGoalCount: coveredGoalIds.size,
       uniqueGoalCount: [...coveredGoalIds].filter((goalId) => !otherCoveredGoalIds.has(goalId)).length,
+      summaryAnchoredGoalCount,
+      goalLocalHitCount,
+      strongSummaryAnchor: summaryAnchoredGoalCount > 0 && strongEvidence,
       domainAligned: isDomainHintAlignedFamily(input.domainHint, toFamilyKey(act.category)),
       rankMassTop30: evidence?.rank_mass_top30 ?? 0,
       bestRankInTop30: evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY,
@@ -959,12 +1109,27 @@ export function trimUngroundedMultiGoalFallbackSelection(input: {
     const rightNewGoals = [...right.coveredGoalIds].filter((goalId) => !coveredGoalIds.has(goalId)).length;
     if (leftNewGoals !== rightNewGoals) return rightNewGoals - leftNewGoals;
     if (left.uniqueGoalCount !== right.uniqueGoalCount) return right.uniqueGoalCount - left.uniqueGoalCount;
-    if (left.domainAligned !== right.domainAligned) return Number(right.domainAligned) - Number(left.domainAligned);
+    if (left.strongSummaryAnchor !== right.strongSummaryAnchor) {
+      return Number(right.strongSummaryAnchor) - Number(left.strongSummaryAnchor);
+    }
+    if (left.summaryAnchoredGoalCount !== right.summaryAnchoredGoalCount) {
+      return right.summaryAnchoredGoalCount - left.summaryAnchoredGoalCount;
+    }
+    if (left.goalLocalHitCount !== right.goalLocalHitCount) {
+      return right.goalLocalHitCount - left.goalLocalHitCount;
+    }
     if (left.coveredGoalCount !== right.coveredGoalCount) return right.coveredGoalCount - left.coveredGoalCount;
-    return compareTrimEvidence(left, right);
+    const evidenceDiff = compareTrimEvidence(left, right);
+    if (evidenceDiff !== 0) return evidenceDiff;
+    if (left.domainAligned !== right.domainAligned) return Number(right.domainAligned) - Number(left.domainAligned);
+    return 0;
   };
 
   if (input.selectedActs.length <= maxActs) {
+    const hasStrongGoalAnchoredTwoActBundle =
+      input.selectedActs.length === 2 &&
+      metrics.filter((item) => item.strongSummaryAnchor).length === 2;
+    if (hasStrongGoalAnchoredTwoActBundle) return input.selectedActs;
     const shouldCollapseRedundantTwoActBundle =
       input.selectedActs.length === 2 &&
       (
@@ -1002,6 +1167,7 @@ export function trimLowConfidenceMultiGoalSelection(input: {
   goalSupportByAct?: GoalSupportByAct;
   domainHint?: string;
   mismatchSignalsPresent?: boolean;
+  finalHits?: RawHit[];
 }): SelectedActOutput[] {
   // Reuse the goal-aware trim policy so early low-confidence normalization
   // does not drop the only act with unique goal coverage before finalization.
@@ -1194,6 +1360,7 @@ export function shouldFlagUngroundedMultiGoalFallback(input: {
   groundedActHitCount?: number;
   metadataGroundedActCount?: number;
   explicitActScopeCue?: boolean;
+  finalHits?: RawHit[];
 }): boolean {
   const requiredGoalIds = new Set(
     input.goalsSummary.map((goal) => goal.goal_id.trim()).filter(Boolean)
@@ -1219,7 +1386,19 @@ export function shouldFlagUngroundedMultiGoalFallback(input: {
     return true;
   }
 
-  const coveredGoalIds = collectCoveredGoalIdsForActs(input.selectedActs, input.goalSupportByAct);
+  const finalHits = input.finalHits ?? [];
+  const coveredGoalIds = new Set<string>();
+  for (const act of input.selectedActs) {
+    for (const goalId of collectEffectiveGoalIdsForAct({
+      radaNreg: act.rada_nreg,
+      goalsSummary: input.goalsSummary,
+      goalSupportByAct: input.goalSupportByAct,
+      requiredGoalIds,
+      finalHits,
+    })) {
+      coveredGoalIds.add(goalId);
+    }
+  }
   if (coveredGoalIds.size < requiredGoalIds.size) return true;
   const strongSingleActProceduralBundle =
     input.selectedActs.length === 1 &&
@@ -1228,6 +1407,18 @@ export function shouldFlagUngroundedMultiGoalFallback(input: {
     input.explicitActScopeCue !== true &&
     (input.topScore ?? 0) >= 0.54;
   if (strongSingleActProceduralBundle) return false;
+  if (
+    hasStrongGoalAnchoredCrossFamilyBundle({
+      domainHint: input.domainHint,
+      goalsSummary: input.goalsSummary,
+      selectedActs: input.selectedActs,
+      goalSupportByAct: input.goalSupportByAct,
+      finalHits: input.finalHits,
+      metadataGroundedActCount,
+    })
+  ) {
+    return false;
+  }
   if (input.mismatchSignalsPresent && input.selectedActs.length >= 2) {
     const actsWithUniqueGoalContribution = countActsWithUniqueGoalContribution(
       input.selectedActs,

@@ -82,6 +82,7 @@ import {
   isDomainHintAlignedFamily,
   normalizeFinalReasonCodes,
   resolveSingleGoalSelectedActs,
+  shouldForceSpecificDomainPrimarySelectionLowConfidence,
   shouldConfirmSoftPrimaryLawTwoActBundle,
   shouldConfirmSoftPrimarySingleAct,
   shouldConfirmSoftNonPrimarySingleAct,
@@ -108,7 +109,7 @@ import {
   trimLowConfidenceMultiGoalSelection,
   trimUngroundedMultiGoalFallbackSelection,
 } from '../../retrieval/multi-goal-confidence.js';
-import { preferEvidenceBackedGoalSupport } from '../../retrieval/goal-support.js';
+import { mergeGoalSupportMaps, preferEvidenceBackedGoalSupport } from '../../retrieval/goal-support.js';
 import { hasStrongSingleGoalTaxonomySignal } from '../../retrieval/taxonomy-strength.js';
 import { buildBestProbe } from './audit_lldbi_act_coverage.js';
 
@@ -599,6 +600,25 @@ function testGoalSplitCarriesActorSubjectIntoLaborNeedFollowUp(): void {
     throw new Error(`Expected compacted labor goal to keep employer actor subject, got ${r.goals[0]?.subquery}`);
   }
   console.log('[OK] heuristicGoalSplit compacts same-actor labor bundle into one goal');
+}
+
+function testGoalSplitCompactsSharedActorLiabilityBundle(): void {
+  const q =
+    "Водія вперше зупинили у стані сп'яніння. Де дивитися санкцію, строк позбавлення права керування і хто взагалі розглядає таку справу?";
+  const r = heuristicGoalSplit(q, 'criminal', undefined);
+  if (r.goals.length !== 1) {
+    throw new Error(`Expected shared-actor liability bundle to compact into 1 goal, got ${r.goals.length}`);
+  }
+  if (!r.reason_codes.includes('shared_actor_bundle_compaction')) {
+    throw new Error(`Expected shared_actor_bundle_compaction for liability bundle, got ${JSON.stringify(r.reason_codes)}`);
+  }
+  if (r.goals[0]?.goal_type !== 'liability') {
+    throw new Error(`Expected compacted liability bundle to keep liability goal type, got ${JSON.stringify(r.goals[0])}`);
+  }
+  if (!r.goals[0]?.subquery.toLowerCase().includes("стані сп'яніння")) {
+    throw new Error(`Expected compacted liability bundle to keep offense context, got ${r.goals[0]?.subquery}`);
+  }
+  console.log('[OK] heuristicGoalSplit compacts shared-actor liability bundle into one goal');
 }
 
 function testGoalSplitAddsSpecificTaxAppealSignals(): void {
@@ -3590,6 +3610,25 @@ function testShouldConfirmSoftPrimaryLawTwoActBundle(): void {
     throw new Error('Did not expect off-family civil+tax bundle to be confirmable');
   }
 
+  const shouldRejectOffDomainCompatibleBundle = shouldConfirmSoftPrimaryLawTwoActBundle({
+    query: "Водія зупинили напідпитку, і клієнт нечітко питає про відповідальність та розгляд справи.",
+    domainHint: 'administrative',
+    reasonCodes: ['CHUNKS_FAMILY_MISMATCH_DEMOTED', 'LOW_EVIDENCE'],
+    topScore: 0.55,
+    selectedActs: [
+      { rada_nreg: '435-15', act_kind: 'PRIMARY_LAW', category: 'civil' },
+      { rada_nreg: '2947-14', act_kind: 'PRIMARY_LAW', category: 'family' },
+    ],
+    evidenceByNreg: new Map([
+      ['435-15', { count_in_top30: 5, best_rank_in_top30: 1, rank_mass_top30: 1.5, max_ordering_score: 0.54 }],
+      ['2947-14', { count_in_top30: 4, best_rank_in_top30: 3, rank_mass_top30: 0.8, max_ordering_score: 0.46 }],
+    ]),
+    familyDominantOk: true,
+  });
+  if (shouldRejectOffDomainCompatibleBundle) {
+    throw new Error('Did not expect a specific-domain off-domain same-cluster bundle to be confirmable');
+  }
+
   const shouldConfirmFamilyCivilBundle = shouldConfirmSoftPrimaryLawTwoActBundle({
     query:
       'Квартиру, куплену у шлюбі, один із подружжя продав без нотаріальної згоди другого. На які норми спиратися?',
@@ -3610,6 +3649,41 @@ function testShouldConfirmSoftPrimaryLawTwoActBundle(): void {
     throw new Error('Expected compatible civil+family soft bundle to recover from weak evidence');
   }
   console.log('[OK] soft primary-law two-act confirmation accepts real bundles and rejects off-family pairs');
+}
+
+function testShouldForceSpecificDomainPrimarySelectionLowConfidence(): void {
+  const shouldForceDuiLikeMismatch = shouldForceSpecificDomainPrimarySelectionLowConfidence({
+    domainHint: 'administrative',
+    selectedActs: [
+      { rada_nreg: '2947-14', act_kind: 'PRIMARY_LAW', category: 'civil' },
+      { rada_nreg: '2811-20', act_kind: 'PRIMARY_LAW', category: 'property_real_estate' },
+    ],
+    hasDomainAlignedPrimaryFamily: false,
+    leadSelectedMetadataGrounded: false,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    topScore: 0.51,
+  });
+  if (!shouldForceDuiLikeMismatch) {
+    throw new Error('Expected specific-domain off-family primary bundle without grounding to stay low-confidence');
+  }
+
+  const shouldAllowDomainAlignedSelection = shouldForceSpecificDomainPrimarySelectionLowConfidence({
+    domainHint: 'administrative',
+    selectedActs: [
+      { rada_nreg: '2747-15', act_kind: 'PRIMARY_LAW', category: 'administrative' },
+    ],
+    hasDomainAlignedPrimaryFamily: true,
+    leadSelectedMetadataGrounded: false,
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    topScore: 0.61,
+  });
+  if (shouldAllowDomainAlignedSelection) {
+    throw new Error('Expected domain-aligned primary selection not to be forced back into low-confidence');
+  }
+
+  console.log('[OK] specific-domain off-family primary bundles cannot clear low-confidence without grounding');
 }
 
 function testShouldConfirmSoftNonPrimarySingleAct(): void {
@@ -13959,6 +14033,216 @@ function testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProcedura
   console.log('[OK] strong non-procedural companion evidence blocks procedural single-act collapse');
 }
 
+function testSelectedActsBlocksProceduralSingleActCoverageWhenSameFamilyPrimaryCompanionRemains(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.6,
+        ordering_score: 0.78,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.58,
+        ordering_score: 0.74,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_1',
+      } as never,
+      {
+        rada_nreg: '2939-17',
+        title: 'Про доступ до публічної інформації',
+        category: 'administrative',
+        document_type: 'Закон',
+        r2_key: 'legislation/administrative/2939-17.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.66,
+        ordering_score: 0.67,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.93,
+        category: 'administrative',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '2939-17',
+        title: 'Про доступ до публічної інформації',
+        score: 0.88,
+        category: 'administrative',
+        document_type: 'Закон',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [
+      { goal_id: 'goal_0', goal_type: 'procedure' },
+      { goal_id: 'goal_1', goal_type: 'procedure' },
+    ],
+    goal_support_by_act: {
+      '2747-15': ['goal_0', 'goal_1'],
+      '2939-17': ['goal_0'],
+    },
+    taxonomyNregs: new Set(['2747-15', '2939-17']),
+    actsSearchNregs: ['2747-15', '2939-17'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.59,
+        max_score: 0.64,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.93,
+        max_ordering_score: 0.78,
+      },
+      {
+        rada_nreg: '2939-17',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.62,
+        max_score: 0.66,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 0.63,
+        max_ordering_score: 0.67,
+      },
+    ],
+  });
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Did not expect MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED when same-family non-procedural companion remains, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED')) {
+    throw new Error(
+      `Expected MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED for same-family substantive companion, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts.some((act) => act.rada_nreg === '2939-17')) {
+    throw new Error(`Expected access-to-information law companion to remain selected, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] same-family substantive companion blocks procedural single-act collapse');
+}
+
+function testSelectedActsBlocksProceduralSingleActCoverageWhenGoalsAreNotProcedural(): void {
+  const result = buildSelectedActs({
+    finalHits: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.6,
+        ordering_score: 0.77,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/administrative/2747-15.json',
+        json_path: '$.content.chunks[1].text',
+        score: 0.57,
+        ordering_score: 0.72,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_1',
+      } as never,
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        r2_key: 'legislation/administrative/80731-10.json',
+        json_path: '$.content.chunks[0].text',
+        score: 0.64,
+        ordering_score: 0.66,
+        source: 'lldbi_chunks',
+        goal_id: 'goal_0',
+      } as never,
+    ],
+    actCandidatesTop: [
+      {
+        rada_nreg: '2747-15',
+        title: 'Кодекс адміністративного судочинства України',
+        score: 0.91,
+        category: 'administrative',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+      {
+        rada_nreg: '80731-10',
+        title: 'Кодекс України про адміністративні правопорушення',
+        score: 0.82,
+        category: 'administrative_offenses',
+        document_type: 'Кодекс',
+        source_tier: 'ACTS_1',
+      },
+    ],
+    goals_summary: [
+      { goal_id: 'goal_0', goal_type: 'liability' },
+      { goal_id: 'goal_1', goal_type: 'liability' },
+    ],
+    goal_support_by_act: {
+      '2747-15': ['goal_0', 'goal_1'],
+      '80731-10': ['goal_0'],
+    },
+    taxonomyNregs: new Set(['2747-15', '80731-10']),
+    actsSearchNregs: ['2747-15', '80731-10'],
+    chunks_evidence_top_acts: [
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.58,
+        max_score: 0.63,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.9,
+        max_ordering_score: 0.77,
+      },
+      {
+        rada_nreg: '80731-10',
+        count_in_top30: 4,
+        avg_score_in_top30: 0.6,
+        max_score: 0.64,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 0.68,
+        max_ordering_score: 0.66,
+      },
+    ],
+  });
+  if (result.selected_acts_reason_codes.includes('MULTI_GOAL_SINGLE_ACT_COVERAGE_ALLOWED')) {
+    throw new Error(
+      `Did not expect procedural single-act relaxation for non-procedural goals, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts_reason_codes.includes('MULTI_GOAL_PROCEDURAL_SINGLE_ACT_OFF_GOAL')) {
+    throw new Error(
+      `Expected MULTI_GOAL_PROCEDURAL_SINGLE_ACT_OFF_GOAL when only liability goals are present, got ${JSON.stringify(result.selected_acts_reason_codes)}`
+    );
+  }
+  if (!result.selected_acts.some((act) => act.rada_nreg === '80731-10')) {
+    throw new Error(`Expected administrative-offense companion to remain selected, got ${JSON.stringify(result.selected_acts)}`);
+  }
+  console.log('[OK] procedural single-act collapse stays blocked when goals are not procedural');
+}
+
 function testSelectedActsRecoversMixedGoalPrimaryCompanionFromHitBackfill(): void {
   const result = buildSelectedActs({
     finalHits: [
@@ -16435,6 +16719,72 @@ function testShouldNotFlagUngroundedMultiGoalFallbackWhenGoalCoverageIsReal(): v
   console.log('[OK] multi-goal confidence helper keeps legitimate mixed-goal primary coverage');
 }
 
+function testShouldNotFlagUngroundedMultiGoalFallbackForStrongCrossFamilyGoalAnchoredBundle(): void {
+  const flagged = shouldFlagUngroundedMultiGoalFallback({
+    domainHint: 'administrative',
+    goalsSummary: [
+      {
+        goal_id: 'goal_0',
+        goal_type: 'procedure',
+        act_candidates_top3: ['2939-17', '2747-15'],
+      },
+      {
+        goal_id: 'goal_1',
+        goal_type: 'procedure',
+        act_candidates_top3: ['2747-15', '2073-20'],
+      },
+    ],
+    selectedActs: [
+      {
+        rada_nreg: '2747-15',
+        act_title: 'Кодекс адміністративного судочинства України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'administrative',
+      },
+      {
+        rada_nreg: '2939-17',
+        act_title: 'Про доступ до публічної інформації',
+        act_kind: 'PRIMARY_LAW',
+        category: 'digital_data',
+      },
+    ],
+    goalSupportByAct: new Map([
+      ['2747-15', new Set(['goal_1'])],
+      ['2939-17', new Set(['goal_0'])],
+    ]),
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: ['2747-15', '2939-17'],
+      from_acts_search: [],
+      from_chunks_evidence: ['2747-15', '2939-17'],
+    },
+    topScore: 0.59,
+    mismatchSignalsPresent: true,
+    metadataGroundedActCount: 2,
+    finalHits: [
+      {
+        rada_nreg: '2939-17',
+        goal_id: 'goal_0',
+        source: 'lldbi_chunks',
+        r2_key: 'r2://2939-17',
+        json_path: '$.content.chunks[0].text',
+        score: 0.62,
+      } as never,
+      {
+        rada_nreg: '2747-15',
+        goal_id: 'goal_1',
+        source: 'lldbi_chunks',
+        r2_key: 'r2://2747-15',
+        json_path: '$.content.chunks[0].text',
+        score: 0.58,
+      } as never,
+    ],
+  });
+  if (flagged) {
+    throw new Error('Did not expect strongly goal-anchored cross-family substantive+procedure bundle to be flagged');
+  }
+  console.log('[OK] multi-goal confidence helper keeps strong cross-family goal-anchored bundles');
+}
+
 function testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCovered(): void {
   const flagged = shouldFlagUngroundedMultiGoalFallback({
     domainHint: 'general',
@@ -16806,6 +17156,170 @@ function testPreferEvidenceBackedGoalSupportFallsBackToSummaryWhenHitsAreEmpty()
   console.log('[OK] preferred goal support falls back to summary support when hit-backed signals are absent');
 }
 
+function testMergeGoalSupportMapsPreservesSummaryOnlyCompanionSupport(): void {
+  const result = mergeGoalSupportMaps(
+    new Map([
+      ['2073-20', new Set(['goal_1'])],
+      ['2939-17', new Set(['goal_0'])],
+    ]),
+    new Map([
+      ['2747-15', new Set(['goal_0', 'goal_1'])],
+      ['2073-20', new Set(['goal_1'])],
+    ])
+  );
+  const support2747 = [...(result.get('2747-15') ?? new Set())].sort();
+  const support2073 = [...(result.get('2073-20') ?? new Set())].sort();
+  if (JSON.stringify(support2747) !== JSON.stringify(['goal_0', 'goal_1'])) {
+    throw new Error(
+      `Expected merged goal support to preserve summary-only court companion, got ${JSON.stringify([...result.entries()])}`
+    );
+  }
+  if (JSON.stringify(support2073) !== JSON.stringify(['goal_1'])) {
+    throw new Error(
+      `Expected merged goal support to keep evidence-backed support intact, got ${JSON.stringify([...result.entries()])}`
+    );
+  }
+  console.log('[OK] merged goal support preserves summary-only companion coverage alongside hit-backed acts');
+}
+
+function testUngroundedMultiGoalTrimKeepsStrongGoalAnchoredCrossFamilyCompanion(): void {
+  const result = trimUngroundedMultiGoalFallbackSelection({
+    selectedActs: [
+      {
+        rada_nreg: '2747-15',
+        act_title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        act_kind: 'PRIMARY_LAW',
+        score: 0.78,
+      },
+      {
+        rada_nreg: '2939-17',
+        act_title: 'Про доступ до публічної інформації',
+        category: 'digital_data',
+        act_kind: 'PRIMARY_LAW',
+        score: 0.67,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.59,
+        max_score: 0.64,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.93,
+        max_ordering_score: 0.78,
+      },
+      {
+        rada_nreg: '2939-17',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.62,
+        max_score: 0.66,
+        best_rank_in_top30: 6,
+        rank_mass_top30: 1.2,
+        max_ordering_score: 0.67,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'procedure', act_candidates_top3: ['2939-17', '2747-15'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['2747-15', '2073-20'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2747-15', new Set(['goal_0', 'goal_1'])],
+      ['2939-17', new Set(['goal_0'])],
+    ]),
+    domainHint: 'administrative',
+    mismatchSignalsPresent: true,
+    maxActs: 2,
+  });
+  if (result.length !== 2 || !result.some((act) => act.rada_nreg === '2939-17')) {
+    throw new Error(`Expected trim to preserve strong goal-anchored cross-family companion, got ${JSON.stringify(result)}`);
+  }
+  console.log('[OK] ungrounded multi-goal trim keeps strong goal-anchored cross-family companion');
+}
+
+function testUngroundedMultiGoalTrimPrefersGoalLocalHitLeaderOverDomainAlignedCompanion(): void {
+  const result = trimLowConfidenceMultiGoalSelection({
+    selectedActs: [
+      {
+        rada_nreg: '2747-15',
+        act_title: 'Кодекс адміністративного судочинства України',
+        category: 'administrative',
+        act_kind: 'PRIMARY_LAW',
+        score: 0.71,
+      },
+      {
+        rada_nreg: '2939-17',
+        act_title: 'Про доступ до публічної інформації',
+        category: 'digital_data',
+        act_kind: 'PRIMARY_LAW',
+        score: 0.67,
+      },
+      {
+        rada_nreg: '2073-20',
+        act_title: 'Про адміністративну процедуру',
+        category: 'administrative',
+        act_kind: 'PRIMARY_LAW',
+        score: 0.63,
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2747-15',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.52,
+        max_score: 0.56,
+        best_rank_in_top30: 10,
+        rank_mass_top30: 0.7,
+        max_ordering_score: 0.53,
+      },
+      {
+        rada_nreg: '2939-17',
+        count_in_top30: 10,
+        avg_score_in_top30: 0.58,
+        max_score: 0.62,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 1.8,
+        max_ordering_score: 0.62,
+      },
+      {
+        rada_nreg: '2073-20',
+        count_in_top30: 3,
+        avg_score_in_top30: 0.55,
+        max_score: 0.57,
+        best_rank_in_top30: 3,
+        rank_mass_top30: 0.74,
+        max_ordering_score: 0.57,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'procedure', act_candidates_top3: ['2747-15', '80731-10', '2939-17'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['2073-20', '2747-15', '393/96-вр'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2747-15', new Set(['goal_0', 'goal_1'])],
+      ['2939-17', new Set(['goal_0'])],
+      ['2073-20', new Set(['goal_1'])],
+    ]),
+    finalHits: [
+      { rada_nreg: '2939-17', goal_id: 'goal_0' } as never,
+      { rada_nreg: '2939-17', goal_id: 'goal_0' } as never,
+      { rada_nreg: '2939-17', goal_id: 'goal_0' } as never,
+      { rada_nreg: '2073-20', goal_id: 'goal_1' } as never,
+      { rada_nreg: '2747-15', goal_id: 'goal_0' } as never,
+      { rada_nreg: '2747-15', goal_id: 'goal_1' } as never,
+    ],
+    domainHint: 'administrative',
+    mismatchSignalsPresent: true,
+    maxActs: 2,
+  });
+  const selectedNregs = result.map((act) => act.rada_nreg).sort();
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['2747-15', '2939-17'])) {
+    throw new Error(`Expected trim to keep goal-local hit leader over domain-aligned companion, got ${JSON.stringify(selectedNregs)}`);
+  }
+  console.log('[OK] low-confidence multi-goal trim prefers goal-local hit leader over domain-aligned companion');
+}
+
 async function main(): Promise<void> {
   console.log('RAG unit tests\n');
   testGoalSplitEmptyQuery();
@@ -16837,6 +17351,7 @@ async function main(): Promise<void> {
   testGoalSplitCarriesSubjectIntoYesNoFollowUp();
   testGoalSplitCarriesActorSubjectIntoPoliceFollowUp();
   testGoalSplitCarriesActorSubjectIntoLaborNeedFollowUp();
+  testGoalSplitCompactsSharedActorLiabilityBundle();
   testGoalSplitAddsSpecificTaxAppealSignals();
   testGoalSplitCompactsExplicitActBundleAcrossQuestions();
   testGoalSplitCompactsExplicitActClauseBundle();
@@ -17039,6 +17554,7 @@ async function main(): Promise<void> {
   testProcedureCategoryEnvelopeFallsBackToProcedureFamilies();
   testShouldConfirmSoftNonPrimarySingleAct();
   testShouldConfirmSoftPrimaryLawTwoActBundle();
+  testShouldForceSpecificDomainPrimarySelectionLowConfidence();
   testBuildTaxonomyQuerySignalsIncludesMultiWordPhrases();
   testBuildTaxonomyQuerySignalsPreservesStructuredActIdentifiers();
   testBuildTaxonomyQuerySignalsCanonicalizesInflectedLawCuePhrase();
@@ -17095,6 +17611,8 @@ async function main(): Promise<void> {
   testSelectedActsDoesNotTrustPartialGoalSupportOverDistinctCoverage();
   testSelectedActsAllowsProceduralSingleActCoverageWhenMixedGoalTailIsWeak();
   testSelectedActsBlocksProceduralSingleActCoverageWhenStrongNonProceduralCompanionRemains();
+  testSelectedActsBlocksProceduralSingleActCoverageWhenSameFamilyPrimaryCompanionRemains();
+  testSelectedActsBlocksProceduralSingleActCoverageWhenGoalsAreNotProcedural();
   testSelectedActsRecoversMixedGoalPrimaryCompanionFromHitBackfill();
   testSelectedActsDocumentTypeSlugHintsAllowTreatyAndDraft();
   testSelectedActsBlocksWeakNonPrimaryNoiseUnderMultiGoalPrimaryDominance();
@@ -17129,6 +17647,7 @@ async function main(): Promise<void> {
   testShouldFlagUngroundedMultiGoalFallbackOnIncompatibleGoalCoveredBundle();
   testShouldFlagUngroundedMultiGoalFallbackOnThreeFamilyChunksOnlyBundleWithoutMismatchSignal();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenGoalCoverageIsReal();
+  testShouldNotFlagUngroundedMultiGoalFallbackForStrongCrossFamilyGoalAnchoredBundle();
   testShouldNotFlagUngroundedMultiGoalFallbackWhenDefinitionGoalsAreCovered();
   testShouldNotFlagUngroundedMultiGoalFallbackForStrongSingleActProceduralBundle();
   testShouldFlagUngroundedMultiGoalFallbackWhenSameFamilyBundleMasksStrongSecondaryCompetition();
@@ -17142,6 +17661,9 @@ async function main(): Promise<void> {
   testSkipMultiGoalVariantSearchRequiresExplicitGoalCategories();
   testPreferEvidenceBackedGoalSupportUsesHitBackedSignalsWhenAvailable();
   testPreferEvidenceBackedGoalSupportFallsBackToSummaryWhenHitsAreEmpty();
+  testMergeGoalSupportMapsPreservesSummaryOnlyCompanionSupport();
+  testUngroundedMultiGoalTrimKeepsStrongGoalAnchoredCrossFamilyCompanion();
+  testUngroundedMultiGoalTrimPrefersGoalLocalHitLeaderOverDomainAlignedCompanion();
   console.log('\nAll RAG unit tests passed.');
 }
 
