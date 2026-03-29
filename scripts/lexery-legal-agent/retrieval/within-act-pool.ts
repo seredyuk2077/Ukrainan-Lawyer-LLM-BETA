@@ -13,6 +13,14 @@ export interface BuildWithinActPoolInput {
   limit: number;
 }
 
+export interface ChunkEvidenceActSummary {
+  ordered_nregs: string[];
+  act_count: number;
+  top_nreg: string | null;
+  top_hit_count: number;
+  top_best_score: number | null;
+}
+
 function uniqueOrdered(values: Array<string | null | undefined>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -36,6 +44,12 @@ export function extractActSearchNregsFromHits(hits: Array<Pick<RawHit, 'source' 
 export function extractChunkEvidenceNregsFromHits(
   hits: Array<Pick<RawHit, 'source' | 'rada_nreg' | 'score'>>
 ): string[] {
+  return summarizeChunkEvidenceActs(hits).ordered_nregs;
+}
+
+export function summarizeChunkEvidenceActs(
+  hits: Array<Pick<RawHit, 'source' | 'rada_nreg' | 'score'>>
+): ChunkEvidenceActSummary {
   const stats = new Map<string, { count: number; bestScore: number; firstIndex: number }>();
   hits.forEach((hit, index) => {
     if (hit.source !== 'lldbi_chunks') return;
@@ -52,7 +66,7 @@ export function extractChunkEvidenceNregsFromHits(
     stats.set(radaNreg, current);
   });
 
-  return [...stats.entries()]
+  const ordered = [...stats.entries()]
     .sort((left, right) => {
       const [, leftStats] = left;
       const [, rightStats] = right;
@@ -62,7 +76,17 @@ export function extractChunkEvidenceNregsFromHits(
       if (scoreDiff !== 0) return scoreDiff;
       return leftStats.firstIndex - rightStats.firstIndex;
     })
-    .map(([radaNreg]) => radaNreg);
+    .map(([radaNreg, value]) => ({ radaNreg, value }));
+  const topEntry = ordered[0];
+  const topBestScore = topEntry?.value.bestScore;
+  return {
+    ordered_nregs: ordered.map((entry) => entry.radaNreg),
+    act_count: ordered.length,
+    top_nreg: topEntry?.radaNreg ?? null,
+    top_hit_count: topEntry?.value.count ?? 0,
+    top_best_score:
+      typeof topBestScore === 'number' && Number.isFinite(topBestScore) ? topBestScore : null,
+  };
 }
 
 export function buildWithinActPool(input: BuildWithinActPoolInput): string[] {

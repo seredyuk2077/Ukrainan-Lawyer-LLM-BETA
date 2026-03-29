@@ -1,0 +1,243 @@
+[
+  {
+    "case_id": "law_state_communal_transfer_live_gap_2026_03_27",
+    "rada_nreg": "147/98-ВР",
+    "title": "Про передачу об'єктів права державної та комунальної власності",
+    "bucket": "public_property",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про передачу об'єктів права державної та комунальної власності», який орган приймає рішення про передачу об'єкта та які документи подаються для такої передачі?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про передачу об'єктів державної та комунальної власності хто вирішує передачу і які потрібні документи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає компетенцію щодо передачі об'єктів державної і комунальної власності та пакет документів для такої передачі?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_food_traceability_live_gap_2026_03_27",
+    "rada_nreg": "771/97-ВР",
+    "title": "Про основні принципи та вимоги до безпечності та якості харчових продуктів",
+    "bucket": "food_safety",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про основні принципи та вимоги до безпечності та якості харчових продуктів», які обов'язки має оператор ринку щодо простежуваності харчових продуктів та надання інформації компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про безпечність харчових продуктів які вимоги до простежуваності і яку інформацію треба дати компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон вимагає food traceability від операторів ринку та розкриття даних на запит компетентного органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "water_code_live_gap_2026_03_27",
+    "rada_nreg": "213/95-ВР",
+    "title": "Водний кодекс України",
+    "bucket": "water_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Водним кодексом України, що вважається спеціальним водокористуванням та в яких випадках воно здійснюється на підставі дозволу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За Водним кодексом коли потрібен дозвіл на спеціальне водокористування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який кодекс визначає special water use і випадки, коли без дозволу його здійснювати не можна?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_banik_defense_deputy_live_gap_2026_03_27",
+    "rada_nreg": "261-2026-р",
+    "title": "Про призначення Баніка М.С. заступником Міністра оборони України",
+    "bucket": "cabinet_personnel",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким розпорядженням Кабінету Міністрів України призначено Баніка М.С. заступником Міністра оборони України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження про призначення Баніка М.С. заступником міністра оборони",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_ilchenko_acting_head_live_gap_2026_03_27",
+    "rada_nreg": "263-2026-р",
+    "title": "Про тимчасове покладення виконання обов'язків Голови Національної соціальної сервісної служби України на Ільченка І.О.",
+    "bucket": "cabinet_personnel",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким розпорядженням Кабінету Міністрів України на Ільченка І.О. тимчасово покладено виконання обов'язків Голови Національної соціальної сервісної служби України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження про тимчасове покладення обов'язків голови Нацсоцслужби на Ільченка І.О.",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_khromov_rank_live_gap_2026_03_27",
+    "rada_nreg": "264-2026-р",
+    "title": "Про присвоєння Хромову А.В. першого рангу державного службовця",
+    "bucket": "cabinet_personnel_rank",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким розпорядженням Кабінету Міністрів України Хромову А.В. присвоєно перший ранг державного службовця?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження про присвоєння Хромову А.В. першого рангу держслужбовця",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_odesa_shared_property_transfer_live_gap_2026_03_27",
+    "rada_nreg": "255-2026-р",
+    "title": "Про відчуження шляхом передачі майна у спільну власність територіальних громад сіл, селищ, міст Одеської області",
+    "bucket": "cabinet_property_transfer",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким розпорядженням Кабінету Міністрів України передано майно у спільну власність територіальних громад сіл, селищ, міст Одеської області?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження КМУ про передачу майна у спільну власність територіальних громад Одеської області",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_repeal_order_177_live_gap_2026_03_27",
+    "rada_nreg": "262-2026-р",
+    "title": "Про визнання таким, що втратило чинність, розпорядження Кабінету Міністрів України від 25 лютого 2026 р. № 177",
+    "bucket": "cabinet_repeal",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким розпорядженням Кабінету Міністрів України визнано таким, що втратило чинність, розпорядження від 25 лютого 2026 р. № 177?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження КМУ про втрату чинності розпорядження №177 від 25 лютого 2026",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "president_unesco_representative_live_gap_2026_03_27",
+    "rada_nreg": "263/2026",
+    "title": "Про Представника України у Виконавчій раді ЮНЕСКО",
+    "bucket": "president_decree",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Указом Президента України «Про Представника України у Виконавчій раді ЮНЕСКО», до якого саме органу визначено представника України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Указ 263/2026 про представника України у Виконавчій раді ЮНЕСКО",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "president_migratory_species_delegation_live_gap_2026_03_27",
+    "rada_nreg": "22/2026-рп",
+    "title": "Про делегацію України для участі у 15-му засіданні Конференції Сторін Конвенції про збереження мігруючих видів диких тварин та Сегменті високого рівня у рамках 15-го засідання Конференції Сторін Конвенції про збереження мігруючих видів диких тварин",
+    "bucket": "president_order",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Розпорядженням Президента України «Про делегацію України для участі у 15-му засіданні Конференції Сторін Конвенції про збереження мігруючих видів диких тварин», для участі в якому міжнародному заході утворено делегацію України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Розпорядження Президента 22/2026-рп про делегацію України для якої конференції сторін?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

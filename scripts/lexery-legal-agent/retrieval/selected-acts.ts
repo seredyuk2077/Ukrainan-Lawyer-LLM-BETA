@@ -286,6 +286,31 @@ export function computeChunksEvidenceTopActs(finalHits: RawHit[]): ChunksEvidenc
     .slice(0, 10);
 }
 
+function buildHitBackfilledActCandidates(
+  finalHits: RawHit[],
+  existingCandidates: Map<string, ActCandidateInput>
+): ActCandidateInput[] {
+  const backfilled: ActCandidateInput[] = [];
+  for (const hit of finalHits.slice(0, 30)) {
+    const radaNreg = hit.rada_nreg?.trim();
+    if (!radaNreg || existingCandidates.has(radaNreg)) continue;
+    if (!hit.title && !hit.document_type && !hit.category && !hit.document_type_slug) continue;
+    const candidate: ActCandidateInput = {
+      rada_nreg: radaNreg,
+      title: hit.title,
+      score: getHitOrderingScore(hit),
+      reasons: ['hit_backfill'],
+      why_tag: 'HIT_BACKFILL',
+      category: hit.category ?? undefined,
+      document_type: hit.document_type ?? undefined,
+      document_type_slug: hit.document_type_slug ?? undefined,
+    };
+    existingCandidates.set(radaNreg, candidate);
+    backfilled.push(candidate);
+  }
+  return backfilled;
+}
+
 function compareChunksEvidenceStrength(a: ChunksEvidenceItem, b: ChunksEvidenceItem): number {
   const rankMassDiff = (b.rank_mass_top30 ?? 0) - (a.rank_mass_top30 ?? 0);
   if (rankMassDiff !== 0) return rankMassDiff;
@@ -365,7 +390,7 @@ const DOCUMENT_TYPE_HINT_ALIASES_BY_SLUG = new Map<string, string[]>([
 ]);
 
 /** True if act's document_type or normalized slug metadata matches any U2 document_type hint. */
-function documentTypeHintMatches(
+export function documentTypeHintMatches(
   docType: string | undefined | null,
   hints: string[],
   documentTypeSlug?: string | null
@@ -375,6 +400,10 @@ function documentTypeHintMatches(
   const normalizedDocType = toKey(docType ?? '');
   if (normalizedDocType) candidateKeys.add(normalizedDocType);
   const slug = normalizeMetaKey(documentTypeSlug);
+  if (slug) {
+    const normalizedSlugKey = toKey(slug);
+    if (normalizedSlugKey) candidateKeys.add(normalizedSlugKey);
+  }
   for (const alias of DOCUMENT_TYPE_HINT_ALIASES_BY_SLUG.get(slug) ?? []) {
     const normalizedAlias = toKey(alias);
     if (normalizedAlias) candidateKeys.add(normalizedAlias);
@@ -382,10 +411,23 @@ function documentTypeHintMatches(
   if (candidateKeys.size === 0) return false;
   const candidateKind = classifyActKind('', docType, null, documentTypeSlug);
   return hints.some((h) => {
-    const hk = toKey(h);
-    if (!hk) return false;
-    for (const candidateKey of candidateKeys) {
-      if (candidateKey.includes(hk) || hk.includes(candidateKey)) return true;
+    const hintKeys = new Set<string>();
+    const hintSlug = normalizeMetaKey(h);
+    const normalizedHintKey = toKey(h);
+    if (normalizedHintKey) hintKeys.add(normalizedHintKey);
+    if (hintSlug) {
+      const normalizedHintSlugKey = toKey(hintSlug);
+      if (normalizedHintSlugKey) hintKeys.add(normalizedHintSlugKey);
+      if (slug && hintSlug === slug) return true;
+      for (const alias of DOCUMENT_TYPE_HINT_ALIASES_BY_SLUG.get(hintSlug) ?? []) {
+        const normalizedAlias = toKey(alias);
+        if (normalizedAlias) hintKeys.add(normalizedAlias);
+      }
+    }
+    for (const hintKey of hintKeys) {
+      for (const candidateKey of candidateKeys) {
+        if (candidateKey.includes(hintKey) || hintKey.includes(candidateKey)) return true;
+      }
     }
     const hintKind = classifyActKind('', h, null);
     return candidateKind !== 'UNKNOWN' && hintKind === candidateKind;
@@ -448,7 +490,7 @@ function isStrongChunksEvidence(item: ChunksEvidenceItem | undefined): boolean {
   return item.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD || hasStrongTopRankEvidence(item);
 }
 
-function hasStrongNonPrimarySupportEvidence(item: ChunksEvidenceItem | undefined): boolean {
+export function hasStrongNonPrimarySupportEvidence(item: ChunksEvidenceItem | undefined): boolean {
   if (!item) return false;
   const bestRank = item.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
   return (
@@ -463,7 +505,7 @@ function hasRepeatedSecondaryOrderSupport(item: ChunksEvidenceItem | undefined):
   return item.count_in_top30 >= NON_PRIMARY_STRONG_SUPPORT_COUNT_MIN;
 }
 
-function isExplicitlyHintedNonPrimaryAct(
+export function isExplicitlyHintedNonPrimaryAct(
   act: SelectedActOutput,
   candidate: ActCandidateInput | undefined,
   documentTypeHints: string[]
@@ -544,6 +586,7 @@ function canFallbackSelectAct(input: {
   isMultiGoal: boolean;
   hasStrongPrimaryLawEvidence: boolean;
   actCandidatesTop: ActCandidateInput[];
+  protectedMixedGoalPrimaryCompanionNregs?: Set<string>;
 }): boolean {
   const { candidate, evidence } = input;
   const kind = classifyActKind(
@@ -563,6 +606,8 @@ function canFallbackSelectAct(input: {
   const crossFamilyEvidenceOverride =
     (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
     (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
+  const protectedMixedGoalPrimaryCompanion =
+    input.protectedMixedGoalPrimaryCompanionNregs?.has(candidate.rada_nreg) ?? false;
 
   if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) return false;
   if (kind === 'BILL_DRAFT' && !hasEvidence && (!allowedByHint || !hintsAllowDraft(input.documentTypeHints ?? []))) {
@@ -604,12 +649,19 @@ function canFallbackSelectAct(input: {
   ) {
     return false;
   }
-  if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride && !strongTopRankEvidence) {
+  if (
+    !familyAligned &&
+    !allowedByHint &&
+    !crossFamilyEvidenceOverride &&
+    !strongTopRankEvidence &&
+    !protectedMixedGoalPrimaryCompanion
+  ) {
     return false;
   }
 
   return (
     hasMaterialChunkEvidence(evidence) ||
+    protectedMixedGoalPrimaryCompanion ||
     allowedByHint
   );
 }
@@ -642,6 +694,89 @@ function hasMixedProcedureAndNonProcedureGoals(
   return goalTypes.has('procedure') && [...goalTypes].some((goalType) => goalType !== 'procedure');
 }
 
+function hasBlockingNonProceduralPrimaryCompanionEvidence(input: {
+  item: ChunksEvidenceItem;
+  candidateByNreg: Map<string, ActCandidateInput>;
+  topFamilyKey: string;
+  goalSupportByAct: GoalSupportByAct;
+}): boolean {
+  const candidate = input.candidateByNreg.get(input.item.rada_nreg);
+  if (!candidate) return false;
+  if (
+    classifyActKind(
+      candidate.title ?? '',
+      candidate.document_type,
+      candidate.category,
+      candidate.document_type_slug
+    ) !== 'PRIMARY_LAW'
+  ) {
+    return false;
+  }
+  if (isProceduralPrimaryLawCandidate(candidate)) return false;
+
+  const candidateFamilyKey = categoryToFamilyKey(candidate.category);
+  if (
+    input.topFamilyKey === 'unknown' ||
+    candidateFamilyKey === 'unknown' ||
+    input.topFamilyKey === candidateFamilyKey
+  ) {
+    return false;
+  }
+
+  const goalSupportCount = input.goalSupportByAct.get(input.item.rada_nreg)?.size ?? 0;
+  const bestRank = input.item.best_rank_in_top30 ?? Number.POSITIVE_INFINITY;
+  const orderingScore = input.item.max_ordering_score ?? input.item.max_score;
+  const materiallySupportedCompanion =
+    input.item.count_in_top30 >= 2 &&
+    bestRank <= 10 &&
+    orderingScore >= 0.45;
+  const repeatedCrossFamilyCompanion =
+    input.item.count_in_top30 >= CHUNKS_EVIDENCE_COUNT_THRESHOLD &&
+    bestRank <= 10 &&
+    orderingScore >= 0.45;
+
+  return repeatedCrossFamilyCompanion || (goalSupportCount > 0 && materiallySupportedCompanion);
+}
+
+function collectProtectedMixedGoalPrimaryCompanionNregs(input: {
+  blockedReason?: string;
+  chunksEvidenceTopActs: ChunksEvidenceItem[];
+  candidateByNreg: Map<string, ActCandidateInput>;
+  goalSupportByAct: GoalSupportByAct;
+}): Set<string> {
+  const protectedNregs = new Set<string>();
+  if (input.blockedReason !== 'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED') return protectedNregs;
+
+  const rankedEvidence = input.chunksEvidenceTopActs.filter(
+    (item) => isStrongChunksEvidence(item) || hasMaterialChunkEvidence(item)
+  );
+  const top = rankedEvidence[0];
+  if (!top) return protectedNregs;
+
+  const topCandidate = input.candidateByNreg.get(top.rada_nreg);
+  if (!topCandidate || !isProceduralPrimaryLawCandidate(topCandidate)) return protectedNregs;
+  const topFamilyKey = categoryToFamilyKey(topCandidate.category);
+
+  for (const item of rankedEvidence.slice(1)) {
+    const candidate = input.candidateByNreg.get(item.rada_nreg);
+    if (!candidate || classifyCandidateActKind(candidate) !== 'PRIMARY_LAW') continue;
+    if (isProceduralPrimaryLawCandidate(candidate)) continue;
+    const familyKey = categoryToFamilyKey(candidate.category);
+    if (!familyKey || familyKey === 'unknown' || familyKey === topFamilyKey) continue;
+
+    const goalSupportCount = input.goalSupportByAct.get(item.rada_nreg)?.size ?? 0;
+    const hasProtectedEvidence =
+      goalSupportCount > 0 ||
+      ((item.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 12 &&
+        (item.max_ordering_score ?? item.max_score) >= CHUNKS_EVIDENCE_SCORE_THRESHOLD);
+    if (!hasProtectedEvidence) continue;
+
+    protectedNregs.add(item.rada_nreg);
+  }
+
+  return protectedNregs;
+}
+
 function shouldAllowSingleActCoverageForMultiGoal(
   isMultiGoal: boolean,
   chunksEvidenceTopActs: ChunksEvidenceItem[],
@@ -669,11 +804,18 @@ function shouldAllowSingleActCoverageForMultiGoal(
   }
   const topGoalSupport = goalSupportByAct.get(top.rada_nreg);
   if (!topGoalSupport || topGoalSupport.size < goalsCount) return { allowed: false };
-  if (
-    hasMixedProcedureAndNonProcedureGoals(goalsSummary) &&
-    isProceduralPrimaryLawCandidate(topCandidate) &&
-    !candidateHasMetadataGrounding(topCandidate)
-  ) {
+  const topIsProceduralPrimary =
+    isProceduralPrimaryLawCandidate(topCandidate) && !candidateHasMetadataGrounding(topCandidate);
+  const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
+  const hasBlockingNonProceduralPrimaryCompanion = chunksEvidenceTopActs.slice(1).some((item) =>
+    hasBlockingNonProceduralPrimaryCompanionEvidence({
+      item,
+      candidateByNreg,
+      topFamilyKey,
+      goalSupportByAct,
+    })
+  );
+  if (topIsProceduralPrimary && hasBlockingNonProceduralPrimaryCompanion) {
     return {
       allowed: false,
       blockedReason: 'MULTI_GOAL_PROCEDURAL_SINGLE_ACT_BLOCKED',
@@ -684,7 +826,6 @@ function shouldAllowSingleActCoverageForMultiGoal(
   const topStrongEvidenceNregs = new Set(strongEvidence.slice(0, 3).map((item) => item.rada_nreg));
   if (topStrongEvidenceNregs.size === 1) return { allowed: true };
   const secondCandidate = candidateByNreg.get(second.rada_nreg);
-  const topFamilyKey = categoryToFamilyKey(topCandidate?.category);
   const secondFamilyKey = categoryToFamilyKey(secondCandidate?.category);
   const secondKind = classifyActKind(
     secondCandidate?.title ?? '',
@@ -744,7 +885,9 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     chunks_evidence_top_acts.map((item) => [item.rada_nreg, item] as const)
   );
   const isMultiGoal = (input.goals_summary?.length ?? 0) >= 2;
-  const candidateByNreg = new Map(actCandidatesTop.map((a) => [a.rada_nreg, a]));
+  const candidateByNreg = new Map(actCandidatesTop.map((a) => [a.rada_nreg, a] as const));
+  const hitBackfilledCandidates = buildHitBackfilledActCandidates(finalHits, candidateByNreg);
+  const selectionCandidatePool = [...actCandidatesTop, ...hitBackfilledCandidates];
   const singleActCoverageDecision = shouldAllowSingleActCoverageForMultiGoal(
     isMultiGoal,
     chunks_evidence_top_acts,
@@ -754,6 +897,12 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     input.goals_summary.length,
     input.goals_summary
   );
+  const protectedMixedGoalPrimaryCompanionNregs = collectProtectedMixedGoalPrimaryCompanionNregs({
+    blockedReason: singleActCoverageDecision.blockedReason,
+    chunksEvidenceTopActs: chunks_evidence_top_acts,
+    candidateByNreg,
+    goalSupportByAct,
+  });
   const allowSingleActCoverageForMultiGoal = singleActCoverageDecision.allowed;
   const selectedActsMin =
     allowSingleActCoverageForMultiGoal
@@ -792,12 +941,14 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     if (selected.some((s) => s.rada_nreg === e.rada_nreg)) continue;
     const cand = candidateByNreg.get(e.rada_nreg);
     const kind = classifyCandidateActKind(cand);
+    const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
+    const orderAllowedByHint = documentTypeHintMatches(cand?.document_type, documentTypeHints ?? []);
     if (
       !isMultiGoal &&
       kind !== 'PRIMARY_LAW' &&
       hasStrongPrimaryLawEvidence &&
       !hasStrongTopRankEvidence(e) &&
-      !canOverrideNonPrimaryPrimaryLawBlock(kind, e)
+      !canOverrideNonPrimaryPrimaryLawBlock(kind, e, familyAligned, orderAllowedByHint)
     ) {
       pushReasonCode(reasonCodes, 'NON_PRIMARY_EVIDENCE_BLOCKED_PRIMARY_PRESENT');
       continue;
@@ -812,10 +963,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       pushReasonCode(reasonCodes, 'KSU_BLOCKED_PRIMARY_PRESENT');
       continue;
     }
-    const familyAligned = isFamilyAlignedSupportAct(cand?.category, familyEvidence);
     const orderRepeatedSupport = hasRepeatedSecondaryOrderSupport(e);
     const dominantFamilyProcedural = dominantFamilyLooksProcedural(familyEvidence);
-    const orderAllowedByHint = documentTypeHintMatches(cand?.document_type, documentTypeHints ?? []);
     const allowCrossFamilyEvidence =
       familyAligned ||
       (kind === 'SECONDARY_ORDER'
@@ -866,6 +1015,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
       const crossFamilyEvidenceOverride =
         (evidence?.count_in_top30 ?? 0) >= CROSS_FAMILY_EVIDENCE_COUNT_OVERRIDE ||
         (evidence?.max_score ?? 0) >= CROSS_FAMILY_EVIDENCE_SCORE_OVERRIDE;
+      const protectedMixedGoalPrimaryCompanion = protectedMixedGoalPrimaryCompanionNregs.has(a.rada_nreg);
       if (NOISE_KINDS.includes(kind) && !hasEvidence && !allowedByHint) {
         if (kind === 'BILL_DRAFT') pushReasonCode(reasonCodes, 'DRAFT_BLOCKED_NO_EVIDENCE');
         else if (kind === 'CASELAW_OPINION') pushReasonCode(reasonCodes, 'OPINION_BLOCKED_NO_EVIDENCE');
@@ -900,7 +1050,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         kind !== 'PRIMARY_LAW' &&
         hasStrongPrimaryLawEvidence &&
         !strongTopRankEvidence &&
-        !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence)
+        !canOverrideNonPrimaryPrimaryLawBlock(kind, evidence, familyAligned, allowedByHint)
       ) {
         pushReasonCode(reasonCodes, 'NON_PRIMARY_SUPPORT_BLOCKED_PRIMARY_PRESENT');
         continue;
@@ -914,7 +1064,13 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         pushReasonCode(reasonCodes, 'ORDER_UNRELATED_BLOCKED');
         continue;
       }
-      if (!familyAligned && !allowedByHint && !crossFamilyEvidenceOverride && !strongTopRankEvidence) {
+      if (
+        !familyAligned &&
+        !allowedByHint &&
+        !crossFamilyEvidenceOverride &&
+        !strongTopRankEvidence &&
+        !protectedMixedGoalPrimaryCompanion
+      ) {
         pushReasonCode(reasonCodes, 'SUPPORT_FAMILY_MISMATCH_BLOCKED');
         continue;
       }
@@ -938,8 +1094,8 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
   }
 
   // Enforce minimum: if we have fewer than SELECTED_ACTS_MIN, fill from actCandidatesTop
-  while (selected.length < selectedActsMin && selected.length < actCandidatesTop.length) {
-    const next = actCandidatesTop.find((a) => {
+  while (selected.length < selectedActsMin && selected.length < selectionCandidatePool.length) {
+    const next = selectionCandidatePool.find((a) => {
       if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
       return canFallbackSelectAct({
         candidate: a,
@@ -948,13 +1104,15 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         familyEvidence,
         isMultiGoal,
         hasStrongPrimaryLawEvidence,
-        actCandidatesTop,
+        actCandidatesTop: selectionCandidatePool,
+        protectedMixedGoalPrimaryCompanionNregs,
       });
     });
     if (!next) break;
     const source: string[] = [];
     if (taxonomyNregs.has(next.rada_nreg)) source.push('TAXONOMY');
     if (actsSearchNregs.includes(next.rada_nreg)) source.push('ACTS_SEARCH');
+    if (chunksEvidenceByNreg.has(next.rada_nreg)) source.push('CHUNKS_EVIDENCE');
     selected.push({
       rada_nreg: next.rada_nreg,
       act_title: next.title,
@@ -965,6 +1123,10 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
     });
     if (taxonomyNregs.has(next.rada_nreg)) fromTaxonomy.push(next.rada_nreg);
     if (actsSearchNregs.includes(next.rada_nreg)) fromActsSearch.push(next.rada_nreg);
+    if (chunksEvidenceByNreg.has(next.rada_nreg)) fromChunksEvidence.push(next.rada_nreg);
+    if (protectedMixedGoalPrimaryCompanionNregs.has(next.rada_nreg)) {
+      pushReasonCode(reasonCodes, 'MULTI_GOAL_PRIMARY_COMPANION_RECOVERED_FROM_HITS');
+    }
   }
 
   // --- Policy v2: anti-order dominance ---
@@ -1164,7 +1326,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
         return categoryToFamilyKey(cand?.category) === familyEvidence.dominant_family_key;
       });
       if (!hasDominantFamily && !skipSingleGoalDominantFamilyRecovery) {
-        const candidate = actCandidatesTop.find((a) => {
+        const candidate = selectionCandidatePool.find((a) => {
           if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
           if (classifyCandidateActKind(a) !== 'PRIMARY_LAW') return false;
           return categoryToFamilyKey(a.category) === familyEvidence.dominant_family_key;
@@ -1203,7 +1365,7 @@ export function buildSelectedActs(input: BuildSelectedActsInput): BuildSelectedA
           return classifyCandidateActKind(cand, s.act_title ?? '') === 'PRIMARY_LAW' && categoryToFamilyKey(cand?.category) === fam;
         });
         if (!hasFam) {
-          const candidate = actCandidatesTop.find((a) => {
+          const candidate = selectionCandidatePool.find((a) => {
             if (selected.some((s) => s.rada_nreg === a.rada_nreg)) return false;
             if (classifyCandidateActKind(a) !== 'PRIMARY_LAW') return false;
             return categoryToFamilyKey(a.category) === fam;

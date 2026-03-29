@@ -1,0 +1,205 @@
+[
+  {
+    "case_id": "law_financial_services_roundtrip",
+    "rada_nreg": "1953-20",
+    "title": "Про фінансові послуги та фінансові компанії",
+    "bucket": "financial_regulation",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про фінансові послуги та фінансові компанії», які вимоги ставляться до авторизації фінансової компанії та з якого моменту вона має право надавати фінансові послуги?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про фінансові послуги та фінансові компанії коли компанія може почати надавати фінпослуги?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон регулює authorization фінансової компанії і момент, з якого вона може легально надавати фінансові послуги?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "budget_code_roundtrip",
+    "rada_nreg": "2456-17",
+    "title": "Бюджетний кодекс України",
+    "bucket": "budget_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Бюджетним кодексом України, які видатки належать до захищених видатків державного бюджету та хто приймає рішення про виділення коштів з резервного фонду бюджету?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За Бюджетним кодексом хто розпоряджається резервним фондом і які видатки захищені?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який кодекс визначає protected budget expenditures і порядок рішень щодо коштів резервного фонду?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "land_code_roundtrip",
+    "rada_nreg": "2768-14",
+    "title": "Земельний кодекс України",
+    "bucket": "land_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Земельним кодексом України, на які категорії поділяються землі за основним цільовим призначенням та хто передає земельні ділянки державної власності у власність або користування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За Земельним кодексом які є категорії земель і хто розпоряджається державною землею?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який кодекс встановлює land categories by designated use та компетенцію щодо передачі державних земельних ділянок?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "water_code_roundtrip",
+    "rada_nreg": "213/95-ВР",
+    "title": "Водний кодекс України",
+    "bucket": "water_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Водним кодексом України, що вважається спеціальним водокористуванням та в яких випадках воно здійснюється на підставі дозволу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За Водним кодексом коли потрібен дозвіл на спеціальне водокористування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який кодекс визначає special water use і випадки, коли без дозволу його здійснювати не можна?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "civil_protection_code_roundtrip",
+    "rada_nreg": "5403-17",
+    "title": "Кодекс цивільного захисту України",
+    "bucket": "civil_protection",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Кодексом цивільного захисту України, які рівні надзвичайних ситуацій виділяються та хто приймає рішення про класифікацію надзвичайної ситуації за її рівнем?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За кодексом цивільного захисту хто визначає рівень надзвичайної ситуації?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний кодекс встановлює emergency levels і компетенцію щодо класифікації події як НС певного рівня?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "afu_internal_service_statute_roundtrip",
+    "rada_nreg": "548-14",
+    "title": "Про Статут внутрішньої служби Збройних Сил України",
+    "bucket": "military_service",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про Статут внутрішньої служби Збройних Сил України», що входить до добового наряду військової частини та хто призначає його склад?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За Статутом внутрішньої служби ЗСУ що таке добовий наряд і хто його призначає?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон про внутрішню службу в ЗСУ регулює daily duty roster і порядок його призначення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "crimea_council_of_ministers_roundtrip",
+    "rada_nreg": "3530-17",
+    "title": "Про Раду міністрів Автономної Республіки Крим",
+    "bucket": "regional_government",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про Раду міністрів Автономної Республіки Крим», хто очолює Раду міністрів АРК та які правові акти вона має право видавати?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про Раду міністрів АРК хто її очолює і які акти вона видає?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає head of the Council of Ministers of Crimea і форми актів, які цей орган ухвалює?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

@@ -39,6 +39,7 @@ export function buildSingleGoalFirstPassPlan(input: {
   collections: SingleGoalSearchCollectionMap;
   goalsCount?: number;
   taxonomyStrength?: SingleGoalTaxonomyStrength;
+  descriptiveActTitleScope?: boolean;
 }): BuildSingleGoalFirstPassPlanResult {
   const requestedStepKinds = normalizeRequestedStepKinds(input.steps);
   const explicitActsOnlyRequest =
@@ -48,18 +49,20 @@ export function buildSingleGoalFirstPassPlan(input: {
     goals_count: input.goalsCount,
     taxonomy_strength: input.taxonomyStrength,
   });
+  const descriptiveActTitleScope = input.descriptiveActTitleScope === true;
 
   const stepsToRun = requestedStepKinds.flatMap((kind) => {
     if (kind === 'lldbi_chunks') {
       return [{ kind, collection: input.collections.chunks } satisfies SingleGoalFirstPassStep];
     }
-    if (strongTaxonomySignal && !explicitActsOnlyRequest) return [];
+    if (strongTaxonomySignal && !explicitActsOnlyRequest && !descriptiveActTitleScope) return [];
     return [{ kind, collection: input.collections.acts } satisfies SingleGoalFirstPassStep];
   });
 
   const actsSearchPolicyReasonCodes: string[] = [];
   if (!requestedStepKinds.includes('lldbi_acts')) actsSearchPolicyReasonCodes.push('NOT_REQUESTED');
   else if (explicitActsOnlyRequest) actsSearchPolicyReasonCodes.push('EXPLICIT_ACTS_ONLY_REQUEST');
+  else if (strongTaxonomySignal && descriptiveActTitleScope) actsSearchPolicyReasonCodes.push('DESCRIPTIVE_ACT_TITLE_SCOPE');
   else if (strongTaxonomySignal) actsSearchPolicyReasonCodes.push('STRONG_TAXONOMY_SIGNAL');
   else actsSearchPolicyReasonCodes.push('ACTS_SEARCH_ENABLED');
 

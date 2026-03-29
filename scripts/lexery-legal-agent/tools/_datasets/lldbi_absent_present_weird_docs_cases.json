@@ -1,0 +1,134 @@
+[
+  {
+    "case_id": "ratification_slovakia_diplomatic_premises_roundtrip",
+    "rada_nreg": "4799-20",
+    "title": "Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Словацької Республіки про взаєморозуміння щодо розміщення дипломатичного представництва України в Словацькій Республіці та дипломатичного представництва Словацької Республіки в Україні",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Словацької Республіки про взаєморозуміння щодо розміщення дипломатичного представництва України в Словацькій Республіці та дипломатичного представництва Словацької Республіки в Україні», про розміщення яких саме дипломатичних представництв і між якими державами йдеться?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4799-20 про які дипломатичні представництва України та Словаччини?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "ratification_croatia_family_employment_roundtrip",
+    "rada_nreg": "4798-20",
+    "title": "Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Республіки Хорватія про здійснення оплачуваної діяльності членами сімей співробітників дипломатичних представництв або консульських установ",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Кабінетом Міністрів України та Урядом Республіки Хорватія про здійснення оплачуваної діяльності членами сімей співробітників дипломатичних представництв або консульських установ», членам сімей яких саме працівників дозволяється оплачувана діяльність і між якими державами укладено угоду?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4798-20 про оплачувану роботу членів сімей дипломатів яких держав?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "ratification_uae_cepa_roundtrip",
+    "rada_nreg": "4802-20",
+    "title": "Про ратифікацію Угоди про Всеосяжне економічне партнерство між Урядом України та Урядом Об'єднаних Арабських Еміратів",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди про Всеосяжне економічне партнерство між Урядом України та Урядом Об'єднаних Арабських Еміратів», між якими урядами укладено угоду і який тип партнерства вона встановлює?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4802-20 про яке економічне партнерство України з ОАЕ?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "amend_science_infra_roundtrip",
+    "rada_nreg": "4794-20",
+    "title": "Про внесення змін до Закону України \"Про наукову і науково-технічну діяльність\" щодо питань дослідницької інфраструктури та підтримки молодих вчених",
+    "bucket": "amendment_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про внесення змін до Закону України \"Про наукову і науково-технічну діяльність\" щодо питань дослідницької інфраструктури та підтримки молодих вчених», яких саме питань стосується цей закон про зміни?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4794-20 про які зміни до закону про науку і молодих вчених?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "amend_melioration_infra_roundtrip",
+    "rada_nreg": "4795-20",
+    "title": "Про внесення змін до деяких законодавчих актів України щодо вдосконалення системи управління об'єктами інженерної інфраструктури меліоративних систем",
+    "bucket": "amendment_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про внесення змін до деяких законодавчих актів України щодо вдосконалення системи управління об'єктами інженерної інфраструктури меліоративних систем», вдосконалення якої саме системи управління передбачене цими змінами?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4795-20 про які зміни щодо управління меліоративними системами?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "amend_flood_risk_civil_protection_mechanism_roundtrip",
+    "rada_nreg": "4790-20",
+    "title": "Про внесення змін до деяких законодавчих актів України щодо управління ризиками затоплення та забезпечення участі України у Механізмі цивільного захисту Союзу",
+    "bucket": "amendment_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про внесення змін до деяких законодавчих актів України щодо управління ризиками затоплення та забезпечення участі України у Механізмі цивільного захисту Союзу», яких двох напрямів стосуються ці зміни?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4790-20 про які зміни щодо flood risk і механізму цивільного захисту Союзу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

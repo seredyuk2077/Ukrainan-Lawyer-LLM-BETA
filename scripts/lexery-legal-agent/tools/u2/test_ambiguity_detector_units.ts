@@ -54,7 +54,7 @@ function testLawTitleStructuralCueDoesNotTriggerGeneralDomainAmbiguity(): void {
 }
 
 function testShortExplicitActReferenceDoesNotBecomeHardAmbiguous(): void {
-  const queries = ['ПКМ №100', 'постанова КМУ №1178', 'наказ МОЗ №385'];
+  const queries = ['ПКМ №100', 'постанова КМУ №1178', 'наказ МОЗ №385', '1697-18', '100-95-п', 'v0003359-26'];
   for (const query of queries) {
     const { entities } = extractEntities(query);
     const result = detectAmbiguity(query, 'general', entities);
@@ -62,6 +62,54 @@ function testShortExplicitActReferenceDoesNotBecomeHardAmbiguous(): void {
     assert(result.reason_codes?.includes('TOO_SHORT_QUERY') !== true, `${query} must not emit TOO_SHORT_QUERY`);
   }
   console.log('[OK] short explicit act references stay out of hard ambiguity');
+}
+
+function testStructuredActIdentifiersBecomeLawTitleEntities(): void {
+  const queries = ['1697-18', '100-95-п', 'v0003359-26'];
+  for (const query of queries) {
+    const { entities } = extractEntities(query);
+    assert(
+      entities.some((entity) => entity.type === 'law_title' && entity.value === query),
+      `${query} must be extracted as law_title`
+    );
+  }
+  console.log('[OK] structured act identifiers become law_title entities');
+}
+
+function testTemporalHyphenatedTermsDoNotBecomeLawTitleEntities(): void {
+  const query =
+    'Чи можу я повернути непродовольчий товар у 14-денний строк, якщо продавець не дав повної інформації?';
+  const { entities } = extractEntities(query);
+  assert(
+    entities.some((entity) => entity.type === 'law_title' && entity.value === '14-денний') === false,
+    '14-денний must not be extracted as law_title'
+  );
+  console.log('[OK] temporal hyphenated terms do not become law_title entities');
+}
+
+function testCompactLegalAbbreviationsBecomeDirectStructuralCue(): void {
+  const queries = ['КУпАП', 'КУзПБ', 'КЗпП'];
+  for (const query of queries) {
+    const { entities } = extractEntities(query);
+    assert(
+      entities.some((entity) => entity.type === 'act_abbrev' && entity.value === query),
+      `${query} must be extracted as act_abbrev`
+    );
+    const result = detectAmbiguity(query, 'general', entities);
+    assert(result.strength !== 'hard', `${query} must not become hard ambiguity`);
+    assert(result.reason_codes?.includes('TOO_SHORT_QUERY') !== true, `${query} must not emit TOO_SHORT_QUERY`);
+  }
+  console.log('[OK] compact legal abbreviations stay out of hard ambiguity');
+}
+
+function testUnicodeBoundariesDoNotCreateFalseActAbbrev(): void {
+  const query = 'Що регулює Наказ про скасування Правил торгівлі транспортними засобами?';
+  const { entities } = extractEntities(query);
+  assert(
+    entities.some((entity) => entity.type === 'act_abbrev' && entity.value === 'КАС') === false,
+    'КАС must not be extracted from the word "скасування"'
+  );
+  console.log('[OK] unicode-safe boundaries prevent false act abbreviations inside Cyrillic words');
 }
 
 function main(): void {
@@ -72,6 +120,10 @@ function main(): void {
   testVeryShortConcreteLegalDomainQueryDoesNotBecomeHard();
   testLawTitleStructuralCueDoesNotTriggerGeneralDomainAmbiguity();
   testShortExplicitActReferenceDoesNotBecomeHardAmbiguous();
+  testStructuredActIdentifiersBecomeLawTitleEntities();
+  testTemporalHyphenatedTermsDoNotBecomeLawTitleEntities();
+  testCompactLegalAbbreviationsBecomeDirectStructuralCue();
+  testUnicodeBoundariesDoNotCreateFalseActAbbrev();
   console.log('\nAll ambiguity detector unit tests passed.');
 }
 

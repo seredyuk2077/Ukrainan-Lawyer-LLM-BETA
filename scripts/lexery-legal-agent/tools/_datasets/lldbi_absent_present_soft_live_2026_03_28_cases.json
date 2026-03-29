@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "nbu_bank_metals_price_2026_03_26_live_absent",
+    "rada_nreg": "n0122500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_bank_metals",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким актом НБУ на 26 березня 2026 року встановлено облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де Нацбанк на 26.03.2026 зафіксував референтну облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_fx_rate_2026_03_26_live_absent",
+    "rada_nreg": "n0121500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_currency_rate",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Де НБУ на 26.03.2026 закріпив офіційний курс гривні щодо іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким актом Нацбанку на 26 березня 2026 року встановлено курс гривні до іноземних валют для офіційного розрахунку?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_defense_portal_345_2026_live_absent",
+    "rada_nreg": "345-2026-п",
+    "title": "Про внесення змін до Положення про Єдиний державний вебпортал електронних послуг у сфері національної безпеки і оборони",
+    "bucket": "defense_portal_bylaw",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим актом у березні 2026 року оновили положення про державний вебпортал електронних послуг у сфері національної безпеки і оборони?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким рішенням Кабміну в березні 2026 року змінили правила роботи е-порталу держпослуг у сфері нацбезпеки та оборони?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_land_services_350_2026_live_absent",
+    "rada_nreg": "350-2026-п",
+    "title": "Про внесення змін до переліків адміністративних послуг, які надаються Державною службою з питань геодезії, картографії та кадастру та її територіальними органами",
+    "bucket": "land_admin_services_bylaw",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим актом у березні 2026 року змінили перелік адмінпослуг, які надає Держгеокадастр та його територіальні органи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким рішенням Кабміну скоригували державний перелік кадастрових адміністративних послуг у березні 2026 року?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_youth_grants_349_2026_live_absent",
+    "rada_nreg": "349-2026-п",
+    "title": "Про внесення змін до Порядку використання коштів, передбачених у державному бюджеті для здійснення заходів державної політики з питань молоді та державної підтримки молодіжних та дитячих громадських об'єднань",
+    "bucket": "youth_grants_bylaw",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим актом у березні 2026 року змінили порядок бюджетних грантів для молодіжних та дитячих громадських об'єднань?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким рішенням Кабміну у березні 2026 року скоригували правила державної підтримки молодіжних і дитячих громадських об'єднань?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

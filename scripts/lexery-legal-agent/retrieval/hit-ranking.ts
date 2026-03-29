@@ -15,6 +15,8 @@ const W_ALIAS = 0.15;
 const W_ARTICLE = 0.15;
 const W_CATEGORY = 0.05;
 const W_STRUCTURAL = 0.3;
+const W_GROUNDED_ACT = 0.12;
+const W_GROUNDED_ACT_SEARCH = 0.24;
 const NOISE_PENALTY = 0.15;
 export const NOISE_PENALTY_POLICY_VERSION = 2;
 const DIVERSITY_TOP_N = 25;
@@ -76,13 +78,18 @@ export function hybridScore(
     )
       ? 1
       : 0;
+  const groundedActMatch =
+    hit.rada_nreg && (taxonomy.grounded_act_nregs ?? []).includes(hit.rada_nreg) ? 1 : 0;
+  const groundedActSearchHit = groundedActMatch && hit.source === 'lldbi_acts' ? 1 : 0;
   const structuralScore = computeChunkStructuralScore(hit, query, queryTokenWeights);
   return (
     W_VEC * vec +
     W_ALIAS * aliasMatch +
     W_ARTICLE * articleMatch +
     W_CATEGORY * categoryHint +
-    W_STRUCTURAL * structuralScore
+    W_STRUCTURAL * structuralScore +
+    W_GROUNDED_ACT * groundedActMatch +
+    W_GROUNDED_ACT_SEARCH * groundedActSearchHit
   );
 }
 

@@ -2208,6 +2208,10 @@ export async function resolveSingleGoalSelectedActs(
   });
   selected_acts_final = lowConfidenceSelectionNormalization.selectedActsFinal as SelectedActTraceItem[];
   selectedActsFinalMeta = lowConfidenceSelectionNormalization.selectedActsFinalMeta;
+  if (lowConfidenceSelectionNormalization.selectedActsSourcesBreakdown) {
+    selected_acts_sources_breakdown_final =
+      lowConfidenceSelectionNormalization.selectedActsSourcesBreakdown as SelectedActsSourcesBreakdown;
+  }
   reasonCodes.splice(0, reasonCodes.length, ...lowConfidenceSelectionNormalization.reasonCodes);
 
   const softNonPrimaryRecoveryCandidate = getSoftNonPrimaryRecoveryCandidate({
@@ -2498,6 +2502,10 @@ export async function resolveSingleGoalSelectedActs(
     ...reasonCodes,
     ...(selectedActsFinalMeta.selected_acts_decision_final.reason_codes ?? []),
   ], low_confidence_final);
+  const finalMetadataGroundedActCount = selected_acts_final.filter((act) => {
+    const candidate = actCandidatesTopHydrated.find((item) => sameRadaNreg(item.rada_nreg, act.rada_nreg));
+    return isMetadataGroundedActCandidate(candidate, query, METADATA_GROUNDING_REASON_CODES);
+  }).length;
 
   const coverageGap = deriveCoverageGap({
     lowConfidence: low_confidence_final,
@@ -2507,7 +2515,7 @@ export async function resolveSingleGoalSelectedActs(
     selectedActKinds: selected_acts_final.map((act) => act.act_kind ?? 'UNKNOWN'),
     exactActHitCount,
     groundedActHitCount,
-    metadataGroundedActCount: Math.max(metadataGroundedPrimaryActsCount, metadataSingleActConverged ? 1 : 0),
+    metadataGroundedActCount: finalMetadataGroundedActCount,
     hitsCount: finalHits.length,
     topScore,
     domainHint,

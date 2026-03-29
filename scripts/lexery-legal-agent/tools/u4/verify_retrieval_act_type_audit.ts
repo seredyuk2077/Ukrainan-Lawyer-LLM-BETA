@@ -181,6 +181,12 @@ function actInHits(rt: RunResult['retrievalTrace'], radaNreg: string): boolean {
   return hits.some((h) => (h.rada_nreg ?? '').trim() === nreg);
 }
 
+function actInSelected(rt: RunResult['retrievalTrace'], radaNreg: string): boolean {
+  if (!rt?.meta) return false;
+  const nreg = radaNreg.trim();
+  return (rt.meta.selected_acts ?? []).some((a) => (a.rada_nreg ?? '').trim() === nreg);
+}
+
 const OUT_OF_DOMAIN_REASON_CODES = ['NO_STRONG_ACT_EVIDENCE', 'OUT_OF_SCOPE', 'LOW_EVIDENCE', 'low_confidence_fallback', 'ACT_SELECTION_LOW_CONFIDENCE'];
 
 function checkReferenceExpansion(rt: RunResult['retrievalTrace'], c: ActTypeAuditCase): boolean {
@@ -201,8 +207,14 @@ function checkCase(rt: RunResult['retrievalTrace'], c: ActTypeAuditCase): boolea
   if (c.assertion === 'F_reference_expansion') return checkReferenceExpansion(rt, c);
   const radaNreg = c.rada_nreg ?? '';
   const inSelOrEv = actInSelectedOrEvidence(rt, radaNreg);
+  const inSelected = actInSelected(rt, radaNreg);
   const inHits = actInHits(rt, radaNreg);
-  if (c.assertion === 'A_explicit_act' || c.assertion === 'B_implicit_category') return inSelOrEv;
+  if (c.assertion === 'A_explicit_act') {
+    const selectedActsCount = rt?.meta?.selected_acts?.length ?? 0;
+    if (selectedActsCount > 0) return inSelected;
+    return inSelOrEv;
+  }
+  if (c.assertion === 'B_implicit_category') return inSelOrEv;
   if (c.assertion === 'C_within_act') return inSelOrEv || inHits;
   return inSelOrEv;
 }

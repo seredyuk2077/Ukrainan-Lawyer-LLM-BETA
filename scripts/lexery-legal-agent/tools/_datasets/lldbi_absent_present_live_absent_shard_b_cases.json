@@ -1,0 +1,147 @@
+[
+  {
+    "case_id": "law_science_activity_live_absent",
+    "rada_nreg": "848-19",
+    "title": "Про наукову і науково-технічну діяльність",
+    "bucket": "science_policy",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про наукову і науково-технічну діяльність», які права мають наукові працівники та хто проводить державну атестацію наукових установ?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про наукову діяльність які права має науковий працівник і хто атестує наукові установи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон визначає права scientific workers та порядок державної атестації наукових установ?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_civil_protection_disciplinary_statute_live_absent",
+    "rada_nreg": "1068-17",
+    "title": "Про Дисциплінарний статут служби цивільного захисту",
+    "bucket": "disciplinary_statute",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про Дисциплінарний статут служби цивільного захисту», які дисциплінарні стягнення можуть застосовуватися до осіб рядового і начальницького складу та хто їх накладає?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За дисциплінарним статутом служби цивільного захисту які стягнення бувають і хто їх накладає?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон регулює дисциплінарні санкції у службі цивільного захисту та компетенцію начальника щодо їх застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_state_property_management_live_absent",
+    "rada_nreg": "185-16",
+    "title": "Про управління об'єктами державної власності",
+    "bucket": "public_property_management",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про управління об'єктами державної власності», які повноваження має уповноважений орган управління та коли потрібно погоджувати значні господарські зобов'язання державного підприємства?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про управління державною власністю які повноваження має орган управління і коли погоджують значні зобов'язання?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон визначає повноваження органу управління державним підприємством та погодження значних господарських зобов'язань?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_zsu_disciplinary_statute_live_absent",
+    "rada_nreg": "551-14",
+    "title": "Про Дисциплінарний статут Збройних Сил України",
+    "bucket": "military_discipline",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про Дисциплінарний статут Збройних Сил України», які дисциплінарні стягнення застосовують до військовослужбовців та в якому порядку подається скарга на дисциплінарне стягнення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За дисциплінарним статутом ЗСУ які стягнення є для військових і як їх оскаржити?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає види дисциплінарних стягнень у Збройних Силах та порядок скарги на них?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_collective_agro_enterprise_live_absent",
+    "rada_nreg": "2114-12",
+    "title": "Про колективне сільськогосподарське підприємство",
+    "bucket": "agriculture",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про колективне сільськогосподарське підприємство», що належить до пайового фонду підприємства та які права має член підприємства при виході з нього?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про колективне сільськогосподарське підприємство що входить до пайового фонду і що отримує учасник при виході?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон регулює пайовий фонд КСП та майнові права члена підприємства при виході?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

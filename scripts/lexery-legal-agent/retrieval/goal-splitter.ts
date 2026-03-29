@@ -155,9 +155,78 @@ function normalizeSubqueryForSemantics(subquery: string): string {
     .trim();
 }
 
+function tokenizeGoalSegment(value: string): string[] {
+  return value
+    .normalize('NFC')
+    .split(/[^\p{L}\p{N}'’ʼ-]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
 function hasStrongSelectorProceduralSplitCue(query: string): boolean {
   const normalized = query.normalize('NFC');
   return STRONG_SELECTOR_PROCEDURAL_SPLIT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function looksLikeClauseLevelGoalSegment(subquery: string): boolean {
+  const normalized = normalizeSubqueryForSemantics(subquery);
+  if (!normalized) return false;
+  if (
+    /^(?:хто|як|коли|куди|де|чи|що|які|який|яка|яке|скільки|чому|навіщо)(?=$|[^\p{L}\p{N}])/iu.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^(?:може|можуть|має|мають|повинен|повинна|повинні|слід|треба|потрібно|дозволено|заборонено|передбачено|визначено|встановлено|регулюється|оскаржується)(?=$|[^\p{L}\p{N}])/iu.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  if (looksLikeActMetadataLocatorGoal(normalized) || looksLikeActMetadataFollowUp(normalized)) {
+    return true;
+  }
+  if (hasStrongSelectorProceduralSplitCue(normalized)) return true;
+  if (PROCEDURE_GOAL_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
+  if (LIABILITY_GOAL_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
+  if (extractStructuredActIdentifiers(normalized).length > 0) return true;
+  if (extractQuotedActTitleFragments(normalized).length > 0) return true;
+  return false;
+}
+
+function shouldKeepSingleQuestionConjunctionBundleTogether(
+  query: string,
+  left: string,
+  right: string
+): boolean {
+  const normalized = query.normalize('NFC').trim();
+  if (!normalized) return false;
+  const questionMarks = (normalized.match(/\?/g) || []).length;
+  if (questionMarks > 1) return false;
+  if (countStrongActScopeCues(normalized) > 1) return false;
+
+  const selectors = extractQueryCitationSelectors(normalized);
+  if (
+    (selectors.explicitSelectorCount > 0 || selectors.noteMentioned) &&
+    clausesSupportStrongProceduralMixedBundle(left, right)
+  ) {
+    return false;
+  }
+
+  const leftClauseLike = looksLikeClauseLevelGoalSegment(left);
+  const rightClauseLike = looksLikeClauseLevelGoalSegment(right);
+  if (leftClauseLike && rightClauseLike) return false;
+
+  const leftTokens = tokenizeGoalSegment(left);
+  const rightTokens = tokenizeGoalSegment(right);
+  const shorterLength = Math.min(leftTokens.length, rightTokens.length);
+  const longerLength = Math.max(leftTokens.length, rightTokens.length);
+  if (longerLength < 6) return false;
+  if (!leftClauseLike && !rightClauseLike) return true;
+  if (shorterLength > 4) return false;
+  return true;
 }
 
 function splitDistinctBundleClauses(query: string): [string, string] | null {
@@ -411,6 +480,12 @@ function splitIntoSubqueries(query: string): string[] {
   const conjunctionSplit = findTopLevelConjunctionSplit(q);
   if (
     conjunctionSplit &&
+    shouldKeepSingleQuestionConjunctionBundleTogether(q, conjunctionSplit[0], conjunctionSplit[1])
+  ) {
+    return [q];
+  }
+  if (
+    conjunctionSplit &&
     shouldSkipStructuralSplitForSingleActScopeQuery(q, conjunctionSplit[0], conjunctionSplit[1])
   ) {
     return [q];
@@ -453,6 +528,10 @@ function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
       [/так(?:ий|ого|ому)\s+позов(?:у|ом)?/iu, sharedSubject],
       [/так(?:е|ого|ому)\s+рішенн(?:я|і|ю|ям)/iu, sharedSubject],
       [/так(?:ій|ої|ою)\s+справ(?:і|и|ою)/iu, sharedSubject],
+      [
+        /^((?:і\s+|та\s+)?(?:хто|як|коли|куди|де|чи|що|які|який|яка|яке)\s+)(?:вона|він|воно|вони)\b/iu,
+        `$1${sharedSubject}`,
+      ],
     ];
     for (const [pattern, replacement] of replacements) {
       updated = updated.replace(pattern, replacement);
@@ -463,8 +542,15 @@ function injectSharedSubjectIntoQuestionParts(parts: string[]): string[] {
     const isYesNoFollowUp = /^(?:і\s+|та\s+)?чи(?:[\s?]|$)/iu.test(updated);
     const isGenericProceduralQuestion =
       /^(?:і\s+|та\s+)?(?:хто|як|коли|куди|чи|в\s+який\s+строк|який\s+строк|який\s+порядок|які\s+документ\p{L}*|який\s+перелік\s+документ\p{L}*)(?:[\s?]|$)/iu.test(updated);
-    if ((isGenericProceduralQuestion || isYesNoFollowUp) && !normalizedUpdated.includes(normalizedSubject)) {
-      updated = `${updated.replace(/\?+$/g, '').trim()} ${sharedSubject}`.trim();
+    const isActorMissingNeedFollowUp =
+      /^(?:і\s+|та\s+)?(?:що|як|коли)\s+(?:треба|потрібно|слід)\b/iu.test(updated);
+    if (
+      (isGenericProceduralQuestion || isYesNoFollowUp || isActorMissingNeedFollowUp) &&
+      !normalizedUpdated.includes(normalizedSubject)
+    ) {
+      updated = isActorMissingNeedFollowUp
+        ? `${sharedSubject} ${updated.replace(/\?+$/g, '').trim()}`.trim()
+        : `${updated.replace(/\?+$/g, '').trim()} ${sharedSubject}`.trim();
       if (/\?$/.test(part)) updated = `${updated}?`;
     }
     return updated;
@@ -480,8 +566,70 @@ function extractSharedSubject(prefix: string): string {
   return normalizedPrefix;
 }
 
+function cleanExtractedSubjectCandidate(candidate: string): string {
+  const tokens = candidate
+    .normalize('NFC')
+    .replace(/\?+$/g, '')
+    .split(/[^\p{L}\p{N}'’ʼ-]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => {
+      const normalized = token.toLowerCase();
+      return ![
+        'що',
+        'коли',
+        'як',
+        'де',
+        'куди',
+        'чому',
+        'чи',
+        'які',
+        'який',
+        'яка',
+        'яке',
+        'скільки',
+        'може',
+        'можуть',
+        'має',
+        'мають',
+        'треба',
+        'потрібно',
+        'слід',
+        'повинен',
+        'повинна',
+        'повинні',
+        'вона',
+        'він',
+        'воно',
+        'вони',
+      ].includes(normalized);
+    });
+  return tokens.slice(0, 4).join(' ').trim();
+}
+
+function extractLeadingActorSubject(subject: string): string {
+  const normalized = subject.normalize('NFC').replace(/\?+$/g, '').trim();
+  const modalBeforeSubjectMatch = normalized.match(
+    /^(?:що|коли|як|де|куди|чому|чи|які|який|яка|яке|скільки)\s+(?:може|можуть|має|мають|повинен|повинна|повинні|зобов['’`]?язан(?:ий|а|і))\s+([^,?]+?)(?=\s+(?:під\s+час|після|перед|при|за|без|до|для|щодо|у|в|і|та|коли|як|якщо|щоб|які|який|яка|яке|що|де|куди|чому|чи)\b|$)/iu
+  );
+  if (modalBeforeSubjectMatch?.[1]) {
+    return cleanExtractedSubjectCandidate(modalBeforeSubjectMatch[1]);
+  }
+
+  const subjectBeforeModalMatch = normalized.match(
+    /^(?:що|коли|як|де|куди|чому|чи|які|який|яка|яке|скільки)\s+([^,?]+?)\s+(?:може|можуть|має|мають|повинен|повинна|повинні|зобов['’`]?язан(?:ий|а|і))(?=$|[^\p{L}\p{N}])/iu
+  );
+  if (subjectBeforeModalMatch?.[1]) {
+    return cleanExtractedSubjectCandidate(subjectBeforeModalMatch[1]);
+  }
+
+  return '';
+}
+
 function extractSubjectFocus(subject: string): string {
   const normalized = subject.normalize('NFC').replace(/\?+$/g, '').trim();
+  const leadingActorSubject = extractLeadingActorSubject(normalized);
+  if (leadingActorSubject) return leadingActorSubject;
   const prepositionMatch = normalized.match(
     /(?:^|[\s,])(?:від|про|щодо|для|при|після|під\s+час|за|у|в)\s+(.+)$/iu
   );
@@ -637,6 +785,93 @@ function tryCompactProceduralBundleGoals(
   ];
 }
 
+function tryCompactSharedActorBundleGoals(
+  query: string,
+  goals: EvidenceGoal[],
+  domainHint: string | undefined,
+  isComplianceContext: boolean
+): EvidenceGoal[] | null {
+  if (goals.length < 2) return null;
+  if (countStrongActScopeCues(query) > 0) return null;
+  if (goals.some((goal) => goal.goal_type === 'liability')) return null;
+  if (goals.some((goal) => (goal.required_categories?.length ?? 0) > 0)) return null;
+  if (
+    goals.some(
+      (goal) =>
+        hasStrongSelectorProceduralSplitCue(goal.subquery) ||
+        looksLikeActMetadataLocatorGoal(goal.subquery) ||
+        looksLikeActMetadataFollowUp(goal.subquery)
+    )
+  ) {
+    return null;
+  }
+
+  const distinctGoalDomains = new Set(
+    goals
+      .map((goal) => (goal.domain_hint ?? '').normalize('NFC').toLowerCase().trim())
+      .filter(Boolean)
+  );
+  if (distinctGoalDomains.size > 1) return null;
+
+  const actorSubject = extractLeadingActorSubject(extractSharedSubject(goals[0]?.subquery ?? query));
+  if (!actorSubject) return null;
+  const sharedSubject = extractSubjectFocus(actorSubject);
+  const normalizedSharedSubject = sharedSubject.toLowerCase();
+  const followUpGoals = goals.slice(1);
+  const hasSharedActorFollowUp = (subquery: string): boolean => {
+    const normalized = normalizeSubqueryForSemantics(subquery).toLowerCase();
+    if (/^(?:і\s+|та\s+)?(?:що|як|коли)\s+(?:треба|потрібно|слід)(?=$|[^\p{L}\p{N}])/u.test(normalized)) return true;
+    if (/^(?:і\s+|та\s+)?(?:хто|як|коли|куди|де|чи|що|які|який|яка|яке)\s+(?:вона|він|воно|вони)\s+(?:може|можуть|має|мають|повинен|повинна|повинні|зобов['’`]?язан(?:ий|а|і))(?=$|[^\p{L}\p{N}])/u.test(normalized)) {
+      return true;
+    }
+
+    const normalizedWithoutConjunction = normalized.replace(/^(?:і\s+|та\s+)?/u, '');
+    const questionWordMatch = normalizedWithoutConjunction.match(
+      /^(?:хто|як|коли|куди|де|чи|що|які|який|яка|яке)\s+(.+)$/u
+    );
+    if (questionWordMatch?.[1]?.startsWith(`${normalizedSharedSubject} `)) {
+      const modalTail = questionWordMatch[1].slice(normalizedSharedSubject.length).trim();
+      if (/^(?:може|можуть|має|мають|повинен|повинна|повинні|зобов['’`]?язан(?:ий|а|і))(?=$|[^\p{L}\p{N}])/u.test(modalTail)) {
+        return true;
+      }
+    }
+
+    if (normalizedWithoutConjunction.startsWith(`${normalizedSharedSubject} `)) {
+      const actorTail = normalizedWithoutConjunction.slice(normalizedSharedSubject.length).trim();
+      if (/^(?:що|як|коли)\s+(?:треба|потрібно|слід)(?=$|[^\p{L}\p{N}])/u.test(actorTail)) return true;
+    }
+    return false;
+  };
+  if (
+    followUpGoals.length === 0 ||
+    !followUpGoals.every((goal) => hasSharedActorFollowUp(goal.subquery))
+  ) {
+    return null;
+  }
+  const firstGoalNormalized = normalizeSubqueryForSemantics(goals[0]?.subquery ?? '').toLowerCase();
+  if (!firstGoalNormalized.includes(normalizedSharedSubject)) {
+    return null;
+  }
+  if (
+    followUpGoals.some((goal) => {
+      const normalized = normalizeSubqueryForSemantics(goal.subquery).toLowerCase();
+      return !hasSharedActorFollowUp(goal.subquery) && !normalized.includes(normalizedSharedSubject);
+    })
+  ) {
+    return null;
+  }
+
+  return [
+    {
+      id: 'goal_0',
+      goal_type: isComplianceContext ? 'compliance_check' : inferGoalType(query, false),
+      subquery: query.slice(0, 4000),
+      domain_hint: domainHint,
+      must_have_signals: mergeGoalSignals(goals),
+    },
+  ];
+}
+
 function looksLikeNormLocatorBundle(query: string, goals: EvidenceGoal[]): boolean {
   if (goals.length < 2) return false;
   const normalized = query.normalize('NFC');
@@ -765,6 +1000,13 @@ export function heuristicGoalSplit(
   const inputIsLarge = !!routingFlags?.input_is_large;
 
   const topLevelConjunctionSplit = findTopLevelConjunctionSplit(query);
+  const singleQuestionConjunctionCompacted =
+    !!topLevelConjunctionSplit &&
+    shouldKeepSingleQuestionConjunctionBundleTogether(
+      query,
+      topLevelConjunctionSplit[0],
+      topLevelConjunctionSplit[1]
+    );
   const singleActScopeCompacted =
     !!topLevelConjunctionSplit &&
     shouldSkipStructuralSplitForSingleActScopeQuery(query, topLevelConjunctionSplit[0], topLevelConjunctionSplit[1]);
@@ -796,6 +1038,7 @@ export function heuristicGoalSplit(
         ? 'compliance_check'
         : inferGoalType(query, false);
     const singleReasonCodes: string[] = [];
+    if (singleQuestionConjunctionCompacted) singleReasonCodes.push('same_act_bundle_compaction');
     if (singleActScopeCompacted) singleReasonCodes.push('same_act_bundle_compaction');
     if (compactedActMetadataBundle) singleReasonCodes.push('act_metadata_bundle_compaction');
     const single: EvidenceGoal = {
@@ -849,6 +1092,21 @@ export function heuristicGoalSplit(
       used_heuristic: true,
       used_llm_planner: false,
       reason_codes: [...reasonCodes, 'same_act_bundle_compaction', 'act_metadata_bundle_compaction'],
+    };
+  }
+
+  const compactedSharedActorGoals = tryCompactSharedActorBundleGoals(
+    query,
+    goals,
+    domainHint,
+    inputLikeContract
+  );
+  if (compactedSharedActorGoals) {
+    return {
+      goals: compactedSharedActorGoals,
+      used_heuristic: true,
+      used_llm_planner: false,
+      reason_codes: [...reasonCodes, 'same_act_bundle_compaction', 'shared_actor_bundle_compaction'],
     };
   }
 

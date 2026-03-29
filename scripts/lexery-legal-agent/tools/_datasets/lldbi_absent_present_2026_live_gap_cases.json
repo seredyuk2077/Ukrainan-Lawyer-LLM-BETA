@@ -1,0 +1,178 @@
+[
+  {
+    "case_id": "law_us_rebuild_fund_budget_4468_20",
+    "rada_nreg": "4468-20",
+    "title": "Про внесення змін до Бюджетного кодексу України щодо реалізації Угоди між Урядом України та Урядом Сполучених Штатів Америки про створення Американсько-Українського інвестиційного фонду відбудови",
+    "bucket": "budget_and_investment_fund",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про внесення змін до Бюджетного кодексу України щодо реалізації Угоди між Урядом України та Урядом Сполучених Штатів Америки про створення Американсько-Українського інвестиційного фонду відбудови», для реалізації якої саме угоди та якого фонду відбудови вносяться ці зміни?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4468-20 про який інвестиційний фонд відбудови і яку угоду зі США він реалізує?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_excise_spirit_bioethanol_4014_20",
+    "rada_nreg": "4014-20",
+    "title": "Про внесення змін до Податкового кодексу України та інших законів України щодо особливостей оподаткування акцизним податком спирту етилового та біоетанолу",
+    "bucket": "tax_excise",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про внесення змін до Податкового кодексу України та інших законів України щодо особливостей оподаткування акцизним податком спирту етилового та біоетанолу», особливості оподаткування яких саме продуктів акцизним податком регулюються цим законом?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4014-20 про які особливості акцизу на спирт і біоетанол?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_state_communal_transfer_live_absent_v2",
+    "rada_nreg": "147/98-ВР",
+    "title": "Про передачу об'єктів права державної та комунальної власності",
+    "bucket": "public_property",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про передачу об'єктів права державної та комунальної власності», який орган приймає рішення про передачу об'єкта та які документи подаються для такої передачі?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про передачу об'єктів державної та комунальної власності хто вирішує передачу і які потрібні документи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_food_traceability_live_absent_v2",
+    "rada_nreg": "771/97-ВР",
+    "title": "Про основні принципи та вимоги до безпечності та якості харчових продуктів",
+    "bucket": "food_safety",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про основні принципи та вимоги до безпечності та якості харчових продуктів», які обов'язки має оператор ринку щодо простежуваності харчових продуктів та надання інформації компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про безпечність харчових продуктів які вимоги до простежуваності і яку інформацію треба дати компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_backup_power_353_2026_p",
+    "rada_nreg": "353-2026-п",
+    "title": "Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва",
+    "bucket": "municipal_energy_resilience",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За постановою Кабінету Міністрів України «Про реалізацію експериментального проекту щодо будівництва та/або розміщення систем незалежного резервного живлення в багатоквартирних будинках м. Києва», який саме експериментальний проект реалізується і де саме він впроваджується?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Постанова 353-2026-п про який проект резервного живлення для багатоквартирних будинків у Києві?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_education_subvention_354_2026_p",
+    "rada_nreg": "354-2026-п",
+    "title": "Про затвердження Порядку та умов надання субвенції з державного бюджету місцевим бюджетам на реалізацію публічного інвестиційного проекту на модернізацію майстерень і лабораторій закладів професійної та фахової передвищої освіти, забезпечення енергоефективності, безпеки та інклюзивності освітнього простору та визнання такими, що втратили чинність, деяких постанов Кабінету Міністрів України",
+    "bucket": "education_subvention",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За постановою Кабінету Міністрів України «Про затвердження Порядку та умов надання субвенції з державного бюджету місцевим бюджетам на реалізацію публічного інвестиційного проекту на модернізацію майстерень і лабораторій закладів професійної та фахової передвищої освіти...», на що саме надається ця субвенція і для яких закладів освіти?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Постанова 354-2026-п про яку освітню субвенцію на модернізацію майстерень і лабораторій?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_war_risk_compensation_352_2026_p",
+    "rada_nreg": "352-2026-п",
+    "title": "Про внесення змін до Порядку надання часткової компенсації вартості майна суб'єктів господарювання, знищеного чи пошкодженого внаслідок збройної агресії Російської Федерації, а також часткової компенсації страхових премій за договорами страхування від воєнних ризиків",
+    "bucket": "war_risk_compensation",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За постановою Кабінету Міністрів України «Про внесення змін до Порядку надання часткової компенсації вартості майна суб'єктів господарювання, знищеного чи пошкодженого внаслідок збройної агресії Російської Федерації, а також часткової компенсації страхових премій за договорами страхування від воєнних ризиків», яких саме двох видів часткової компенсації стосуються ці зміни?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Постанова 352-2026-п про які дві компенсації для бізнесу через воєнні ризики і пошкоджене майно?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_drone_procurement_351_2026_p",
+    "rada_nreg": "351-2026-п",
+    "title": "Про внесення зміни до пункту 14 Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин",
+    "bucket": "defense_procurement",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За постановою Кабінету Міністрів України «Про внесення зміни до пункту 14 Порядку здійснення закупівлі безпілотних систем, засобів радіоелектронної боротьби тактичного рівня вітчизняного виробництва та їх складових частин», порядок закупівлі яких саме засобів і виробів змінюється цією постановою?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Постанова 351-2026-п про зміни до закупівлі яких безпілотних і РЕБ-систем?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

@@ -17,18 +17,21 @@ export function detectAmbiguity(
   const tokenCount = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean).length;
 
   const hasEntities = entities.length > 0;
+  const hasStructuralLegalCue = entities.some(
+    (e) => e.type === 'article_ref' || e.type === 'act_abbrev' || e.type === 'law_title'
+  );
   const hasDirectRef = entities.some((e) => e.type === 'article_ref' || e.type === 'act_abbrev');
   const hasConcreteDomain = domain !== 'general';
 
   // Hard ambiguity is reserved for genuinely underspecified very short queries.
   // Short but concrete domain-specific legal queries should not be pushed into
   // the expensive ambiguity/deep-retrieval path just because they lack entities.
-  if (!hasEntities && !hasDirectRef && !hasConcreteDomain && q.length < HARD_SHORT_QUERY_MAX_CHARS && tokenCount <= 3) {
+  if (!hasEntities && !hasStructuralLegalCue && !hasConcreteDomain && q.length < HARD_SHORT_QUERY_MAX_CHARS && tokenCount <= 3) {
     reasons.push('no_entities_short_query');
     reason_codes.push('TOO_SHORT_QUERY');
   }
 
-  if (domain === 'general' && !hasDirectRef && q.length > 10) {
+  if (domain === 'general' && !hasStructuralLegalCue && !hasDirectRef && q.length > 10) {
     reasons.push('general_domain_no_direct_ref');
     reason_codes.push('GENERAL_DOMAIN_NO_DIRECT_REF');
   }

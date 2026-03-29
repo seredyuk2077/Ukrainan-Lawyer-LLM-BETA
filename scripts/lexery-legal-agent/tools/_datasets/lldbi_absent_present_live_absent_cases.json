@@ -1,0 +1,292 @@
+[
+  {
+    "case_id": "law_cybersecurity_live_absent",
+    "rada_nreg": "2163-19",
+    "title": "Про основні засади забезпечення кібербезпеки України",
+    "bucket": "cybersecurity",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про основні засади забезпечення кібербезпеки України», що належить до об'єктів критичної інформаційної інфраструктури та які суб'єкти входять до національної системи кібербезпеки?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про кібербезпеку що вважається критичною інфраструктурою і хто входить до системи кібербезпеки?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає критичну інформаційну інфраструктуру та перелік суб'єктів національної кібербезпеки?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_higher_education_live_absent",
+    "rada_nreg": "1556-18",
+    "title": "Про вищу освіту",
+    "bucket": "education",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про вищу освіту», які підстави для відрахування здобувача вищої освіти та коли студент має право на академічну мобільність?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про вищу освіту коли студента можуть відрахувати і як працює академічна мобільність?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон визначає підстави відрахування з університету та право здобувача на академічну мобільність?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_state_aid_live_absent",
+    "rada_nreg": "1555-18",
+    "title": "Про державну допомогу суб'єктам господарювання",
+    "bucket": "competition_and_state_aid",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про державну допомогу суб'єктам господарювання», коли надавач державної допомоги зобов'язаний повідомляти Антимонопольний комітет та що таке незначна державна допомога?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про державну допомогу бізнесу коли треба повідомляти АМКУ і що таке de minimis?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон вимагає нотифікації державної допомоги до АМКУ та окремо визначає незначну допомогу суб'єктам господарювання?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_court_fee_live_absent",
+    "rada_nreg": "3674-17",
+    "title": "Про судовий збір",
+    "bucket": "court_procedure",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про судовий збір», у яких випадках сплачена сума судового збору підлягає поверненню та хто звільняється від сплати судового збору?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про судовий збір коли збір повертають і хто може не платити?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає підстави для повернення судового збору та категорії осіб, звільнених від його сплати?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_urban_planning_live_absent",
+    "rada_nreg": "3038-17",
+    "title": "Про регулювання містобудівної діяльності",
+    "bucket": "urban_planning",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про регулювання містобудівної діяльності», коли замовник має отримати дозвіл на виконання будівельних робіт та що означає клас наслідків (відповідальності) об'єкта?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про містобудівну діяльність коли потрібен дозвіл на будівельні роботи і що таке клас наслідків?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон регулює дозвіл на будівництво та класи наслідків об'єктів будівництва?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_competition_live_absent",
+    "rada_nreg": "2210-14",
+    "title": "Про захист економічної конкуренції",
+    "bucket": "competition",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про захист економічної конкуренції», у яких випадках концентрація суб'єктів господарювання потребує дозволу Антимонопольного комітету та що вважається антиконкурентними узгодженими діями?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про захист економічної конкуренції коли концентрація потребує дозволу АМКУ?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає підстави для дозволу на концентрацію та поняття антиконкурентних узгоджених дій?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_banking_live_absent",
+    "rada_nreg": "2121-14",
+    "title": "Про банки і банківську діяльність",
+    "bucket": "banking",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про банки і банківську діяльність», що становить банківську таємницю та в яких випадках банк може розкривати таку інформацію?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про банки що є банківською таємницею і коли її можна розкривати?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон визначає склад банківської таємниці та винятки для її розкриття?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_heat_supply_live_absent",
+    "rada_nreg": "2633-15",
+    "title": "Про теплопостачання",
+    "bucket": "utilities",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про теплопостачання», які обов'язки теплопостачальної організації щодо якості та безперервності постачання теплової енергії і хто встановлює тарифи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про теплопостачання хто встановлює тарифи і які обов'язки постачальника тепла?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон регулює тарифи на теплову енергію та обов'язки теплопостачальної організації щодо якості послуг?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_drinking_water_live_absent",
+    "rada_nreg": "2918-14",
+    "title": "Про питну воду та питне водопостачання",
+    "bucket": "water_supply",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про питну воду та питне водопостачання», які вимоги ставляться до якості питної води та які обов'язки мають органи місцевого самоврядування у сфері питного водопостачання?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про питну воду які вимоги до якості води і що повинна робити громада?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон встановлює стандарти якості питної води та повноваження місцевого самоврядування у сфері водопостачання?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_state_communal_transfer_live_absent",
+    "rada_nreg": "147/98-ВР",
+    "title": "Про передачу об'єктів права державної та комунальної власності",
+    "bucket": "public_property",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про передачу об'єктів права державної та комунальної власності», який орган приймає рішення про передачу об'єкта та які документи подаються для такої передачі?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про передачу об'єктів державної та комунальної власності хто вирішує передачу і які потрібні документи?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон регулює передачу об'єктів між державною і комунальною власністю та пакет документів для такого рішення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

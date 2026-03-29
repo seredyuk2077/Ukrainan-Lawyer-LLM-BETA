@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "nbu_bank_metals_2026_03_23_live_absent",
+    "rada_nreg": "n0116500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_daily_price",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 23 березня 2026 року зафіксував облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким актом НБУ станом на 23.03.2026 визначено облікову ціну банківських металів для офіційного застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_fx_rate_2026_03_23_live_absent",
+    "rada_nreg": "n0115500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_daily_fx",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 23 березня 2026 року закріпив офіційний курс гривні до іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким документом НБУ на 23.03.2026 встановлено офіційний валютний курс гривні для щоденного застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_energorinok_reorganization_246_2026_live_absent",
+    "rada_nreg": "246-2026-р",
+    "title": "Про реорганізацію державного підприємства “Енергоринок”",
+    "bucket": "cmu_enterprise_reorganization",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким урядовим рішенням у березні 2026 року вирішили реорганізувати державне підприємство \"Енергоринок\"?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Де Кабмін у березні 2026 року оформив реорганізацію ДП \"Енергоринок\"?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_made_in_ukraine_support_342_2026_live_absent",
+    "rada_nreg": "342-2026-п",
+    "title": "Про внесення змін до Порядку реалізації експериментального проекту щодо надання державної грошової допомоги покупцям товарів та послуг українського виробництва в рамках Всеукраїнської економічної платформи “Зроблено в Україні”",
+    "bucket": "cmu_ukrainian_goods_support",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким урядовим актом у березні 2026 року змінили правила державної грошової підтримки покупців українських товарів у програмі \"Зроблено в Україні\"?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Де Кабмін у березні 2026 року скоригував порядок експериментального проекту допомоги покупцям товарів і послуг українського виробництва?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_one_time_social_payment_341_2026_live_absent",
+    "rada_nreg": "341-2026-п",
+    "title": "Деякі питання надання одноразової грошової доплати окремим категоріям населення",
+    "bucket": "cmu_social_payment",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким урядовим актом у березні 2026 року врегулювали одноразову грошову доплату окремим категоріям населення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Де Кабмін визначив умови разової грошової доплати окремим категоріям населення у 2026 році?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

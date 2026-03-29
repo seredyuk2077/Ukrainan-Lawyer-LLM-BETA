@@ -56,6 +56,10 @@ export interface BuildSingleGoalRetrievalTraceInput {
   withinActPolicyReasonCodes: string[];
   actsSearchPolicyReasonCodes: string[];
   anchorsUsed: string[];
+  exactActHitCount: number;
+  exactActNregs: string[];
+  groundedActHitCount: number;
+  groundedActNregs: string[];
   taxonomySnapshotVersion?: number | null;
   lldbiHintsPresent: boolean;
   lldbiHintsUsed?: RetrievalMeta['lldbi_hints_used'];
@@ -193,6 +197,10 @@ export function buildSingleGoalRetrievalTrace(input: BuildSingleGoalRetrievalTra
       within_act_policy: input.withinActPolicyReasonCodes.length ? input.withinActPolicyReasonCodes : undefined,
       acts_search_policy: input.actsSearchPolicyReasonCodes.length ? input.actsSearchPolicyReasonCodes : undefined,
       anchors_used: input.anchorsUsed.length ? input.anchorsUsed : undefined,
+      exact_act_hit_count: input.exactActHitCount || undefined,
+      exact_act_nregs: input.exactActNregs.length ? input.exactActNregs : undefined,
+      grounded_act_hit_count: input.groundedActHitCount || undefined,
+      grounded_act_nregs: input.groundedActNregs.length ? input.groundedActNregs : undefined,
       taxonomy_snapshot_version: input.taxonomySnapshotVersion ?? undefined,
       lldbi_hints_present: input.lldbiHintsPresent,
       lldbi_hints_used: input.lldbiHintsUsed,

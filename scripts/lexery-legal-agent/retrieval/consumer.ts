@@ -108,7 +108,7 @@ export async function handleU4Event(event: RunEvent): Promise<void> {
     const queryProfile = run.query_profile as {
       domain?: string;
       domainHint?: string;
-      entities?: { act_abbrev?: string; article_ref?: string }[];
+      entities?: { act_abbrev?: string; law_title?: string; article_ref?: string }[];
       routing_flags?: import('../classify/types.js').RoutingFlags;
       lldbi?: { categories_ranked_top3?: string[]; document_types_ranked_top3?: string[] };
     } | null | undefined;

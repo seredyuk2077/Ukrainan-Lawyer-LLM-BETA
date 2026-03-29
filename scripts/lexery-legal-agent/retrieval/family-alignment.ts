@@ -61,3 +61,48 @@ export function isProceduralFamilyKey(value: string | null | undefined): boolean
   const familyKey = toFamilyKey(value);
   return familyKey.includes('procedure') || familyKey === 'judiciary_justice';
 }
+
+export function areCompatiblePrimaryFamilies(
+  leftFamily: string | null | undefined,
+  rightFamily: string | null | undefined
+): boolean {
+  const normalizedLeft = toFamilyKey(leftFamily);
+  const normalizedRight = toFamilyKey(rightFamily);
+  if (
+    !normalizedLeft ||
+    !normalizedRight ||
+    normalizedLeft === 'unknown' ||
+    normalizedRight === 'unknown'
+  ) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) return true;
+  if (
+    normalizedLeft.startsWith(`${normalizedRight}_`) ||
+    normalizedRight.startsWith(`${normalizedLeft}_`)
+  ) {
+    return true;
+  }
+
+  const pair = new Set([normalizedLeft, normalizedRight]);
+  if (pair.has('criminal') && pair.has('criminal_procedure')) return true;
+  if (pair.has('civil') && pair.has('civil_procedure')) return true;
+  if (pair.has('civil') && pair.has('family')) return true;
+  if (pair.has('administrative') && pair.has('administrative_offenses')) return true;
+  return false;
+}
+
+export function hasOnlyCompatiblePrimaryFamilies(familyKeys: Array<string | null | undefined>): boolean {
+  const distinctFamilies = [
+    ...new Set(familyKeys.map((familyKey) => toFamilyKey(familyKey)).filter((familyKey) => familyKey !== 'unknown')),
+  ];
+  if (distinctFamilies.length <= 1) return true;
+  for (let index = 0; index < distinctFamilies.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < distinctFamilies.length; otherIndex += 1) {
+      if (!areCompatiblePrimaryFamilies(distinctFamilies[index], distinctFamilies[otherIndex])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}

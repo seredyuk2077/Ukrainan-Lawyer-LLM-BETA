@@ -1636,20 +1636,26 @@
     "tenant_id_hash": "7ac1b8d7",
     "fingerprint": "8ece913a4d168b75",
     "flags": {
-      "domain": "corporate"
+      "domain": "criminal"
     },
     "expectations": {
       "expected_act_families": [
         {
-          "family_id": "corporate",
+          "family_id": "criminal",
+          "stems_or_signals": [],
+          "confidence": 0.3
+        },
+        {
+          "family_id": "criminal_procedure",
           "stems_or_signals": [],
           "confidence": 0.3
         }
       ],
       "expected_domains": [
-        "corporate"
+        "criminal",
+        "criminal_procedure"
       ],
-      "must_have_multi_act": false,
+      "must_have_multi_act": true,
       "must_have_multi_goal": true,
       "heuristic_confidence": 0.5,
       "low_confidence": false

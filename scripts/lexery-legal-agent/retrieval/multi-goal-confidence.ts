@@ -5,13 +5,19 @@ import {
   normalizeActReferenceCue,
 } from './act-taxonomy-store.js';
 import {
+  areCompatiblePrimaryFamilies,
+  hasOnlyCompatiblePrimaryFamilies,
+  isDomainHintAlignedFamily,
+  isSpecificDomainHint,
+  toFamilyKey,
+} from './family-alignment.js';
+import {
   hasActTitleSupportOverlap,
   isInterrogativePrimaryLawLocatorQuery,
   isExplicitlyHintedSupportActCandidate,
   isMetadataGroundedActCandidate,
   queryRequestsPrimaryLawLikeAct,
 } from './single-goal-act-scope.js';
-import { isDomainHintAlignedFamily } from './single-goal-selected-acts.js';
 import {
   CHUNKS_EVIDENCE_COUNT_THRESHOLD,
   CHUNKS_EVIDENCE_SCORE_THRESHOLD,
@@ -111,11 +117,6 @@ const GENERIC_EXPLICIT_TITLE_ANCHOR_TOKENS = new Set([
   'саме',
   'цей',
 ]);
-
-function isSpecificDomainHint(domainHint: string | undefined | null): boolean {
-  const normalized = (domainHint ?? '').normalize('NFC').trim().toLowerCase();
-  return normalized.length > 0 && normalized !== 'general' && normalized !== 'unknown';
-}
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
@@ -240,40 +241,6 @@ function getExactQuotedPrimaryAnchorSignalTokenCount(
     }
   }
   return bestExactSignalTokens;
-}
-
-function toFamilyKey(category: string | undefined | null): string {
-  return (category ?? '')
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .trim() || 'unknown';
-}
-
-function areCompatiblePrimaryFamilies(leftFamily: string, rightFamily: string): boolean {
-  if (!leftFamily || !rightFamily || leftFamily === 'unknown' || rightFamily === 'unknown') return false;
-  if (leftFamily === rightFamily) return true;
-  if (leftFamily.startsWith(`${rightFamily}_`) || rightFamily.startsWith(`${leftFamily}_`)) return true;
-
-  const pair = new Set([leftFamily, rightFamily]);
-  if (pair.has('criminal') && pair.has('criminal_procedure')) return true;
-  if (pair.has('civil') && pair.has('civil_procedure')) return true;
-  if (pair.has('civil') && pair.has('family')) return true;
-  if (pair.has('administrative') && pair.has('administrative_offenses')) return true;
-  return false;
-}
-
-function hasOnlyCompatiblePrimaryFamilies(familyKeys: string[]): boolean {
-  const distinctFamilies = [...new Set(familyKeys.filter((familyKey) => familyKey !== 'unknown'))];
-  if (distinctFamilies.length <= 1) return true;
-  for (let index = 0; index < distinctFamilies.length; index += 1) {
-    for (let otherIndex = index + 1; otherIndex < distinctFamilies.length; otherIndex += 1) {
-      if (!areCompatiblePrimaryFamilies(distinctFamilies[index]!, distinctFamilies[otherIndex]!)) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 function countActsWithUniqueGoalContribution(

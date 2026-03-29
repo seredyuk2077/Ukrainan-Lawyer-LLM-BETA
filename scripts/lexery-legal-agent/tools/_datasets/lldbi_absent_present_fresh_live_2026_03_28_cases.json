@@ -1,0 +1,134 @@
+[
+  {
+    "case_id": "nbu_bank_metals_2026_03_24_fresh_live_absent",
+    "rada_nreg": "n0118500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_bank_metals",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким актом НБУ на 24 березня 2026 року встановлено облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де Нацбанк на 24.03.2026 зафіксував референтну облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_fx_rate_2026_03_24_fresh_live_absent",
+    "rada_nreg": "n0117500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_currency_rate",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Де НБУ на 24.03.2026 закріпив офіційний курс гривні щодо іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким актом Нацбанку на 24 березня 2026 року встановлено курс гривні до іноземних валют для офіційного розрахунку?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_ilchenko_first_deputy_253_2026_r_fresh_live_absent",
+    "rada_nreg": "253-2026-р",
+    "title": "Про призначення Ільченка І.О. першим заступником Голови Національної соціальної сервісної служби України",
+    "bucket": "cmu_personnel_order",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим рішенням у березні 2026 року призначили Ільченка І.О. першим заступником Голови Нацсоцслужби?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де уряд оформив призначення Ільченка І.О. першим заступником Голови Національної соціальної сервісної служби України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_dobromilskyi_deputy_head_236_2026_r_fresh_live_absent",
+    "rada_nreg": "236-2026-р",
+    "title": "Про призначення Добромільського П.П. заступником Голови Державної служби України з питань праці",
+    "bucket": "cmu_personnel_order",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим рішенням у березні 2026 року призначили Добромільського П.П. заступником Голови Держпраці?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де оформлено призначення Добромільського П.П. заступником Голови Державної служби України з питань праці?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_kompaniiets_state_secretary_235_2026_r_fresh_live_absent",
+    "rada_nreg": "235-2026-р",
+    "title": "Про призначення Компанійця О.С. державним секретарем Міністерства цифрової трансформації України",
+    "bucket": "cmu_personnel_order",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким рішенням Кабміну призначили Компанійця О.С. державним секретарем Міністерства цифрової трансформації України?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де уряд оформив призначення Компанійця О.С. держсекретарем Мінцифри?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_amend_order_625_250_2026_r_fresh_live_absent",
+    "rada_nreg": "250-2026-р",
+    "title": "Про внесення змін до розпорядження Кабінету Міністрів України від 25 червня 2025 р. № 625",
+    "bucket": "cmu_amendment_order",
+    "queries": [
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким урядовим рішенням у березні 2026 року внесли зміни до розпорядження Кабміну від 25 червня 2025 р. № 625?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким актом Кабмін скоригував розпорядження №625 від 25.06.2025?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

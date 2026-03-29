@@ -2,6 +2,7 @@
  * [U2c] Entity Extractor — regex/abbrev (LEX-85)
  */
 import type { ExtractedEntity } from './types.js';
+import { looksLikeStructuredActIdentifier, normalizeStructuredActIdentifier } from '../lib/structured-act-identifier.js';
 
 const ACT_ABBREVS: Record<string, string> = {
   ККУ: 'Кримінальний кодекс України',
@@ -14,8 +15,10 @@ const ACT_ABBREVS: Record<string, string> = {
 };
 
 const AUTHORITIES = [
-  'МВС', 'СБУ', 'ДПС', 'НБУ', 'РНБО', 'КМУ', 'ВРУ', 'ОГПУ', 'НАЗК', 'АМКУ',
+  'МВС', 'СБУ', 'ДПС', 'НБУ', 'РНБО', 'КМУ', 'ВРУ', 'ОГПУ', 'НАЗК', 'АМКУ', 'МОЗ',
 ];
+
+const NON_LEGAL_ENTITY_ABBREVIATIONS = new Set(['ТОВ', 'АТ', 'ПАТ', 'ПРАТ', 'ПП', 'ФОП', 'ДП']);
 
 // ст. 115, стаття 115, ст 115, ст.115, ст 115-1 (Cyrillic-safe)
 const ARTICLE_REF = /(?:^|[\s\W])(?:ст\.?|стаття|статті|статтю)\s*(\d+(?:-\d+)?)(?:[\s\W]|$)/gi;
@@ -33,6 +36,39 @@ const GENERIC_LAW_TITLE =
 // Short explicit act references with number, e.g. "ПКМ №100", "постанова КМУ №1178", "наказ МОЗ №385".
 const SHORT_ACT_REFERENCE =
   /(?:^|[\s\W])((?:(?:пкм|постанова|розпорядження|наказ|рішення|порядок|правила|інструкція|положення|регламент|закон|кодекс|указ)(?:\s+[A-ZА-ЯІЇЄҐ]{2,10})?|[A-ZА-ЯІЇЄҐ]{2,10})\s*№\s*[\d][\p{L}\d/-]{0,20})(?=$|[\s\W])/giu;
+const UNICODE_BOUNDARY_CLASS = '[^\\p{L}\\p{N}_]';
+
+function normalizeActToken(token: string): string {
+  return normalizeStructuredActIdentifier(
+    token
+      .normalize('NFC')
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+      .trim()
+  );
+}
+
+function looksLikeStructuredActReferenceToken(token: string): boolean {
+  return looksLikeStructuredActIdentifier(normalizeActToken(token));
+}
+
+function buildUnicodeBoundaryRegex(term: string): RegExp {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|${UNICODE_BOUNDARY_CLASS})${escaped}(?=$|${UNICODE_BOUNDARY_CLASS})`, 'iu');
+}
+
+function looksLikeCompactLegalActAbbreviation(token: string): boolean {
+  const normalized = token.normalize('NFC').trim();
+  if (!/^[\p{L}]{3,12}$/u.test(normalized)) return false;
+  if (!/[\p{Script=Cyrillic}]/u.test(normalized)) return false;
+  if (AUTHORITIES.includes(normalized.toUpperCase())) return false;
+  if (NON_LEGAL_ENTITY_ABBREVIATIONS.has(normalized.toUpperCase())) return false;
+  const letters = [...normalized];
+  const upperCount = letters.filter((char) => /\p{Lu}/u.test(char)).length;
+  const lowerCount = letters.filter((char) => /\p{Ll}/u.test(char)).length;
+  if (upperCount < 2) return false;
+  if (lowerCount === 0 && normalized.length > 6) return false;
+  return true;
+}
 
 export function extractEntities(query: string): {
   entities: ExtractedEntity[];
@@ -50,13 +86,17 @@ export function extractEntities(query: string): {
 
   const q = query.trim();
 
-  // Act abbreviations (Cyrillic-safe: no \b, use (?:^|\s|\W) and (?:\s|\W|$))
+  // Act abbreviations (Unicode-safe boundaries; do not treat Cyrillic letters as separators)
   for (const [abbrev, title] of Object.entries(ACT_ABBREVS)) {
-    const escaped = abbrev.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`(?:^|[\\s\\W])${escaped}(?:[\\s\\W]|$)`, 'gi');
+    const re = buildUnicodeBoundaryRegex(abbrev);
     if (re.test(q)) {
       add({ type: 'act_abbrev', value: abbrev, norm: { act: title } });
     }
+  }
+
+  for (const token of q.match(/[\p{L}]+/gu) ?? []) {
+    if (!looksLikeCompactLegalActAbbreviation(token)) continue;
+    add({ type: 'act_abbrev', value: token.normalize('NFC') });
   }
 
   // Article refs (ст. 115, стаття 115, ст 115-1, etc.)
@@ -113,10 +153,15 @@ export function extractEntities(query: string): {
   while ((m = shortActReferenceRegex.exec(q)) !== null) {
     add({ type: 'law_title', value: m[1].trim() });
   }
+  for (const token of q.match(/[\p{L}\p{N}/-]+/gu) ?? []) {
+    if (looksLikeStructuredActReferenceToken(token)) {
+      add({ type: 'law_title', value: normalizeActToken(token) });
+    }
+  }
 
   // Authorities (Cyrillic-safe boundaries)
   for (const auth of AUTHORITIES) {
-    const re = new RegExp(`(?:^|[\\s\\W])${auth.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[\\s\\W]|$)`, 'gi');
+    const re = buildUnicodeBoundaryRegex(auth);
     if (re.test(q)) {
       add({ type: 'authority', value: auth });
     }

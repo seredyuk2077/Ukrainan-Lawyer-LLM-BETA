@@ -3718,8 +3718,8 @@ function testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbac
       { rada_nreg: '361-20', category: 'finance' },
     ],
     chunksEvidenceTopActs: [
-      { rada_nreg: '435-15', rank_mass_top30: 0.42, best_rank_in_top30: 4, max_ordering_score: 0.39 },
-      { rada_nreg: '361-20', rank_mass_top30: 0.24, best_rank_in_top30: 8, max_ordering_score: 0.36 },
+      { rada_nreg: '435-15', rank_mass_top30: 0.12, best_rank_in_top30: 13, max_ordering_score: 0.27 },
+      { rada_nreg: '361-20', rank_mass_top30: 0.09, best_rank_in_top30: 16, max_ordering_score: 0.24 },
     ],
   });
   if (result.selectedActsFinal.length !== 0) {
@@ -3729,6 +3729,145 @@ function testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbac
     throw new Error(`Expected explicit-scope clear reason code, got ${JSON.stringify(result.reasonCodes)}`);
   }
   console.log('[OK] low-confidence normalization clears fallback selected acts for explicit missing-act scope');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionPreservesExplicitScopePrimaryAct(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '157-20',
+        act_title: "Про оренду державного та комунального майна",
+        act_kind: 'PRIMARY_LAW',
+        category: 'property_real_estate',
+        score: 0.57,
+        document_type: 'Закон',
+      },
+      {
+        rada_nreg: '435-15',
+        act_title: 'Цивільний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'civil',
+        score: 0.54,
+        document_type: 'Кодекс',
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.52,
+      selected_acts_confidence_pre_routing: 0.52,
+      selected_acts_decision_final: { confidence: 0.52, reason_codes: [] },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['157-20', '435-15'],
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE'],
+    domainHint: 'civil',
+    actCandidatesTopHydrated: [
+      { rada_nreg: '157-20', category: 'property_real_estate' },
+      { rada_nreg: '435-15', category: 'civil' },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '157-20', rank_mass_top30: 0.84, best_rank_in_top30: 1, max_ordering_score: 0.57 },
+      { rada_nreg: '435-15', rank_mass_top30: 0.34, best_rank_in_top30: 5, max_ordering_score: 0.46 },
+    ],
+  });
+  const selectedNregs = result.selectedActsFinal.map((act) => act.rada_nreg);
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['435-15'])) {
+    throw new Error(
+      `Expected explicit-scope low-confidence normalization to preserve the anchored primary act, got ${JSON.stringify(selectedNregs)}`
+    );
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_PRESERVED')) {
+    throw new Error(
+      `Expected LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_PRESERVED, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  const breakdown = result.selectedActsSourcesBreakdown;
+  if (JSON.stringify(breakdown?.from_chunks_evidence ?? []) !== JSON.stringify(['435-15'])) {
+    throw new Error(
+      `Expected sources breakdown to be narrowed with the preserved primary act, got ${JSON.stringify(breakdown)}`
+    );
+  }
+  console.log('[OK] low-confidence normalization preserves anchored primary act under explicit-scope no-convergence');
+}
+
+function testNormalizeSingleGoalLowConfidenceSelectionSyncsBreakdownForRecoveredPrimaryAct(): void {
+  const result = normalizeSingleGoalLowConfidenceSelection({
+    lowConfidence: true,
+    selectedActsFinal: [
+      {
+        rada_nreg: '157-20',
+        act_title: "Про оренду державного та комунального майна",
+        act_kind: 'PRIMARY_LAW',
+        category: 'property_real_estate',
+        score: 0.57,
+        document_type: 'Закон',
+        source_tags: ['CHUNKS_EVIDENCE'],
+      },
+    ],
+    selectedActsFinalMeta: {
+      selected_acts_final: [],
+      selected_acts_confidence_final: 0.52,
+      selected_acts_confidence_pre_routing: 0.52,
+      selected_acts_decision_final: { confidence: 0.52, reason_codes: [] },
+      selected_acts_kinds_count_final: {},
+      selected_acts_document_types_top_final: undefined,
+      routing_hints_recovered_with_retrieval_evidence: false,
+    },
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['157-20'],
+    },
+    reasonCodes: ['LOW_EVIDENCE', 'EXPLICIT_ACT_SCOPE_NO_CONVERGENCE'],
+    domainHint: 'civil',
+    actCandidatesTopHydrated: [
+      {
+        rada_nreg: '157-20',
+        category: 'property_real_estate',
+        score: 0.7,
+        reasons: ['hits_evidence'],
+      },
+      {
+        rada_nreg: '435-15',
+        title: 'Цивільний кодекс України',
+        category: 'civil',
+        score: 1.6,
+        reasons: ['title_match', 'validity_in_force'],
+        document_type: 'Кодекс',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      { rada_nreg: '157-20', rank_mass_top30: 0.84, best_rank_in_top30: 1, max_ordering_score: 0.57 },
+      { rada_nreg: '435-15', rank_mass_top30: 0.12, best_rank_in_top30: 9, max_ordering_score: 0.38 },
+    ],
+  });
+  if (JSON.stringify(result.selectedActsFinal.map((act) => act.rada_nreg)) !== JSON.stringify(['435-15'])) {
+    throw new Error(
+      `Expected explicit-scope recovery to replace stale fallback with the recovered primary act, got ${JSON.stringify(result.selectedActsFinal)}`
+    );
+  }
+  if (!result.reasonCodes.includes('LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_RECOVERED')) {
+    throw new Error(
+      `Expected LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_RECOVERED, got ${JSON.stringify(result.reasonCodes)}`
+    );
+  }
+  const breakdown = result.selectedActsSourcesBreakdown;
+  if (JSON.stringify(breakdown?.from_taxonomy ?? []) !== JSON.stringify(['435-15'])) {
+    throw new Error(`Expected recovered primary act to be marked as taxonomy-backed, got ${JSON.stringify(breakdown)}`);
+  }
+  if ((breakdown?.from_chunks_evidence ?? []).length !== 0) {
+    throw new Error(
+      `Expected stale chunks-evidence act to be removed from recovered breakdown, got ${JSON.stringify(breakdown)}`
+    );
+  }
+  console.log('[OK] low-confidence normalization syncs source breakdown after recovering an explicit-scope primary act');
 }
 
 function testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivilBundle(): void {
@@ -11467,6 +11606,32 @@ function testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActI
   console.log('[OK] coverage-gap keeps explicit-act-scope no-convergence as weak_evidence when the act is already grounded');
 }
 
+function testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenSelectionIsStable(): void {
+  const coverageGap = deriveCoverageGap({
+    lowConfidence: true,
+    reasonCodes: ['EXPLICIT_ACT_SCOPE_NO_CONVERGENCE', 'LOW_EVIDENCE'],
+    selectedActsCount: 2,
+    selectedActsConfidence: 0.5,
+    selectedActKinds: ['PRIMARY_LAW', 'PRIMARY_LAW'],
+    exactActHitCount: 0,
+    groundedActHitCount: 0,
+    metadataGroundedActCount: 0,
+    hitsCount: 18,
+    topScore: 0.57,
+    domainHint: 'civil',
+    categoryHintCount: 1,
+    documentTypeHintCount: 1,
+    entitiesCount: 1,
+    anchorsCount: 0,
+  });
+  if (coverageGap !== 'weak_evidence') {
+    throw new Error(
+      `Expected explicit-act-scope no-convergence with stable evidence-backed selection to map to weak_evidence, got ${coverageGap}`
+    );
+  }
+  console.log('[OK] coverage-gap keeps explicit-act-scope no-convergence as weak_evidence when selection is stable');
+}
+
 function testCoverageGapTreatsMetadataOnlyExplicitActScopeMissAsLikelyMissingAct(): void {
   const coverageGap = deriveCoverageGap({
     lowConfidence: true,
@@ -16443,6 +16608,8 @@ async function main(): Promise<void> {
   testShouldConfirmSoftProceduralSingleAct();
   testShouldConfirmSoftPrimarySingleAct();
   testNormalizeSingleGoalLowConfidenceSelectionClearsExplicitScopeFallbackNoise();
+  testNormalizeSingleGoalLowConfidenceSelectionPreservesExplicitScopePrimaryAct();
+  testNormalizeSingleGoalLowConfidenceSelectionSyncsBreakdownForRecoveredPrimaryAct();
   testNormalizeSingleGoalLowConfidenceSelectionPreservesStrongFamilyCivilBundle();
   testNormalizeSingleGoalLowConfidenceSelectionPreservesTaxonomyBackedCivilBundle();
   testNormalizeSingleGoalLowConfidenceSelectionRecoversCompanionFromActCandidates();
@@ -16495,6 +16662,7 @@ async function main(): Promise<void> {
   testCoverageGapUsesMissingTaxonomyConvergenceForLikelyMissingAct();
   testCoverageGapUsesFamilyGuardNoEvidenceForLikelyMissingAct();
   testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenActIsGrounded();
+  testCoverageGapUsesExplicitActScopeNoConvergenceForWeakEvidenceWhenSelectionIsStable();
   testCoverageGapTreatsMetadataOnlyExplicitActScopeMissAsLikelyMissingAct();
   testCoverageGapUsesExplicitActScopeForLikelyMissingActWithoutGrounding();
   testCoverageGapPrefersLikelyMissingActOverOutOfScopeForExplicitActScope();

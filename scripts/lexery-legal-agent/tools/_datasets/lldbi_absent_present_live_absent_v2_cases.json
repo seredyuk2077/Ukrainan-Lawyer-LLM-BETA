@@ -1,0 +1,176 @@
+[
+  {
+    "case_id": "law_future_real_estate_rights_live_absent_v2",
+    "rada_nreg": "2518-20",
+    "title": "Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому",
+    "bucket": "real_estate_development",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про гарантування речових прав на об'єкти нерухомого майна, які будуть споруджені в майбутньому», що таке спеціальне майнове право на майбутній об'єкт нерухомості та коли воно підлягає державній реєстрації?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про майбутні об'єкти нерухомості що таке спеціальне майнове право і коли його реєструють?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон регулює гарантування прав інвестора на ще не збудовану нерухомість та реєстрацію спеціального майнового права?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_wartime_labor_relations_live_absent_v2",
+    "rada_nreg": "2136-20",
+    "title": "Про організацію трудових відносин в умовах воєнного стану",
+    "bucket": "wartime_labor",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про організацію трудових відносин в умовах воєнного стану», коли роботодавець може призупинити дію трудового договору та як під час воєнного стану надається щорічна відпустка?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про трудові відносини під час воєнного стану коли можна призупинити трудовий договір і що з відпусткою?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон воєнного часу дозволяє призупинення трудового договору та по-особливому регулює відпустки працівників?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_public_health_system_live_absent_v2",
+    "rada_nreg": "2573-20",
+    "title": "Про систему громадського здоров'я",
+    "bucket": "public_health",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про систему громадського здоров'я», які повноваження мають органи громадського здоров'я щодо епідемічного нагляду та які профілактичні заходи застосовуються при загрозі поширення інфекційної хвороби?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про систему громадського здоров'я хто відповідає за епіднагляд і які є профілактичні заходи при спалаху інфекції?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон визначає систему громадського здоров'я, епідемічний нагляд і заходи стримування інфекцій?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_multimodal_transport_live_absent_v2",
+    "rada_nreg": "1887-20",
+    "title": "Про мультимодальні перевезення",
+    "bucket": "transport",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про мультимодальні перевезення», хто є оператором мультимодального перевезення, яким документом оформлюється перевезення та коли настає його відповідальність за вантаж?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про мультимодальні перевезення хто оператор і коли він відповідає за вантаж?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон регулює mixed-carriage перевезення одним оператором, транспортний документ і відповідальність за вантаж?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_defense_procurement_live_absent_v2",
+    "rada_nreg": "808-20",
+    "title": "Про оборонні закупівлі",
+    "bucket": "defense_procurement",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про оборонні закупівлі», які способи закупівлі застосовуються для гарантованого забезпечення потреб безпеки і оборони та коли інформація про оборонну закупівлю може становити державну таємницю?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про оборонні закупівлі які є процедури закупівлі і коли дані про закупівлю можуть бути таємними?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає процедури defense procurement і підстави для закриття інформації про таку закупівлю?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_sanctions_live_absent_v2",
+    "rada_nreg": "1644-18",
+    "title": "Про санкції",
+    "bucket": "sanctions",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про санкції», які види санкцій можуть застосовуватися до іноземної держави чи юридичної особи та який орган вносить пропозиції про застосування санкцій?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про санкції які бувають санкції і хто ініціює їх застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон встановлює перелік спеціальних економічних та інших обмежувальних заходів і суб'єктів подання пропозицій про санкції?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

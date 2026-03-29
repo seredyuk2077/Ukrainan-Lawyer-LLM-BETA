@@ -39,6 +39,7 @@ const KEYWORD_PHRASE_BOOST = 1.6;
 const TOPIC_PHRASE_BOOST = 1.3;
 const ALIAS_PHRASE_BOOST = 3;
 const EXACT_IDENTIFIER_MATCH_BOOST = 8;
+const TITLE_FRAGMENT_GROUNDED_BOOST = 3.6;
 const VALIDITY_IN_FORCE_BOOST = 0.1;
 const VALIDITY_STALE_PENALTY = 0.35;
 const CATEGORY_HINT_SCORE_BOOST = 0.25;
@@ -55,6 +56,14 @@ const RADA_DATRED_MATCH_BOOST = 3.4;
 const RADA_DATRED_MISMATCH_PENALTY = 1.6;
 const RADA_MONTH_MATCH_BOOST = 1.9;
 const RADA_MONTH_MISMATCH_PENALTY = 0.9;
+const REFERENCED_DOCUMENT_NUMBER_MATCH_BOOST = 3;
+const REFERENCED_DOCUMENT_NUMBER_MISMATCH_PENALTY = 0.6;
+const REFERENCED_RADA_DATRED_MATCH_BOOST = 4;
+const REFERENCED_RADA_DATRED_MISMATCH_PENALTY = 0.85;
+const REFERENCED_RADA_MONTH_MATCH_BOOST = 2.2;
+const REFERENCED_RADA_MONTH_MISMATCH_PENALTY = 0.45;
+const RECURRING_SERIES_DATE_IDENTITY_BOOST = 16;
+const MIN_RECURRING_SERIES_SIZE = 3;
 
 const AMENDMENT_TITLE_PREFIXES = [
   'про внесення змін',
@@ -298,6 +307,7 @@ interface TaxonomySnapshot {
   byStorageCategory: Map<string, ActEntry[]>;
   byDocumentType: Map<string, ActEntry[]>;
   byDocumentTypeSlug: Map<string, ActEntry[]>;
+  byRecurringSeriesKey: Map<string, ActEntry[]>;
   acts: Map<string, ActEntry>;
   version: number;
   loadedAt: number;
@@ -309,6 +319,54 @@ function toKey(s: string): string {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeCategoryFamilyKey(value: string | null | undefined): string {
+  return (
+    String(value ?? '')
+      .normalize('NFC')
+      .toLowerCase()
+      .replace(/\s+/g, '_')
+      .trim()
+  );
+}
+
+function getCompatibleDomainCategoryKeys(domainHint: string | null | undefined): string[] {
+  const normalized = normalizeCategoryFamilyKey(domainHint);
+  if (!normalized || normalized === 'general' || normalized === 'unknown') return [];
+  switch (normalized) {
+    case 'criminal':
+      return ['criminal', 'criminal_procedure'];
+    case 'civil':
+      return ['civil', 'civil_procedure', 'family'];
+    case 'family':
+      return ['family', 'civil'];
+    case 'administrative':
+    case 'admin':
+      return ['administrative', 'administrative_offenses', 'civil_procedure_administrative'];
+    case 'tax':
+    case 'tax_customs':
+      return ['tax_customs'];
+    case 'labor':
+    case 'labor_social':
+      return ['labor_social'];
+    default:
+      return [normalized];
+  }
+}
+
+function categoryMatchesDomainEnvelope(
+  category: string | null | undefined,
+  domainHint: string | null | undefined
+): boolean {
+  const normalizedCategory = normalizeCategoryFamilyKey(category);
+  if (!normalizedCategory) return false;
+  return getCompatibleDomainCategoryKeys(domainHint).some(
+    (familyKey) =>
+      normalizedCategory === familyKey ||
+      normalizedCategory.startsWith(`${familyKey}_`) ||
+      familyKey.startsWith(`${normalizedCategory}_`)
+  );
 }
 
 function tokenizeQuery(q: string): string[] {
@@ -452,6 +510,106 @@ function scoreEntryDocumentIdentity(
   }
 
   return { score, reasons };
+}
+
+function collectEntryReferencedDocumentIdentitySignals(
+  entry: Pick<ActEntry, 'title' | 'aliases' | 'document_type' | 'document_number' | 'rada_datred'>
+): QueryDocumentIdentitySignals {
+  const referencedIdentity = collectQueryDocumentIdentitySignals([
+    entry.title,
+    ...(entry.aliases ?? []),
+    entry.document_type && entry.title ? `${entry.document_type} ${entry.title}` : '',
+  ]);
+  const ownDocumentNumber = normalizeDocumentNumber(entry.document_number);
+  const ownDate = normalizeRadaDatred(entry.rada_datred);
+  if (ownDocumentNumber) referencedIdentity.documentNumbers.delete(ownDocumentNumber);
+  if (ownDate) {
+    referencedIdentity.exactDates.delete(ownDate);
+    referencedIdentity.monthKeys.delete(ownDate.slice(0, 7));
+  }
+  return referencedIdentity;
+}
+
+function scoreEntryReferencedDocumentIdentity(
+  entry: Pick<ActEntry, 'title' | 'aliases' | 'document_type' | 'document_number' | 'rada_datred'>,
+  queryIdentity: QueryDocumentIdentitySignals
+): ActCandidateScore {
+  let score = 0;
+  const reasons: string[] = [];
+  const referencedIdentity = collectEntryReferencedDocumentIdentitySignals(entry);
+
+  if (queryIdentity.documentNumbers.size > 0 && referencedIdentity.documentNumbers.size > 0) {
+    const hasDocumentNumberMatch = [...queryIdentity.documentNumbers].some((value) =>
+      referencedIdentity.documentNumbers.has(value)
+    );
+    if (hasDocumentNumberMatch) {
+      score += REFERENCED_DOCUMENT_NUMBER_MATCH_BOOST;
+      reasons.push('referenced_document_number_match');
+    } else {
+      score -= REFERENCED_DOCUMENT_NUMBER_MISMATCH_PENALTY;
+      reasons.push('referenced_document_number_penalty');
+    }
+  }
+
+  if (queryIdentity.exactDates.size > 0 && referencedIdentity.exactDates.size > 0) {
+    const hasExactDateMatch = [...queryIdentity.exactDates].some((value) =>
+      referencedIdentity.exactDates.has(value)
+    );
+    if (hasExactDateMatch) {
+      score += REFERENCED_RADA_DATRED_MATCH_BOOST;
+      reasons.push('referenced_rada_datred_match');
+    } else {
+      score -= REFERENCED_RADA_DATRED_MISMATCH_PENALTY;
+      reasons.push('referenced_rada_datred_penalty');
+    }
+  } else if (
+    queryIdentity.exactDates.size === 0 &&
+    queryIdentity.monthKeys.size > 0 &&
+    referencedIdentity.monthKeys.size > 0
+  ) {
+    const hasMonthMatch = [...queryIdentity.monthKeys].some((value) =>
+      referencedIdentity.monthKeys.has(value)
+    );
+    if (hasMonthMatch) {
+      score += REFERENCED_RADA_MONTH_MATCH_BOOST;
+      reasons.push('referenced_rada_month_match');
+    } else {
+      score -= REFERENCED_RADA_MONTH_MISMATCH_PENALTY;
+      reasons.push('referenced_rada_month_penalty');
+    }
+  }
+
+  return { score, reasons };
+}
+
+function scoreEntryResolvedDocumentIdentity(
+  entry: Pick<ActEntry, 'title' | 'aliases' | 'document_type' | 'document_number' | 'rada_datred'>,
+  queryIdentity: QueryDocumentIdentitySignals
+): ActCandidateScore {
+  const directIdentity = scoreEntryDocumentIdentity(entry, queryIdentity);
+  const referencedIdentity = scoreEntryReferencedDocumentIdentity(entry, queryIdentity);
+  let score = directIdentity.score + referencedIdentity.score;
+  const reasons = uniqueStrings([...directIdentity.reasons, ...referencedIdentity.reasons]);
+
+  const referencedDocumentMatched = referencedIdentity.reasons.includes('referenced_document_number_match');
+  const referencedDateMatched =
+    referencedIdentity.reasons.includes('referenced_rada_datred_match') ||
+    referencedIdentity.reasons.includes('referenced_rada_month_match');
+
+  if (referencedDocumentMatched && directIdentity.reasons.includes('document_number_penalty')) {
+    score += DOCUMENT_NUMBER_MISMATCH_PENALTY;
+    reasons.push('document_number_penalty_suppressed_by_reference');
+  }
+  if (referencedDateMatched && directIdentity.reasons.includes('rada_datred_penalty')) {
+    score += RADA_DATRED_MISMATCH_PENALTY;
+    reasons.push('rada_datred_penalty_suppressed_by_reference');
+  }
+  if (referencedDateMatched && directIdentity.reasons.includes('rada_month_penalty')) {
+    score += RADA_MONTH_MISMATCH_PENALTY;
+    reasons.push('rada_month_penalty_suppressed_by_reference');
+  }
+
+  return { score, reasons: uniqueStrings(reasons) };
 }
 
 function extractPrimaryNumericStem(value: string | null | undefined): string | null {
@@ -609,7 +767,7 @@ function buildReferenceTokens(value: string | null | undefined): string[] {
 function extractReferencedActNumber(value: string | null | undefined): string | null {
   const match = String(value ?? '')
     .normalize('NFC')
-    .match(/(?:№|N|No\.?|#)\s*([\p{L}\d][\p{L}\d/-]{0,20})/iu);
+    .match(/(?:^|[\s(])(?:№|N|No\.?|#)\s*([\p{L}\d][\p{L}\d/-]{0,20})\b/iu);
   const normalized = match?.[1]?.trim();
   return normalized || null;
 }
@@ -620,21 +778,27 @@ function deriveRuntimeTitleAliases(title: string, documentType: string | null): 
 
   const out = new Set<string>();
   const titleKey = toKey(normalizedTitle);
-  if (!REPEAL_TITLE_PREFIX_REGEX.test(titleKey)) return [];
+  if (REPEAL_TITLE_PREFIX_REGEX.test(titleKey)) {
+    const referencedSegment = normalizedTitle.replace(REPEAL_TITLE_PREFIX_REGEX, '').trim();
+    const cue = normalizeActReferenceCue(referencedSegment) ?? normalizeActReferenceCue(documentType);
+    const referencedNumber = extractReferencedActNumber(referencedSegment);
 
-  const referencedSegment = normalizedTitle.replace(REPEAL_TITLE_PREFIX_REGEX, '').trim();
-  if (!referencedSegment) return [];
-
-  const cue = normalizeActReferenceCue(referencedSegment) ?? normalizeActReferenceCue(documentType);
-  const referencedNumber = extractReferencedActNumber(referencedSegment);
-
-  if (cue && referencedNumber) {
-    out.add(`${cue} про втрату чинності № ${referencedNumber}`);
-    out.add(`про втрату чинності ${cue} № ${referencedNumber}`);
+    if (cue && referencedNumber) {
+      out.add(`${cue} про втрату чинності № ${referencedNumber}`);
+      out.add(`про втрату чинності ${cue} № ${referencedNumber}`);
+    }
+    if (cue) {
+      out.add(`${cue} втратило чинність`);
+      out.add(`${cue} про втрату чинності`);
+    }
   }
-  if (cue) {
-    out.add(`${cue} втратило чинність`);
-    out.add(`${cue} про втрату чинності`);
+
+  const normalizedSurface = normalizeRecurringSeriesTitle(normalizedTitle);
+  if (normalizedSurface.includes('офіційний курс гривні щодо іноземних валют')) {
+    out.add('офіційний курс гривні до іноземних валют');
+    out.add('курс гривні до іноземних валют');
+    out.add('офіційний валютний курс гривні');
+    out.add('валютний курс гривні');
   }
 
   return [...out];
@@ -645,6 +809,72 @@ function compactKey(value: string | null | undefined): string {
     .normalize('NFC')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function normalizeRecurringSeriesTitle(title: string | null | undefined): string {
+  return String(title ?? '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\([^)]*\)/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function buildRecurringSeriesKey(
+  entry: Pick<ActEntry, 'title' | 'document_type' | 'document_type_slug' | 'category'>
+): string | null {
+  const normalizedTitle = normalizeRecurringSeriesTitle(entry.title);
+  const normalizedDocumentType = toKey(entry.document_type_slug ?? entry.document_type ?? '');
+  if (!normalizedTitle || !normalizedDocumentType) return null;
+  return [
+    normalizedTitle,
+    normalizedDocumentType,
+    toKey(entry.category ?? '') || '_uncategorized',
+  ].join('::');
+}
+
+function hasCandidateMetadataSurfaceMatch(reasons: string[]): boolean {
+  return reasons.some((reason) =>
+    [
+      'exact_alias_match',
+      'exact_title_match',
+      'alias_match',
+      'title_match',
+      'summary_match',
+      'keyword_match',
+      'topic_match',
+    ].includes(reason)
+  );
+}
+
+function scoreRecurringSeriesDateIdentity(
+  snap: Pick<TaxonomySnapshot, 'byRecurringSeriesKey'>,
+  entry: Pick<ActEntry, 'title' | 'document_type' | 'document_type_slug' | 'category' | 'rada_datred'>,
+  queryIdentity: QueryDocumentIdentitySignals,
+  reasons: string[]
+): ActCandidateScore {
+  if (!queryIdentity.exactDates.size || !hasCandidateMetadataSurfaceMatch(reasons)) {
+    return { score: 0, reasons: [] };
+  }
+  const entryDate = normalizeRadaDatred(entry.rada_datred);
+  if (!entryDate || !queryIdentity.exactDates.has(entryDate)) {
+    return { score: 0, reasons: [] };
+  }
+  const recurringSeriesKey = buildRecurringSeriesKey(entry);
+  if (!recurringSeriesKey) return { score: 0, reasons: [] };
+  const seriesEntries = snap.byRecurringSeriesKey.get(recurringSeriesKey) ?? [];
+  const uniqueDatedEntries = new Set(
+    seriesEntries
+      .map((seriesEntry) => normalizeRadaDatred(seriesEntry.rada_datred))
+      .filter(Boolean)
+  );
+  if (uniqueDatedEntries.size < MIN_RECURRING_SERIES_SIZE) {
+    return { score: 0, reasons: [] };
+  }
+  return {
+    score: RECURRING_SERIES_DATE_IDENTITY_BOOST,
+    reasons: ['recurring_series_rada_datred_match'],
+  };
 }
 
 function tokensSoftMatch(a: string, b: string): boolean {
@@ -694,7 +924,7 @@ function scoreExactTextGroundingEntry(entry: ActEntry, signal: string, query: st
   if (!queryLooksAmendmentFocused(query) && isAmendmentLikeActTitle(entry.title)) {
     score -= 1.8;
   }
-  score += scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals([signal, query])).score;
+  score += scoreEntryResolvedDocumentIdentity(entry, collectQueryDocumentIdentitySignals([signal, query])).score;
   return score;
 }
 
@@ -823,7 +1053,8 @@ type TitleFragmentGroundingScore = {
 
 function scoreTitleFragmentGroundingEntry(
   entry: ActEntry,
-  fragment: string
+  fragment: string,
+  query?: string
 ): TitleFragmentGroundingScore {
   const fragmentKey = toKey(fragment);
   const fragmentTokens = buildReferenceTokens(fragment);
@@ -865,7 +1096,10 @@ function scoreTitleFragmentGroundingEntry(
   else if (requestedReferencedNumber && entryReferencedNumber && entryReferencedNumber !== requestedReferencedNumber) {
     score -= 1.8;
   }
-  score += scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals([fragment])).score;
+  score += scoreEntryResolvedDocumentIdentity(
+    entry,
+    collectQueryDocumentIdentitySignals(query ? [fragment, query] : [fragment])
+  ).score;
 
   let matchedPhraseCount = 0;
   let maxPhraseWords = 0;
@@ -919,7 +1153,7 @@ function resolveTitleFragmentGroundingAmbiguity(
   let secondScore = Number.NEGATIVE_INFINITY;
 
   for (const entry of entries) {
-    const score = scoreTitleFragmentGroundingEntry(entry, fragment);
+    const score = scoreTitleFragmentGroundingEntry(entry, fragment, query);
     if (!best || score.score > best.score.score) {
       secondScore = best?.score.score ?? secondScore;
       best = { entry, score };
@@ -949,7 +1183,7 @@ function resolveTitleFragmentGroundingEntries(
   const candidates = collectTitleFragmentCandidates(snap, fragment);
   if (candidates.length <= 1) return candidates;
 
-  const exactTextGrounded = resolveExactTextGroundingAmbiguity(candidates, fragment, fragment);
+  const exactTextGrounded = resolveExactTextGroundingAmbiguity(candidates, fragment, query ?? fragment);
   if (exactTextGrounded) return [exactTextGrounded];
 
   const titleFragmentGrounded = resolveTitleFragmentGroundingAmbiguity(candidates, fragment, query);
@@ -973,7 +1207,7 @@ function resolveCuedNumericReferenceAmbiguity(
     .sort((left, right) => buildReferenceTokens(right).length - buildReferenceTokens(left).length);
 
   for (const fragment of fragments) {
-    const grounded = resolveTitleFragmentGroundingAmbiguity(entries, fragment);
+    const grounded = resolveTitleFragmentGroundingAmbiguity(entries, fragment, query);
     if (grounded) return grounded;
   }
   return null;
@@ -1216,6 +1450,34 @@ export function buildTaxonomyQuerySignals(query: string): { tokens: string[]; ph
   };
 }
 
+function isCompactTitleGroundingPhraseCandidate(phrase: string): boolean {
+  const tokens = buildReferenceTokens(phrase);
+  if (tokens.length < TITLE_FRAGMENT_MIN_PHRASE_WORDS) return false;
+
+  const alphaTokens = tokens.filter((token) => {
+    if (!/\p{L}/u.test(token) || /^\d+$/u.test(token)) return false;
+    if (QUERY_STOPWORDS.has(token)) return false;
+    if (PRIMARY_LAW_LOCATOR_NOISE_TOKENS.has(token)) return false;
+    return true;
+  });
+  if (alphaTokens.length < 2) return false;
+  if (!alphaTokens.some((token) => token.length >= 5)) return false;
+
+  const identitySignals = collectQueryDocumentIdentitySignals([phrase]);
+  if (
+    alphaTokens.length < 3 &&
+    (
+      identitySignals.documentNumbers.size > 0 ||
+      identitySignals.exactDates.size > 0 ||
+      identitySignals.monthKeys.size > 0
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function getActReferenceTexts(entry: ActEntry): string[] {
   const texts = new Set<string>();
   for (const alias of entry.aliases) texts.add(alias);
@@ -1355,6 +1617,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
   const byStorageCategory = new Map<string, ActEntry[]>();
   const byDocumentType = new Map<string, ActEntry[]>();
   const byDocumentTypeSlug = new Map<string, ActEntry[]>();
+  const byRecurringSeriesKey = new Map<string, ActEntry[]>();
   const acts = new Map<string, ActEntry>();
 
   function normDocType(v: unknown): string | null {
@@ -1434,6 +1697,8 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     if (storage_category) addToMap(byStorageCategory, storage_category, entry);
     if (document_type) addToMap(byDocumentType, document_type, entry);
     if (document_type_slug) addToMap(byDocumentTypeSlug, document_type_slug, entry);
+    const recurringSeriesKey = buildRecurringSeriesKey(entry);
+    if (recurringSeriesKey) addToMap(byRecurringSeriesKey, recurringSeriesKey, entry);
   }
 
   incrementTaxonomyRefreshSuccess();
@@ -1454,6 +1719,7 @@ async function loadSnapshot(): Promise<TaxonomySnapshot | null> {
     byStorageCategory,
     byDocumentType,
     byDocumentTypeSlug,
+    byRecurringSeriesKey,
     acts,
     version: loadedAt,
     loadedAt,
@@ -1558,10 +1824,13 @@ export async function getTaxonomyCandidates(
 
   const radaNregScores = new Map<string, number>();
   const aliasHits: AliasHit[] = [];
+  const metadataMatchedNregs = new Set<string>();
   const exactActHitNregs = new Set<string>();
   const groundedActHitNregs = new Set<string>();
   const categoryHintsSet = new Set<string>();
-  if (domainHint) categoryHintsSet.add(domainHint);
+  for (const familyKey of getCompatibleDomainCategoryKeys(domainHint)) {
+    if (familyKey) categoryHintsSet.add(familyKey);
+  }
 
   const { tokens, phrases } = buildTaxonomyQuerySignals(query);
   const phraseSet = new Set(phrases);
@@ -1635,6 +1904,7 @@ export async function getTaxonomyCandidates(
     ...entities.map((entity) => entity?.act_abbrev),
     ...entities.map((entity) => entity?.law_title),
   ]);
+  const queryIdentitySignals = collectQueryDocumentIdentitySignals(exactTextSignals);
   for (const signal of exactTextSignals) {
     const key = toKey(signal);
     if (!key) continue;
@@ -1671,8 +1941,18 @@ export async function getTaxonomyCandidates(
     ...entities.map((entity) => entity?.law_title),
     ...(looksLikeCompactActTitleFragmentQuery(query, { includeRulesLikeTitles: true }) ? [query] : []),
   ]);
+  const fallbackTitleGroundingSignals = uniqueStrings([
+    ...(
+      queryIdentitySignals.documentNumbers.size > 0 ||
+      queryIdentitySignals.exactDates.size > 0 ||
+      queryIdentitySignals.monthKeys.size > 0
+        ? [query]
+        : []
+    ),
+    ...phrases.filter((phrase) => isCompactTitleGroundingPhraseCandidate(phrase)),
+  ]);
   if (groundedActHitNregs.size === 0) {
-    for (const signal of compactTitleGroundingSignals) {
+    for (const signal of [...compactTitleGroundingSignals, ...fallbackTitleGroundingSignals]) {
       const groundedEntries = filterGroundingEntriesByRequestedCue(
         resolveTitleFragmentGroundingEntries(snap, signal, query),
         signal,
@@ -1683,7 +1963,7 @@ export async function getTaxonomyCandidates(
       groundedActHitNregs.add(entry.rada_nreg);
       radaNregScores.set(
         entry.rada_nreg,
-        (radaNregScores.get(entry.rada_nreg) ?? 0) + TITLE_MATCH_BOOST * 1.1
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + TITLE_FRAGMENT_GROUNDED_BOOST
       );
       pushAliasHit(entry, signal);
       if (entry.category) categoryHintsSet.add(entry.category);
@@ -1722,6 +2002,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.aliasBoost
       );
+      metadataMatchedNregs.add(entry.rada_nreg);
       pushAliasHit(entry, signal);
     }
     for (const entry of snap.byKeyword.get(key) ?? []) {
@@ -1729,6 +2010,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.keywordBoost
       );
+      metadataMatchedNregs.add(entry.rada_nreg);
       if (entry.category) categoryHintsSet.add(entry.category);
     }
     for (const entry of snap.byTopic.get(key) ?? []) {
@@ -1736,6 +2018,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.topicBoost
       );
+      metadataMatchedNregs.add(entry.rada_nreg);
       if (entry.category) categoryHintsSet.add(entry.category);
     }
     for (const entry of snap.byTitle.get(key) ?? []) {
@@ -1743,6 +2026,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.titleBoost
       );
+      metadataMatchedNregs.add(entry.rada_nreg);
       if (entry.category) categoryHintsSet.add(entry.category);
     }
     for (const entry of snap.bySummary.get(key) ?? []) {
@@ -1750,6 +2034,7 @@ export async function getTaxonomyCandidates(
         entry.rada_nreg,
         (radaNregScores.get(entry.rada_nreg) ?? 0) + options.summaryBoost
       );
+      metadataMatchedNregs.add(entry.rada_nreg);
       if (entry.category) categoryHintsSet.add(entry.category);
     }
   };
@@ -1792,18 +2077,20 @@ export async function getTaxonomyCandidates(
   const categoriesUsed: string[] = [];
   const documentTypesUsed: string[] = [];
 
-  // Domain-based act injection (cap K=15, no hardcoded category keys)
-  if (domainHint) {
-    const domainKey = toKey(domainHint);
-    for (const entry of snap.byCategory.get(domainKey) ?? []) {
+  // Domain-based act injection (cap K=15, compatible procedure families included for soft legal queries)
+  const compatibleDomainKeys = getCompatibleDomainCategoryKeys(domainHint);
+  for (const [index, domainKey] of compatibleDomainKeys.entries()) {
+    const boost = index === 0 ? DOMAIN_CATEGORY_BOOST : DOMAIN_CATEGORY_BOOST * 0.85;
+    for (const entry of snap.byCategory.get(toKey(domainKey)) ?? []) {
       if (injectedByDomain.length >= MAX_DOMAIN_ACTS) break;
       if (injectedByDomain.includes(entry.rada_nreg)) continue;
       injectedByDomain.push(entry.rada_nreg);
       radaNregScores.set(
         entry.rada_nreg,
-        (radaNregScores.get(entry.rada_nreg) ?? 0) + DOMAIN_CATEGORY_BOOST
+        (radaNregScores.get(entry.rada_nreg) ?? 0) + boost
       );
     }
+    if (injectedByDomain.length >= MAX_DOMAIN_ACTS) break;
   }
 
   // Category hints injection (U2 lldbi.categories_ranked_top3)
@@ -1850,6 +2137,23 @@ export async function getTaxonomyCandidates(
   if (documentTypesUsed.length > 0) addU4TaxonomyDocTypeHintsUsed(documentTypesUsed.length);
   const totalHintsInjected = injectedByCategoryHints.length + injectedByDocTypeHints.length;
   if (totalHintsInjected > 0) addU4TaxonomyHintsInjectedActs(totalHintsInjected);
+
+  if (
+    queryIdentitySignals.documentNumbers.size > 0 ||
+    queryIdentitySignals.exactDates.size > 0 ||
+    queryIdentitySignals.monthKeys.size > 0
+  ) {
+    for (const [radaNreg, currentScore] of radaNregScores.entries()) {
+      const entry = snap.acts.get(radaNreg);
+      if (!entry) continue;
+      const resolvedIdentity = scoreEntryResolvedDocumentIdentity(entry, queryIdentitySignals);
+      const recurringSeriesIdentity = metadataMatchedNregs.has(radaNreg)
+        ? scoreRecurringSeriesDateIdentity(snap, entry, queryIdentitySignals, resolvedIdentity.reasons)
+        : { score: 0, reasons: [] };
+      if (resolvedIdentity.score === 0 && recurringSeriesIdentity.score === 0) continue;
+      radaNregScores.set(radaNreg, currentScore + resolvedIdentity.score + recurringSeriesIdentity.score);
+    }
+  }
 
   for (const hit of aliasHits) {
     if (hit.category) categoryHintsSet.add(hit.category);
@@ -1965,10 +2269,10 @@ export async function findActByAlias(alias: string): Promise<string[]> {
  * This is intentionally narrower than the removed title-based routing heuristics:
  * it exists solely for reference expansion of already-extracted quoted legal titles.
  */
-export async function findActByTitleFragment(fragment: string): Promise<string[]> {
+export async function findActByTitleFragment(fragment: string, query?: string): Promise<string[]> {
   const snap = await ensureSnapshot();
   if (!snap) return [];
-  return resolveTitleFragmentGroundingEntries(snap, fragment).map((entry) => entry.rada_nreg);
+  return resolveTitleFragmentGroundingEntries(snap, fragment, query).map((entry) => entry.rada_nreg);
 }
 
 /** Find act candidates by alias token overlap (structural only). Returns rada_nreg[]. */
@@ -2004,7 +2308,10 @@ export async function scoreActCandidate(
   let score = 0;
   const reasons: string[] = [];
   const signals = [...new Set(querySignals.map((signal) => toKey(signal)).filter(Boolean))];
-  const documentIdentity = scoreEntryDocumentIdentity(entry, collectQueryDocumentIdentitySignals(querySignals));
+  const documentIdentity = scoreEntryResolvedDocumentIdentity(
+    entry,
+    collectQueryDocumentIdentitySignals(querySignals)
+  );
   score += documentIdentity.score;
   for (const reason of documentIdentity.reasons) {
     if (!reasons.includes(reason)) reasons.push(reason);
@@ -2061,7 +2368,7 @@ export async function scoreActCandidate(
       }
     }
   }
-  if (domainHint && entry.category && toKey(entry.category) === toKey(domainHint)) {
+  if (domainHint && entry.category && categoryMatchesDomainEnvelope(entry.category, domainHint)) {
     score += CATEGORY_HINT_SCORE_BOOST;
     reasons.push('category_hint');
   }
@@ -2071,6 +2378,16 @@ export async function scoreActCandidate(
   } else if (entry.validity_status === 'expired' || entry.validity_status === 'not_in_force') {
     score -= VALIDITY_STALE_PENALTY;
     reasons.push('validity_penalty');
+  }
+  const recurringSeriesIdentity = scoreRecurringSeriesDateIdentity(
+    snap,
+    entry,
+    collectQueryDocumentIdentitySignals(querySignals),
+    reasons
+  );
+  score += recurringSeriesIdentity.score;
+  for (const reason of recurringSeriesIdentity.reasons) {
+    if (!reasons.includes(reason)) reasons.push(reason);
   }
   return { score, reasons };
 }

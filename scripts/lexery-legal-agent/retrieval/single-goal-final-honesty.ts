@@ -1,7 +1,12 @@
 import type { FinalizeSelectedActsAfterRoutingOutput } from './selected-acts-finalizer.js';
 import { summarizeSelectedActs } from './selected-acts-finalizer.js';
 import type { SelectedActOutput } from './selected-acts.js';
-import { isDomainHintAlignedFamily, toFamilyKey } from './family-alignment.js';
+import { classifyActKind } from './selected-acts.js';
+import {
+  areCompatiblePrimaryFamilies,
+  isDomainHintAlignedFamily,
+  toFamilyKey,
+} from './family-alignment.js';
 
 type SelectedActLike = SelectedActOutput & {
   category?: string | null;
@@ -28,6 +33,7 @@ type SelectedActsSourcesBreakdownLike = {
   from_taxonomy?: string[];
   from_acts_search?: string[];
   from_chunks_evidence?: string[];
+  from_routing_hints?: string[];
 };
 
 export interface NormalizeSingleGoalLowConfidenceSelectionInput {
@@ -47,6 +53,7 @@ export interface NormalizeSingleGoalLowConfidenceSelectionInput {
 export interface NormalizeSingleGoalLowConfidenceSelectionOutput {
   selectedActsFinal: SelectedActLike[];
   selectedActsFinalMeta: FinalizeSelectedActsAfterRoutingOutput;
+  selectedActsSourcesBreakdown?: SelectedActsSourcesBreakdownLike;
   reasonCodes: string[];
 }
 
@@ -75,19 +82,6 @@ function hasMaterialPrimaryEvidence(evidence: ChunksEvidenceLike | undefined): b
     ((evidence.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 10 &&
       (evidence.max_ordering_score ?? 0) >= 0.35)
   );
-}
-
-function areCompatiblePrimaryFamilies(leftFamily: string, rightFamily: string): boolean {
-  if (!leftFamily || !rightFamily || leftFamily === 'unknown' || rightFamily === 'unknown') return false;
-  if (leftFamily === rightFamily) return true;
-  if (leftFamily.startsWith(`${rightFamily}_`) || rightFamily.startsWith(`${leftFamily}_`)) return true;
-
-  const pair = new Set([leftFamily, rightFamily]);
-  if (pair.has('criminal') && pair.has('criminal_procedure')) return true;
-  if (pair.has('civil') && pair.has('civil_procedure')) return true;
-  if (pair.has('civil') && pair.has('family')) return true;
-  if (pair.has('administrative') && pair.has('administrative_offenses')) return true;
-  return false;
 }
 
 const STRONG_TAXONOMY_SEMANTIC_REASON_CODES = new Set([
@@ -237,6 +231,79 @@ function buildRecoveredCompanionAct(
   };
 }
 
+function buildRecoveredScopedPrimaryAct(
+  input: NormalizeSingleGoalLowConfidenceSelectionInput,
+  evidenceByNreg: Map<string, ChunksEvidenceLike>,
+  excludedNregs: Set<string>
+): SelectedActLike | null {
+  const selectedFamilies = input.selectedActsFinal.map((act) =>
+    resolveActFamilyKey(act, input.actCandidatesTopHydrated)
+  );
+  const recoveredCandidate = input.actCandidatesTopHydrated
+    .filter((candidate) => !excludedNregs.has(candidate.rada_nreg))
+    .filter((candidate) => {
+      const candidateAct = candidate as SelectedActLike;
+      if (
+        classifyActKind(
+          candidate.title ?? candidate.rada_nreg,
+          candidate.document_type ?? null,
+          candidate.category ?? null
+        ) !== 'PRIMARY_LAW'
+      ) {
+        return false;
+      }
+      if (!hasStrongTaxonomySemanticSupport(candidateAct, input.actCandidatesTopHydrated)) return false;
+      const evidence = evidenceByNreg.get(candidate.rada_nreg);
+      const hasRecoveryEvidence =
+        (evidence?.rank_mass_top30 ?? 0) >= 0.08 ||
+        (
+          (evidence?.best_rank_in_top30 ?? Number.POSITIVE_INFINITY) <= 12 &&
+          (evidence?.max_ordering_score ?? 0) >= 0.35
+        );
+      if (!hasRecoveryEvidence) return false;
+
+      const candidateFamily = toFamilyKey(candidate.category);
+      return (
+        isDomainHintAlignedFamily(input.domainHint, candidateFamily) ||
+        selectedFamilies.some((familyKey) => areCompatiblePrimaryFamilies(candidateFamily, familyKey))
+      );
+    })
+    .sort((left, right) => {
+      const leftFamily = toFamilyKey(left.category);
+      const rightFamily = toFamilyKey(right.category);
+      const leftDomainAligned = isDomainHintAlignedFamily(input.domainHint, leftFamily);
+      const rightDomainAligned = isDomainHintAlignedFamily(input.domainHint, rightFamily);
+      if (leftDomainAligned !== rightDomainAligned) return Number(rightDomainAligned) - Number(leftDomainAligned);
+      const leftEvidence = evidenceByNreg.get(left.rada_nreg);
+      const rightEvidence = evidenceByNreg.get(right.rada_nreg);
+      const evidenceDiff = compareTrimEvidence(
+        {
+          score: left.score,
+          rankMassTop30: leftEvidence?.rank_mass_top30,
+          bestRankInTop30: leftEvidence?.best_rank_in_top30,
+        },
+        {
+          score: right.score,
+          rankMassTop30: rightEvidence?.rank_mass_top30,
+          bestRankInTop30: rightEvidence?.best_rank_in_top30,
+        }
+      );
+      if (evidenceDiff !== 0) return evidenceDiff;
+      return (right.score ?? 0) - (left.score ?? 0);
+    })[0];
+
+  if (!recoveredCandidate) return null;
+  return {
+    rada_nreg: recoveredCandidate.rada_nreg,
+    act_title: recoveredCandidate.title,
+    category: recoveredCandidate.category ?? null,
+    document_type: recoveredCandidate.document_type ?? null,
+    act_kind: 'PRIMARY_LAW',
+    score: recoveredCandidate.score,
+    source_tags: ['TAXONOMY'],
+  };
+}
+
 function updateSelectedActsFinalMeta(
   selectedActsFinalMeta: FinalizeSelectedActsAfterRoutingOutput,
   selectedActsFinal: SelectedActLike[],
@@ -264,18 +331,68 @@ function updateSelectedActsFinalMeta(
   };
 }
 
+function syncSelectedActsSourcesBreakdown(
+  selectedActsSourcesBreakdown: SelectedActsSourcesBreakdownLike | undefined,
+  selectedActsFinal: SelectedActLike[]
+): SelectedActsSourcesBreakdownLike | undefined {
+  if (!selectedActsSourcesBreakdown && selectedActsFinal.length === 0) return undefined;
+
+  const selectedNregs = new Set(
+    selectedActsFinal.map((act) => act.rada_nreg?.trim()).filter(Boolean) as string[]
+  );
+  const next = {
+    from_taxonomy: uniqueStrings(
+      (selectedActsSourcesBreakdown?.from_taxonomy ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
+    ),
+    from_acts_search: uniqueStrings(
+      (selectedActsSourcesBreakdown?.from_acts_search ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
+    ),
+    from_chunks_evidence: uniqueStrings(
+      (selectedActsSourcesBreakdown?.from_chunks_evidence ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
+    ),
+    from_routing_hints: uniqueStrings(
+      (selectedActsSourcesBreakdown?.from_routing_hints ?? []).filter((radaNreg) => selectedNregs.has(radaNreg))
+    ),
+  };
+
+  for (const act of selectedActsFinal) {
+    const radaNreg = act.rada_nreg?.trim();
+    if (!radaNreg) continue;
+    const sourceTags = new Set(act.source_tags ?? []);
+    if (sourceTags.has('TAXONOMY')) {
+      next.from_taxonomy = uniqueStrings([...next.from_taxonomy, radaNreg]);
+    }
+    if (sourceTags.has('ACTS_SEARCH')) {
+      next.from_acts_search = uniqueStrings([...next.from_acts_search, radaNreg]);
+    }
+    if (sourceTags.has('CHUNKS_EVIDENCE')) {
+      next.from_chunks_evidence = uniqueStrings([...next.from_chunks_evidence, radaNreg]);
+    }
+    if (sourceTags.has('ROUTING_HINTS')) {
+      next.from_routing_hints = uniqueStrings([...next.from_routing_hints, radaNreg]);
+    }
+  }
+
+  return next;
+}
+
 export function normalizeSingleGoalLowConfidenceSelection(
   input: NormalizeSingleGoalLowConfidenceSelectionInput
 ): NormalizeSingleGoalLowConfidenceSelectionOutput {
   const reasonCodes = [...input.reasonCodes];
   let selectedActsFinal = [...input.selectedActsFinal];
   let selectedActsFinalMeta = input.selectedActsFinalMeta;
+  const buildOutput = (): NormalizeSingleGoalLowConfidenceSelectionOutput => ({
+    selectedActsFinal,
+    selectedActsFinalMeta,
+    selectedActsSourcesBreakdown: syncSelectedActsSourcesBreakdown(
+      input.selectedActsSourcesBreakdown,
+      selectedActsFinal
+    ),
+    reasonCodes: uniqueStrings(reasonCodes),
+  });
   if (!input.lowConfidence || input.preserveScopedSelection) {
-    return {
-      selectedActsFinal,
-      selectedActsFinalMeta,
-      reasonCodes,
-    };
+    return buildOutput();
   }
 
   const evidenceByNreg = buildEvidenceMap(input.chunksEvidenceTopActs);
@@ -309,15 +426,84 @@ export function normalizeSingleGoalLowConfidenceSelection(
       0.4,
       ['LOW_CONFIDENCE_SELECTED_ACTS_CLEARED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED']
     );
-    return {
-      selectedActsFinal,
-      selectedActsFinalMeta,
-      reasonCodes: uniqueStrings(reasonCodes),
-    };
+    return buildOutput();
   }
 
   if (selectedActsFinal.length > 0 && severeSignals) {
     if (explicitScopeNoConvergence) {
+      const sortedActs = sortActsForLowConfidence({
+        acts: selectedActsFinal,
+        domainHint: input.domainHint,
+        actCandidatesTopHydrated: input.actCandidatesTopHydrated,
+        evidenceByNreg,
+      });
+      const recoveredScopedPrimaryAct = buildRecoveredScopedPrimaryAct(
+        input,
+        evidenceByNreg,
+        new Set(sortedActs.map((act) => act.rada_nreg ?? '').filter(Boolean))
+      );
+      if (recoveredScopedPrimaryAct) {
+        selectedActsFinal = [recoveredScopedPrimaryAct];
+        reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED');
+        reasonCodes.push('LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_RECOVERED');
+        selectedActsFinalMeta = updateSelectedActsFinalMeta(
+          selectedActsFinalMeta,
+          selectedActsFinal,
+          0.5,
+          ['LOW_CONFIDENCE_SELECTED_ACTS_NARROWED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_RECOVERED']
+        );
+        return buildOutput();
+      }
+      const canPreserveEvidenceBackedBundle =
+        selectedActsFinal.length >= 2 &&
+        shouldPreserveTwoActLowConfidenceBundle({
+          sortedActs,
+          domainHint: input.domainHint,
+          actCandidatesTopHydrated: input.actCandidatesTopHydrated,
+          evidenceByNreg,
+          selectedActsSourcesBreakdown: input.selectedActsSourcesBreakdown,
+        });
+      const retainedTopPrimaryAct = sortedActs.find((act) => act.act_kind === 'PRIMARY_LAW');
+      const retainedTopPrimaryEvidence = retainedTopPrimaryAct
+        ? evidenceByNreg.get(retainedTopPrimaryAct.rada_nreg ?? '')
+        : undefined;
+      const retainedTopPrimaryHasStrongSemanticSupport =
+        !!retainedTopPrimaryAct &&
+        isTaxonomyBackedAct(retainedTopPrimaryAct.rada_nreg ?? '', input.selectedActsSourcesBreakdown) &&
+        hasStrongTaxonomySemanticSupport(retainedTopPrimaryAct, input.actCandidatesTopHydrated);
+
+      if (canPreserveEvidenceBackedBundle) {
+        selectedActsFinal = sortedActs.slice(0, 2);
+        reasonCodes.push('LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED');
+        reasonCodes.push('LOW_CONFIDENCE_EXPLICIT_SCOPE_BUNDLE_PRESERVED');
+        selectedActsFinalMeta = updateSelectedActsFinalMeta(
+          selectedActsFinalMeta,
+          selectedActsFinal,
+          0.5,
+          ['LOW_CONFIDENCE_TWO_ACT_BUNDLE_PRESERVED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_BUNDLE_PRESERVED']
+        );
+        return buildOutput();
+      }
+
+      if (
+        retainedTopPrimaryAct &&
+        (
+        hasMaterialPrimaryEvidence(retainedTopPrimaryEvidence) ||
+          retainedTopPrimaryHasStrongSemanticSupport
+        )
+      ) {
+        selectedActsFinal = [retainedTopPrimaryAct];
+        reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_NARROWED');
+        reasonCodes.push('LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_PRESERVED');
+        selectedActsFinalMeta = updateSelectedActsFinalMeta(
+          selectedActsFinalMeta,
+          selectedActsFinal,
+          0.5,
+          ['LOW_CONFIDENCE_SELECTED_ACTS_NARROWED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_PRIMARY_PRESERVED']
+        );
+        return buildOutput();
+      }
+
       selectedActsFinal = [];
       reasonCodes.push('LOW_CONFIDENCE_SELECTED_ACTS_CLEARED');
       reasonCodes.push('LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED');
@@ -327,11 +513,7 @@ export function normalizeSingleGoalLowConfidenceSelection(
         0.4,
         ['LOW_CONFIDENCE_SELECTED_ACTS_CLEARED', 'LOW_CONFIDENCE_EXPLICIT_SCOPE_SELECTED_ACTS_CLEARED']
       );
-      return {
-        selectedActsFinal,
-        selectedActsFinalMeta,
-        reasonCodes: uniqueStrings(reasonCodes),
-      };
+      return buildOutput();
     }
     const primaryActs = selectedActsFinal.filter((act) => act.act_kind === 'PRIMARY_LAW');
     const domainAlignedPrimaryActs = primaryActs.filter((act) =>
@@ -501,9 +683,5 @@ export function normalizeSingleGoalLowConfidenceSelection(
     );
   }
 
-  return {
-    selectedActsFinal,
-    selectedActsFinalMeta,
-    reasonCodes: uniqueStrings(reasonCodes),
-  };
+  return buildOutput();
 }

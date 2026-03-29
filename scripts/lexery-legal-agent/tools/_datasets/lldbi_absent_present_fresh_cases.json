@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "law_ratification_science_eu_4805_20",
+    "rada_nreg": "4805-20",
+    "title": "Про ратифікацію Угоди (у формі обміну нотами) між Україною та Європейським Союзом про відновлення дії Угоди між Україною та Європейським Співтовариством про наукове і технологічне співробітництво",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди (у формі обміну нотами) між Україною та Європейським Союзом про відновлення дії Угоди між Україною та Європейським Співтовариством про наукове і технологічне співробітництво», яку саме угоду відновлено та між якими сторонами вона укладена?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4805-20 що саме ратифікує у відносинах України з ЄС щодо наукового і технологічного співробітництва?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_ratification_easi_4804_20",
+    "rada_nreg": "4804-20",
+    "title": "Про ратифікацію Угоди між Україною, з однієї сторони, та Європейським Союзом, з іншої сторони, про участь України у напрямі \"Зайнятість та соціальні інновації\" (EaSI) Європейського соціального фонду Плюс (ESF+)",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Україною, з однієї сторони, та Європейським Союзом, з іншої сторони, про участь України у напрямі «Зайнятість та соціальні інновації» (EaSI) Європейського соціального фонду Плюс (ESF+)», у якому саме напрямі ESF+ бере участь Україна після ратифікації?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4804-20 про яку участь України в EaSI та ESF+ йдеться?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_ratification_slovenia_4803_20",
+    "rada_nreg": "4803-20",
+    "title": "Про ратифікацію Угоди між Урядом України та Урядом Республіки Словенія про технічне та фінансове співробітництво",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Урядом України та Урядом Республіки Словенія про технічне та фінансове співробітництво», між якими урядами укладено угоду і який вид співробітництва вона охоплює?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4803-20 яку угоду зі Словенією ратифікує і про яке співробітництво там йдеться?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_ratification_bgu_4800_20",
+    "rada_nreg": "4800-20",
+    "title": "Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Урядом України та Урядом Республіки Польща про діяльність Bank Gospodarstwa Krajowego в Україні», діяльність якого саме банку в Україні врегульовується цією угодою?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4800-20 про який польський банк і його діяльність в Україні?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_ratification_canada_restricted_info_4801_20",
+    "rada_nreg": "4801-20",
+    "title": "Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом",
+    "bucket": "treaty_ratification",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про ратифікацію Угоди між Україною та Канадою про взаємну охорону інформації з обмеженим доступом», між якими державами укладено угоду та який саме вид інформації вона охоплює?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Закон 4801-20 про яку інформацію з обмеженим доступом домовилися Україна і Канада?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

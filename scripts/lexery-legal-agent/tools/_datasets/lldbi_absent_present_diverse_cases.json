@@ -1,0 +1,230 @@
+[
+  {
+    "case_id": "law_mediation_diverse",
+    "rada_nreg": "1875-20",
+    "title": "Про медіацію",
+    "bucket": "dispute_resolution",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про медіацію», які істотні умови має містити договір про проведення медіації та коли медіатор зобов'язаний повідомити про конфлікт інтересів?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про медіацію що обов'язково має бути в договорі з медіатором?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Які мінімальні умови угоди про проведення медіації і коли посередник повинен відкрити обставини, що ставлять під сумнів його неупередженість?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_electronic_commerce_diverse",
+    "rada_nreg": "675-19",
+    "title": "Про електронну комерцію",
+    "bucket": "digital_commerce",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про електронну комерцію», у який момент електронний договір вважається укладеним та які електронні повідомлення підтверджують акцепт оферти?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про електронну комерцію коли онлайн-договір уже вважається укладеним?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Коли інтернет-угода набирає сили і яке електронне підтвердження вважається прийняттям пропозиції за законом про електронну комерцію?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_citizens_appeals_diverse",
+    "rada_nreg": "393/96-вр",
+    "title": "Про звернення громадян",
+    "bucket": "administrative_procedure",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про звернення громадян», у який строк розглядається звернення громадянина та коли цей строк може бути продовжений до сорока п'яти днів?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про звернення громадян скільки часу орган має на відповідь і коли строк можна продовжити?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який граничний строк відповіді на заяву чи скаргу громадянина та за яких умов допустиме подовження розгляду за законом про звернення громадян?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_exit_entry_citizens_diverse",
+    "rada_nreg": "3857-12",
+    "title": "Про порядок виїзду з України і в'їзду в Україну громадян України",
+    "bucket": "migration",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про порядок виїзду з України і в'їзду в Україну громадян України», у яких випадках громадянинові може бути тимчасово обмежено право виїзду за кордон?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про виїзд з України коли людині можуть тимчасово заборонити виїхати за кордон?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Які підстави для тимчасового обмеження права громадянина на виїзд з України передбачає спеціальний закон про порядок виїзду і в'їзду?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_public_information_access_diverse",
+    "rada_nreg": "2939-17",
+    "title": "Про доступ до публічної інформації",
+    "bucket": "public_information",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про доступ до публічної інформації», у який строк розпорядник має надати відповідь на запит та коли допустиме продовження строку через великий обсяг інформації?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про доступ до публічної інформації скільки часу є на відповідь і коли можна продовжити строк?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який дедлайн для надання публічної інформації на запит і коли розпорядник може офіційно подовжити розгляд через обсяг матеріалів?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_infectious_diseases_diverse",
+    "rada_nreg": "1645-14",
+    "title": "Про захист населення від інфекційних хвороб",
+    "bucket": "public_health",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про захист населення від інфекційних хвороб», чи можуть працівників окремих професій відсторонити від роботи через відмову від обов'язкових щеплень?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про інфекційні хвороби чи можуть відсторонити працівника без щеплення?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Чи дозволяє спеціальний закон про захист населення від інфекційних хвороб не допускати до роботи працівників обов'язкових професій без профілактичних щеплень?",
+        "expected_pre_coverage_gap": [
+          "likely_missing_act",
+          "weak_evidence"
+        ],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

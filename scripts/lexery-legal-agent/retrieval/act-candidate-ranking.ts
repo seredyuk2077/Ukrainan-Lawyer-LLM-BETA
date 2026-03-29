@@ -6,7 +6,10 @@ import { embedQuery } from './embedding.js';
 import { getQdrantCollections, qdrantSearch } from './qdrant-client.js';
 import {
   buildTaxonomyQuerySignals,
+  extractActReferenceSignals,
   getActMeta,
+  isAmendmentLikeActTitle,
+  queryLooksAmendmentFocused,
   scoreActCandidate,
 } from './act-taxonomy-store.js';
 import { getHitOrderingScore } from './chunk-rerank.js';
@@ -235,12 +238,23 @@ export async function rankActCandidates(
     ...new Set([...taxonomyResult.rada_nreg_candidates, ...actNregsFromSearch]),
   ].slice(0, ACTS_1_POOL_SIZE);
   const querySignals = buildTaxonomyQuerySignals(query);
-  const actScoringSignals = [...new Set([...querySignals.tokens, ...querySignals.phrases])];
+  const actScoringSignals = [
+    ...new Set(
+      [query.trim(), ...extractActReferenceSignals(query), ...querySignals.tokens, ...querySignals.phrases].filter(
+        (signal) => typeof signal === 'string' && signal.trim().length > 0
+      )
+    ),
+  ];
   const plannerPreferredNregs = new Set(
     (actPlannerOutput?.goals?.[0]?.act_candidates ?? [])
       .filter((candidate) => candidate.rada_nreg)
       .map((candidate) => candidate.rada_nreg as string)
   );
+  const exactGroundedNregs = new Set([
+    ...(taxonomyResult.exact_act_nregs ?? []),
+    ...(taxonomyResult.grounded_act_nregs ?? []),
+  ]);
+  const amendmentIntent = queryLooksAmendmentFocused(query);
 
   const familyHints = buildFamilyHints(actPlannerOutput);
   const maxHintConfidence = familyHints.length
@@ -276,7 +290,13 @@ export async function rankActCandidates(
         break;
       }
     }
-    const antiPenalty = 0;
+    const antiPenalty =
+      !amendmentIntent &&
+      !exactGroundedNregs.has(nreg) &&
+      isAmendmentLikeActTitle(meta?.title)
+        ? 1.8
+        : 0;
+    const reasonsOut = antiPenalty > 0 ? [...reasons, 'amendment_act_penalty'] : reasons;
 
     let lldbiCategoryBoost = 0;
     let lldbiDocTypeBoost = 0;
@@ -341,7 +361,7 @@ export async function rankActCandidates(
         ? 'HITS_EVIDENCE'
         : priorApplied
           ? 'FAMILY_PRIOR'
-          : reasons?.includes('alias_match')
+          : reasonsOut?.includes('alias_match') || reasonsOut?.includes('exact_alias_match')
             ? 'ALIAS_MATCH'
             : 'TAXONOMY_TOP';
     return {
@@ -350,7 +370,7 @@ export async function rankActCandidates(
       category: meta?.category ?? null,
       document_type: meta?.document_type ?? null,
       score: totalScore,
-      reasons: evidenceApplied ? [...reasons, 'hits_evidence'] : reasons,
+      reasons: evidenceApplied ? [...reasonsOut, 'hits_evidence'] : reasonsOut,
       priorApplied: priorApplied || lldbiPriorApplied || evidenceApplied,
       priorBoost: familyPriorBoost + lldbiCategoryBoost + lldbiDocTypeBoost + actHitEvidenceBoost,
       antiPenalty,

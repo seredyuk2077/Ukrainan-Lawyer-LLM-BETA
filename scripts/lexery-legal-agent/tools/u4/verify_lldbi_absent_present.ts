@@ -465,6 +465,11 @@ function evaluatePost(caseSpec: CaseSpec, expectation: QueryExpectation, retriev
     const normalizedSelectedActs = retrieval.selected_acts.map((value) => normalizeNregForComparison(value));
     if (!normalizedExpectedSelectedActs.some((value) => normalizedSelectedActs.includes(value))) {
       failures.push(`selected_acts_missing_any_of_${expectedSelectedActs.join('|')}`);
+    } else {
+      const leadSelectedAct = normalizedSelectedActs[0] ?? null;
+      if (leadSelectedAct && !normalizedExpectedSelectedActs.includes(leadSelectedAct)) {
+        failures.push(`lead_selected_act_not_in_expected_set_${expectedSelectedActs.join('|')}`);
+      }
     }
   }
   return {
@@ -493,7 +498,10 @@ function loadCases(pathValue: string): CaseSpec[] {
 }
 
 async function main(): Promise<void> {
-  const casesPath = resolve(process.cwd(), getArgValue('--cases') ?? DEFAULT_CASES_PATH);
+  const casesPath = resolve(
+    process.cwd(),
+    getArgValue('--cases-path') ?? getArgValue('--cases') ?? DEFAULT_CASES_PATH
+  );
   const caseIdsFilter = new Set(getCsvArgValues('--case-ids'));
   const nregsFilter = new Set(getCsvArgValues('--nregs'));
   const limit = Number(getArgValue('--limit') ?? '0') || undefined;

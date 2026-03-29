@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "nbu_bank_metals_2026_03_25_live_absent",
+    "rada_nreg": "n0120500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_daily_price",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 25 березня 2026 року зафіксував облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким актом НБУ станом на 25.03.2026 визначено офіційну облікову ціну банківських металів для застосування у розрахунках?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_fx_rate_2026_03_25_live_absent",
+    "rada_nreg": "n0119500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_daily_fx",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Де Нацбанк на 25 березня 2026 року закріпив офіційний курс гривні до іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким документом НБУ на 25.03.2026 встановлено офіційний валютний курс гривні для щоденного застосування?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_energorinok_contract_extension_256_2026_live_absent",
+    "rada_nreg": "256-2026-р",
+    "title": "Про продовження контракту з директором державного підприємства “Енергоринок” Гнатюком Ю.Л.",
+    "bucket": "cmu_personnel_order",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким урядовим рішенням у березні 2026 року продовжили контракт керівника державного підприємства \"Енергоринок\"?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким актом Кабінету Міністрів у березні 2026 року подовжено контракт із директором ДП \"Енергоринок\" Гнатюком Ю.Л.?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "vru_chair_docflow_order_339_26_rg_live_absent",
+    "rada_nreg": "339/26-РГ",
+    "title": "Про внесення змін до розпорядження Голови Верховної Ради України від 8 лютого 2021 року № 19 \"Про деякі питання забезпечення документообігу у Верховній Раді України в електронній та паперовій формах\"",
+    "bucket": "vru_internal_order",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким розпорядчим актом Голови Верховної Ради у березні 2026 року змінили правила електронного та паперового документообігу парламенту?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Де у березні 2026 року скоригували внутрішній порядок документообігу Верховної Ради в електронній і паперовій формах?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "president_raion_head_resignation_20_2026_rp_live_absent",
+    "rada_nreg": "20/2026-рп",
+    "title": "Про відставку голови Подільської районної державної адміністрації Одеської області",
+    "bucket": "presidential_personnel_order",
+    "queries": [
+      {
+        "query_id": "soft",
+        "style": "soft",
+        "text": "Яким актом Президента у березні 2026 року прийнято відставку голови Подільської РДА Одеської області?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "lawyer_style",
+        "style": "lawyer_style",
+        "text": "Яким президентським розпорядженням у березні 2026 року оформлено відставку голови Подільської районної державної адміністрації Одеської області?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

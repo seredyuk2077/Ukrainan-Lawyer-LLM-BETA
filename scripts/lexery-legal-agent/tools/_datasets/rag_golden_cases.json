@@ -1220,6 +1220,40 @@
     "max_selected_acts": 2
   },
   {
+    "id": "shadow_customs_ip_registry_resolution_v1",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Деякі питання здійснення заходів сприяння захисту прав інтелектуальної власності та реєстрації у митному реєстрі об'єктів права інтелектуальної власності",
+    "description": "Long official-title locator for a subordinate act: retrieval should ground the indexed CMU resolution from a near-full title variant even when the query omits stopwords or the formal legal tail.",
+    "expected_primary": {
+      "rada_nreg": "1127-2022-п",
+      "max_rank": 10
+    },
+    "expected_selected_acts": ["1127-2022-п"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
+    "id": "shadow_customs_ip_registry_resolution_v2",
+    "bucket": "weird document types",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "standard",
+    "max_qdrant_calls": 12,
+    "query": "Що регулює Постанова про митний реєстр ІВ?",
+    "description": "Short descriptive locator for the same subordinate act family: retrieval should keep the same grounded CMU resolution instead of drifting into general civil/IP codes.",
+    "expected_primary": {
+      "rada_nreg": "1127-2022-п",
+      "max_rank": 10
+    },
+    "expected_selected_acts": ["1127-2022-п"],
+    "expected_coverage_gap": "none",
+    "max_selected_acts": 2
+  },
+  {
     "id": "shadow_disciplinary_closure_order_metadata_v1",
     "bucket": "weird document types",
     "priority": "normal",
@@ -1307,6 +1341,46 @@
     "max_qdrant_calls": 18,
     "query": "Які вимоги до кіберзахисту операторів державних хмарних реєстрів за новим спеціальним порядком для критичної цифрової інфраструктури, ухваленим нещодавно?",
     "description": "Legally specific likely-missing-act query: when LLDBI has only weak unrelated subordinate-act tails and no grounded indexed act, retrieval should stay in honest low-confidence mode and expose `likely_missing_act` instead of pretending the broad non-primary noise is enough.",
+    "expect_low_confidence": true,
+    "expected_coverage_gap": "likely_missing_act",
+    "max_selected_acts": 2,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_consumer_return_info_bundle_v1",
+    "bucket": "multi-act mixed-source",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Продавець не дав повної інформації про товар. Чи можу я повернути непродовольчий товар у 14-денний строк і на які норми посилатися?",
+    "description": "Shadow consumer mixed-source variant: retrieval має узагальнювати beyond one canonical phrasing and still keep the main law + civil-code bundle without drifting into fake missing-act semantics.",
+    "expected_selected_acts": ["1023-12", "435-15"],
+    "max_selected_acts": 4,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_consumer_return_info_bundle_v2",
+    "bucket": "multi-act mixed-source",
+    "priority": "normal",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Купив річ, але продавець нормально не пояснив характеристики. Чи можна повернути товар за 14 днів і де це написано?",
+    "description": "Short colloquial consumer variant: retrieval має тримати той самий material consumer bundle без drift у випадковий процесуальний або caselaw tail.",
+    "expected_selected_acts": ["1023-12", "435-15"],
+    "max_selected_acts": 4,
+    "forbidden_selected_act_kinds": ["BILL_DRAFT"]
+  },
+  {
+    "id": "shadow_broning_private_labs_special_order_v1",
+    "bucket": "ood / corpus-gap",
+    "priority": "high",
+    "shadow": true,
+    "latency_budget_class": "complex",
+    "max_qdrant_calls": 18,
+    "query": "Чи є окремий спеціальний порядок для бронювання працівників приватних лабораторій, що виконують оборонні контракти, і які там критерії критичності?",
+    "description": "Likely-missing-act shadow case: retrieval may find broad mobilization or general government rules, but without stable indexed special-act grounding it must stay honest and surface corpus-gap semantics.",
     "expect_low_confidence": true,
     "expected_coverage_gap": "likely_missing_act",
     "max_selected_acts": 2,

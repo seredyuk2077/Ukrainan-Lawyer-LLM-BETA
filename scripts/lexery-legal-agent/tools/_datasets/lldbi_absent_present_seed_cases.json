@@ -1,0 +1,156 @@
+[
+  {
+    "case_id": "law_admin_procedure",
+    "rada_nreg": "2073-20",
+    "title": "Про адміністративну процедуру",
+    "bucket": "administrative",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про адміністративну процедуру», який строк адміністративного оскарження індивідуального акта і коли його можна поновити?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про адмінпроцедуру який строк на оскарження індивідуального акта?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_electronic_communications",
+    "rada_nreg": "1089-20",
+    "title": "Про електронні комунікації",
+    "bucket": "telecom",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про електронні комунікації», коли постачальник електронних комунікаційних послуг має повідомляти абонента про зміну істотних умов договору?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про електронні комунікації коли провайдер має попередити абонента про зміну істотних умов?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_payment_services",
+    "rada_nreg": "1591-20",
+    "title": "Про платіжні послуги",
+    "bucket": "finance",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про платіжні послуги», у який строк платник має повідомити про неавторизовану платіжну операцію і хто несе ризик до такого повідомлення?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про платіжні послуги за який час треба заявити банку про неавторизований платіж?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_financial_leasing",
+    "rada_nreg": "1201-20",
+    "title": "Про фінансовий лізинг",
+    "bucket": "commercial",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про фінансовий лізинг», чи може лізингодавець відмовитися від договору через прострочення лізингових платежів?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про фінансовий лізинг чи можна розірвати договір через прострочення платежів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_mediation",
+    "rada_nreg": "1875-20",
+    "title": "Про медіацію",
+    "bucket": "dispute_resolution",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про медіацію», які вимоги до договору про проведення медіації та чи зобов'язаний медіатор зберігати конфіденційність інформації?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про медіацію що обов'язково має бути в договорі і чи медіатор може розкривати інформацію?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_electronic_commerce",
+    "rada_nreg": "675-19",
+    "title": "Про електронну комерцію",
+    "bucket": "digital_commerce",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про електронну комерцію», який момент укладення електронного договору та які електронні повідомлення підтверджують акцепт?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про електронну комерцію коли електронний договір вважається укладеним?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_consumer_credit",
+    "rada_nreg": "1734-19",
+    "title": "Про споживче кредитування",
+    "bucket": "consumer_finance",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про споживче кредитування», чи має споживач право на дострокове погашення кредиту без додаткової плати та яку переддоговірну інформацію кредитодавець зобов'язаний надати?",
+        "expected_pre_coverage_gap": ["likely_missing_act"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про споживче кредитування чи можна достроково погасити кредит без штрафу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

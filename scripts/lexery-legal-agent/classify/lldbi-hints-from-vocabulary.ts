@@ -3,11 +3,21 @@
  * Ніяких хардкод-списків категорій/типів: тільки vocabulary + підбор за запитом/domain.
  */
 import type { LldbiVocabularyResult } from '../retrieval/lldbi-vocabulary.js'; // from scripts/lexery-legal-agent/classify -> ../retrieval
+import type { ExtractedEntity } from './types.js';
 
 const MIN_DOC_TYPE_SCORE = 0.2;
 const MIN_CATEGORY_SCORE = 0.3;
 const TOP_DOC_TYPES = 3;
 const TOP_CATEGORIES = 3;
+
+type MinimalEntityLike = Pick<ExtractedEntity, 'type' | 'value'>;
+
+type AuthorityDocumentTypeRule = {
+  code: string;
+  entityValues?: string[];
+  queryNeedles: string[];
+  documentTypeNeedles: string[];
+};
 
 /** Загальні стоп-слова для токенізації doc_type (не доменний словник). */
 const DOC_TYPE_STOP = new Set(
@@ -15,6 +25,89 @@ const DOC_TYPE_STOP = new Set(
     s.normalize('NFC').toLowerCase()
   )
 );
+const DOC_TYPE_GENERIC_FORM_TOKENS = new Set(
+  [
+    'акт',
+    'акта',
+    'актом',
+    'акти',
+    'декларація',
+    'договір',
+    'договора',
+    'договору',
+    'договором',
+    'закон',
+    'закону',
+    'законом',
+    'закони',
+    'інструкція',
+    'інструкції',
+    'кодекс',
+    'кодексу',
+    'кодексом',
+    'конвенція',
+    'конвенції',
+    'лист',
+    'наказ',
+    'наказу',
+    'наказом',
+    'положення',
+    'постанова',
+    'постанови',
+    'постановою',
+    'порядок',
+    'порядку',
+    'правила',
+    'правил',
+    'протокол',
+    'регламент',
+    'регламенту',
+    'регламентом',
+    'рішення',
+    'рішенню',
+    'рішенням',
+    'розпорядження',
+    'статут',
+    'статуту',
+    'угода',
+    'угоди',
+    'угоди',
+    'указ',
+    'ухвала',
+  ].map((s) => s.normalize('NFC').toLowerCase())
+);
+
+const AUTHORITY_DOCUMENT_TYPE_RULES: AuthorityDocumentTypeRule[] = [
+  {
+    code: 'NBU',
+    entityValues: ['НБУ'],
+    queryNeedles: ['нбу', 'нацбанк', 'національний банк', 'національного банку'],
+    documentTypeNeedles: ['нбу', 'національного банку', 'національний банк'],
+  },
+  {
+    code: 'KMU',
+    entityValues: ['КМУ'],
+    queryNeedles: ['кму', 'кабмін', 'кабінет міністрів', 'кабінету міністрів'],
+    documentTypeNeedles: ['кму', 'кабмін', 'кабінету міністрів', 'кабінет міністрів'],
+  },
+  {
+    code: 'RNBO',
+    entityValues: ['РНБО'],
+    queryNeedles: ['рнбо', 'національної безпеки і оборони', 'національна безпека і оборона'],
+    documentTypeNeedles: ['рнбо', 'національної безпеки і оборони', 'національної безпеки', 'оборони'],
+  },
+  {
+    code: 'KSU',
+    queryNeedles: ['ксу', 'конституційний суд', 'конституційного суду'],
+    documentTypeNeedles: ['ксу', 'конституційного суду', 'конституційний суд'],
+  },
+  {
+    code: 'VRU',
+    entityValues: ['ВРУ'],
+    queryNeedles: ['вру', 'верховна рада', 'верховної ради'],
+    documentTypeNeedles: ['вру', 'верховна рада', 'верховної ради'],
+  },
+];
 
 function toKey(s: string): string {
   return (s ?? '')
@@ -29,6 +122,77 @@ function tokenize(text: string, stopWords?: Set<string>): string[] {
   const tokens = key.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2);
   if (!stopWords) return [...new Set(tokens)];
   return [...new Set(tokens.filter((t) => !stopWords.has(t)))];
+}
+
+function extractDiscriminativeDocTypeTokens(documentType: string): string[] {
+  return tokenize(documentType, DOC_TYPE_STOP).filter((token) => !DOC_TYPE_GENERIC_FORM_TOKENS.has(token));
+}
+
+function matchesAuthorityNeedle(text: string, needle: string): boolean {
+  const normalizedText = toKey(text);
+  const normalizedNeedle = toKey(needle);
+  return normalizedNeedle.length > 0 && normalizedText.includes(normalizedNeedle);
+}
+
+function detectAuthorityDocumentTypeRules(
+  queryText: string,
+  entities?: MinimalEntityLike[]
+): AuthorityDocumentTypeRule[] {
+  const authorityEntityValues = new Set(
+    (entities ?? [])
+      .filter((entity) => entity.type === 'authority')
+      .map((entity) => entity.value.normalize('NFC').toUpperCase())
+  );
+  return AUTHORITY_DOCUMENT_TYPE_RULES.filter((rule) => {
+    const entityMatched = (rule.entityValues ?? []).some((value) => authorityEntityValues.has(value));
+    const queryMatched = rule.queryNeedles.some((needle) => matchesAuthorityNeedle(queryText, needle));
+    return entityMatched || queryMatched;
+  });
+}
+
+function filterRankedDocumentTypesByAuthorityCompatibility(
+  rankedDocumentTypes: { value: string; score: number }[],
+  queryText: string,
+  entities: MinimalEntityLike[] | undefined,
+  reasons: string[]
+): { value: string; score: number }[] {
+  const matchedRules = detectAuthorityDocumentTypeRules(queryText, entities);
+  if (matchedRules.length === 0 || rankedDocumentTypes.length === 0) return rankedDocumentTypes;
+
+  const compatible = rankedDocumentTypes.filter(({ value }) =>
+    matchedRules.some((rule) =>
+      rule.documentTypeNeedles.some((needle) => matchesAuthorityNeedle(value, needle))
+    )
+  );
+
+  if (compatible.length === 0) {
+    reasons.push(`AUTHORITY_DOC_TYPE_FILTER_EMPTY:${matchedRules.map((rule) => rule.code).join('+')}`);
+    return [];
+  }
+
+  if (compatible.length !== rankedDocumentTypes.length) {
+    reasons.push(`AUTHORITY_DOC_TYPE_FILTER:${matchedRules.map((rule) => rule.code).join('+')}`);
+  }
+
+  return compatible;
+}
+
+export function filterDocumentTypesByAuthorityCompatibility(
+  documentTypes: string[],
+  queryText: string,
+  entities?: MinimalEntityLike[],
+  reasons?: string[]
+): string[] {
+  const rankedDocumentTypes = documentTypes.map((value, index) => ({
+    value,
+    score: Math.max(0, documentTypes.length - index),
+  }));
+  return filterRankedDocumentTypesByAuthorityCompatibility(
+    rankedDocumentTypes,
+    queryText,
+    entities,
+    reasons ?? []
+  ).map((item) => item.value);
 }
 
 /** Редакційна відстань (Левенштейн) для fuzzy match — універсально для будь-якого ключа. */
@@ -58,6 +222,7 @@ export interface DerivedLldbiHintsInput {
   queryText: string;
   domainHint?: string | null;
   legalDomain?: string | null;
+  entities?: MinimalEntityLike[];
   heuristicConfidence: number;
   vocabulary: LldbiVocabularyResult;
 }
@@ -94,28 +259,52 @@ export function legalDomainToTaxonomyKey(domain: string): string | null {
 function rankDocumentTypes(
   queryText: string,
   documentTypes: string[],
-  reasons: string[]
+  reasons: string[],
+  entities?: MinimalEntityLike[]
 ): { value: string; score: number }[] {
   const qTokens = tokenize(queryText);
   const qKey = toKey(queryText);
   if (!qKey && !qTokens.length) return [];
+  const matchedAuthorityRules = detectAuthorityDocumentTypeRules(queryText, entities);
 
   const scored: { value: string; score: number }[] = [];
   for (const dt of documentTypes) {
     if (!dt || !dt.trim()) continue;
     const dtTokens = tokenize(dt, DOC_TYPE_STOP);
+    const discriminativeTokens = extractDiscriminativeDocTypeTokens(dt);
     let score = 0;
     // Token overlap (нормалізований)
     let overlap = 0;
-    for (const t of dtTokens) {
+    for (const t of discriminativeTokens) {
       if (qTokens.includes(t)) overlap += 1;
       else if (qKey.includes(t) || qTokens.some((qt) => t.includes(qt) || qt.includes(t))) overlap += 0.5;
     }
-    if (dtTokens.length > 0) score += (overlap / Math.max(dtTokens.length, qTokens.length)) * 0.8;
-    // Substring: запит містить ключовий корінь doc_type
+    if (discriminativeTokens.length > 0) {
+      score += (overlap / Math.max(discriminativeTokens.length, qTokens.length)) * 0.8;
+    }
+    // Exact phrase: only full concrete document_type phrase should score without discriminative tokens.
     const dtKey = toKey(dt);
-    if (qKey.includes(dtKey) || dtKey.includes(qKey)) score += 0.5;
-    else if (dtKey.length >= 4 && qKey.includes(dtKey.slice(0, 4))) score += 0.2;
+    if (qKey.includes(dtKey) || dtKey.includes(qKey)) {
+      score += 0.5;
+    } else {
+      const substringMatched = discriminativeTokens.some(
+        (token) => token.length >= 4 && (qKey.includes(token) || qTokens.some((qt) => qt.includes(token) || token.includes(qt)))
+      );
+      if (substringMatched) score += 0.2;
+    }
+    const authorityCompatible =
+      matchedAuthorityRules.length > 0 &&
+      matchedAuthorityRules.some((rule) =>
+        rule.documentTypeNeedles.some((needle) => matchesAuthorityNeedle(dt, needle))
+      );
+    const hasConcreteDocTypeGrounding =
+      discriminativeTokens.length > 0 ||
+      qKey.includes(dtKey) ||
+      dtKey.includes(qKey) ||
+      overlap > 0;
+    if (authorityCompatible && hasConcreteDocTypeGrounding) {
+      score += 0.45;
+    }
 
     if (score >= MIN_DOC_TYPE_SCORE) {
       scored.push({ value: dt, score });
@@ -123,7 +312,7 @@ function rankDocumentTypes(
     }
   }
   scored.sort((a, b) => b.score - a.score || a.value.localeCompare(b.value));
-  return scored.slice(0, TOP_DOC_TYPES);
+  return scored;
 }
 
 /**
@@ -206,7 +395,7 @@ function rankCategories(
  * Вихід: categories_ranked_top3, document_types_ranked_top3, routing_confidence, routing_source, meta.
  */
 export function deriveLldbiHintsFromVocabulary(input: DerivedLldbiHintsInput): DerivedLldbiHintsResult {
-  const { queryText, domainHint, legalDomain, heuristicConfidence, vocabulary } = input;
+  const { queryText, domainHint, legalDomain, entities, heuristicConfidence, vocabulary } = input;
   const reasons: string[] = [];
 
   if (!vocabulary.documentTypes?.length && !vocabulary.categories?.length) {
@@ -219,11 +408,20 @@ export function deriveLldbiHintsFromVocabulary(input: DerivedLldbiHintsInput): D
     };
   }
 
-  const document_types_ranked_top3 = rankDocumentTypes(
+  const rankedDocumentTypes = rankDocumentTypes(
     queryText,
     vocabulary.documentTypes ?? [],
+    reasons,
+    entities
+  );
+  const document_types_ranked_top3 = filterRankedDocumentTypesByAuthorityCompatibility(
+    rankedDocumentTypes,
+    queryText,
+    entities,
     reasons
-  ).map((x) => x.value);
+  )
+    .slice(0, TOP_DOC_TYPES)
+    .map((x) => x.value);
 
   const categories_ranked_top3 = rankCategories(
     domainHint,

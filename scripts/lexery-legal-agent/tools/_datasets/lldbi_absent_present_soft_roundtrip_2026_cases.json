@@ -1,0 +1,89 @@
+[
+  {
+    "case_id": "nbu_fx_rate_2026_03_27_live_absent",
+    "rada_nreg": "n0123500-26",
+    "title": "Про офіційний курс гривні щодо іноземних валют",
+    "bucket": "nbu_currency_rate",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким актом Національного банку України на 27 березня 2026 року встановлено офіційний курс гривні щодо іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Де на 27.03.2026 закріплено офіційний курс гривні до іноземних валют?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким нормативним актом Нацбанку на 27 березня 2026 року зафіксовано офіційний курс гривні щодо іноземних валют для валютного розрахунку?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "nbu_bank_metals_price_2026_03_27_live_absent",
+    "rada_nreg": "n0124500-26",
+    "title": "Про облікову ціну банківських металів",
+    "bucket": "nbu_bank_metals",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким актом Національного банку України на 27 березня 2026 року встановлено облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Де НБУ фіксує облікову ціну банківських металів на 27.03.2026?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким нормативним актом Нацбанку на 27 березня 2026 року зафіксовано референтну облікову ціну банківських металів?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "cmu_reserve_fund_257_2026_live_absent",
+    "rada_nreg": "257-2026-р",
+    "title": "Про виділення коштів з резервного фонду державного бюджету",
+    "bucket": "reserve_fund_order",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "Яким урядовим актом у березні 2026 року передбачено виділення коштів з резервного фонду державного бюджету?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "Яким розпорядженням виділили кошти з резервного фонду держбюджету у березні 2026?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Яким урядовим рішенням у березні 2026 року оформили виділення коштів з резервного фонду державного бюджету?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

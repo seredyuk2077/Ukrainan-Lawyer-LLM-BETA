@@ -37,6 +37,15 @@ export function mergeGoalSupportMaps(...maps: GoalSupportByAct[]): GoalSupportBy
   return out;
 }
 
+export function preferEvidenceBackedGoalSupport(
+  evidenceGoalSupport: GoalSupportByAct,
+  fallbackGoalSupport: GoalSupportByAct
+): GoalSupportByAct {
+  return countGoalSupportSignals(evidenceGoalSupport) > 0
+    ? evidenceGoalSupport
+    : fallbackGoalSupport;
+}
+
 export function serializeGoalSupportMap(map: GoalSupportByAct): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [radaNreg, goalIds] of map.entries()) {

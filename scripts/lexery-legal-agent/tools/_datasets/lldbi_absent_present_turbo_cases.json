@@ -1,0 +1,89 @@
+[
+  {
+    "case_id": "law_llc_notice_live_absent",
+    "rada_nreg": "2275-19",
+    "title": "Про товариства з обмеженою та додатковою відповідальністю",
+    "bucket": "corporate_law",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про товариства з обмеженою та додатковою відповідальністю», у який строк учасник має бути повідомлений про загальні збори та які відомості повинно містити таке повідомлення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про ТОВ який строк повідомлення про загальні збори і що має бути в повідомленні?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який профільний закон регулює notice period для зборів учасників LLC і обов'язковий зміст повідомлення?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_food_traceability_live_absent",
+    "rada_nreg": "771/97-ВР",
+    "title": "Про основні принципи та вимоги до безпечності та якості харчових продуктів",
+    "bucket": "food_safety",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про основні принципи та вимоги до безпечності та якості харчових продуктів», які обов'язки має оператор ринку щодо простежуваності харчових продуктів та надання інформації компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про безпечність харчових продуктів які вимоги до простежуваності і яку інформацію треба дати компетентному органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон вимагає food traceability від операторів ринку та розкриття даних на запит компетентного органу?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  },
+  {
+    "case_id": "law_beb_mandate_live_absent",
+    "rada_nreg": "1150-20",
+    "title": "Про Бюро економічної безпеки України",
+    "bucket": "economic_security",
+    "queries": [
+      {
+        "query_id": "canonical",
+        "style": "canonical",
+        "text": "За Законом України «Про Бюро економічної безпеки України», які основні завдання цього органу та хто здійснює контроль за його діяльністю?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "short",
+        "style": "short",
+        "text": "За законом про БЕБ які його завдання і хто контролює діяльність Бюро?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      },
+      {
+        "query_id": "synonymized",
+        "style": "synonymized",
+        "text": "Який спеціальний закон визначає mandate Бюро економічної безпеки та механізми контролю за ним?",
+        "expected_pre_coverage_gap": ["likely_missing_act", "weak_evidence"],
+        "expected_pre_low_confidence": true
+      }
+    ]
+  }
+]

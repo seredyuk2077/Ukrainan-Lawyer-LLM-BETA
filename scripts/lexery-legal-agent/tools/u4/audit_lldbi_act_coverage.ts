@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { config as loadEnv } from 'dotenv';
 import { RunRepository } from '../../gateway/storage.js';
+import { looksLikeStructuredActIdentifier } from '../../lib/structured-act-identifier.js';
 import { getRetrievalTraceHitsForForensics } from '../../retrieval/retrieval-trace-r2.js';
 import { tolerantNormalizeToStrings } from '../../retrieval/tolerant-normalizer.js';
 import { isAmendmentLikeActTitle } from '../../retrieval/act-taxonomy-store.js';
@@ -445,29 +446,7 @@ function tokenizeTitle(title: string): string[] {
 }
 
 function looksLikeStructuredActReferenceToken(token: string): boolean {
-  const normalized = token.normalize('NFC').trim();
-  if (!normalized || normalized.length < 3) return false;
-  if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return false;
-  if (/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/u.test(normalized)) return false;
-  if (/^[\p{L}]\d{3,8}-\d{2,4}$/iu.test(normalized)) return true;
-  if (/^\d{2,7}\/\d{2,8}$/u.test(normalized)) return true;
-  if (/^\d{2,7}-\d{2,8}-[\p{L}]{1,4}$/iu.test(normalized)) return true;
-  const twoSegmentMatch = normalized.match(/^(\d{3,7})-(\d{2,4})$/u);
-  if (!twoSegmentMatch) return false;
-  const left = Number(twoSegmentMatch[1]);
-  const right = Number(twoSegmentMatch[2]);
-  if (
-    twoSegmentMatch[1].length === 4 &&
-    Number.isFinite(left) &&
-    left >= 1900 &&
-    left <= 2100 &&
-    Number.isFinite(right) &&
-    right >= 1 &&
-    right <= 12
-  ) {
-    return false;
-  }
-  return true;
+  return looksLikeStructuredActIdentifier(token.normalize('NFC').trim());
 }
 
 function titleSupportsCompactAcronym(title: string): boolean {

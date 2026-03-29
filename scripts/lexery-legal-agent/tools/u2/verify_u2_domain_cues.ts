@@ -7,6 +7,8 @@ import { tagLegalDomain } from '../../classify/legal-domain-tagger.js';
 import { extractEntities } from '../../classify/entity-extractor.js';
 import { detectAmbiguity } from '../../classify/ambiguity-detector.js';
 import { normalizeInput } from '../../classify/input-normalizer.js';
+import { deriveLldbiHintsFromVocabulary } from '../../classify/lldbi-hints-from-vocabulary.js';
+import type { LldbiVocabularyResult } from '../../retrieval/lldbi-vocabulary.js';
 
 /** Structural cue from entities only (aligned with consumer hasStructuralDomainCue). */
 function hasStructuralDomainCueFromQuery(query: string): boolean {
@@ -36,6 +38,9 @@ const CUE_CASES: Array<{ q: string; expectCue: boolean }> = [
   { q: 'ПКМ №100', expectCue: true },
   { q: 'постанова КМУ №1178', expectCue: true },
   { q: 'наказ МОЗ №385', expectCue: true },
+  { q: '1697-18', expectCue: true },
+  { q: '100-95-п', expectCue: true },
+  { q: 'v0003359-26', expectCue: true },
   { q: '', expectCue: false },
   { q: 'аб', expectCue: false },
 ];
@@ -87,7 +92,53 @@ const STRUCTURAL_FAST_PATH_CASES: Array<{ q: string; expectAmbiguous: boolean; e
     expectAmbiguous: false,
     expectComplex: false,
   },
+  {
+    q: '1697-18',
+    expectAmbiguous: false,
+    expectComplex: false,
+  },
+  {
+    q: '100-95-п',
+    expectAmbiguous: false,
+    expectComplex: false,
+  },
+  {
+    q: 'v0003359-26',
+    expectAmbiguous: false,
+    expectComplex: false,
+  },
 ];
+
+const LLDBI_HINT_CASES: Array<{
+  q: string;
+  expectDocTypes: string[];
+  rejectDocTypes: string[];
+}> = [
+  {
+    q: 'Де НБУ на 24.03.2026 закріпив офіційний курс гривні щодо іноземних валют?',
+    expectDocTypes: ['Повідомлення НБУ'],
+    rejectDocTypes: ['Міжнародний договір', 'Декрет Кабінету Міністрів України'],
+  },
+  {
+    q: 'Яким рішенням Кабміну затвердили воєнні особливості закупівель?',
+    expectDocTypes: ['Постанова КМУ', 'Розпорядження КМУ'],
+    rejectDocTypes: ['Повідомлення НБУ', 'Рішення РНБО'],
+  },
+];
+
+function buildStubVocabulary(documentTypes: string[]): LldbiVocabularyResult {
+  return {
+    categories: ['finance_banking', 'public_procurement'],
+    documentTypes,
+    stats: {
+      totalDocs: documentTypes.length,
+      distinctCategories: 2,
+      distinctDocumentTypes: documentTypes.length,
+    },
+    fetchedAt: Date.now(),
+    source: 'stub',
+  };
+}
 
 function main() {
   let cueOk = 0;
@@ -129,12 +180,44 @@ function main() {
       );
     }
   }
+  let lldbiOk = 0;
+  let lldbiFail = 0;
+  const stubVocabulary = buildStubVocabulary([
+    'Повідомлення НБУ',
+    'Постанова НБУ',
+    'Постанова КМУ',
+    'Розпорядження КМУ',
+    'Міжнародний договір',
+    'Декрет Кабінету Міністрів України',
+    'Рішення РНБО',
+  ]);
+  for (const { q, expectDocTypes, rejectDocTypes } of LLDBI_HINT_CASES) {
+    const { entities } = extractEntities(q);
+    const derived = deriveLldbiHintsFromVocabulary({
+      queryText: q,
+      heuristicConfidence: 0.7,
+      vocabulary: stubVocabulary,
+      entities,
+    });
+    const gotDocTypes = derived.document_types_ranked_top3;
+    const expectedOk = expectDocTypes.some((docType) => gotDocTypes.includes(docType));
+    const rejectOk = rejectDocTypes.every((docType) => !gotDocTypes.includes(docType));
+    if (expectedOk && rejectOk) {
+      lldbiOk++;
+    } else {
+      lldbiFail++;
+      console.error(
+        `[LLDBI FAIL] "${q.slice(0, 80)}..." expected some of=${JSON.stringify(expectDocTypes)} reject=${JSON.stringify(rejectDocTypes)} got=${JSON.stringify(gotDocTypes)}`
+      );
+    }
+  }
   console.log(`\nCue: ${cueOk}/${CUE_CASES.length} pass${cueFail ? `, ${cueFail} fail` : ''}`);
   console.log(`Tagger: ${tagOk}/${TAGGER_CASES.length} pass${tagFail ? `, ${tagFail} fail` : ''}`);
   console.log(
     `Structural fast-path: ${structuralOk}/${STRUCTURAL_FAST_PATH_CASES.length} pass${structuralFail ? `, ${structuralFail} fail` : ''}`
   );
-  process.exit(cueFail + tagFail + structuralFail > 0 ? 1 : 0);
+  console.log(`LLDBI hints: ${lldbiOk}/${LLDBI_HINT_CASES.length} pass${lldbiFail ? `, ${lldbiFail} fail` : ''}`);
+  process.exit(cueFail + tagFail + structuralFail + lldbiFail > 0 ? 1 : 0);
 }
 
 main();
