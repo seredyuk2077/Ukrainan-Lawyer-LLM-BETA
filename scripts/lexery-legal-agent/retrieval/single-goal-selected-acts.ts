@@ -5,7 +5,6 @@ import {
 } from '../gateway/observability.js';
 import {
   extractStructuredActIdentifiers,
-  extractActReferenceSignals,
   extractQuotedActTitleFragments,
   queryLooksAmendmentFocused,
   type ActMeta,
@@ -21,6 +20,7 @@ import { computeFamilyEvidence, toFamilyEvidenceSummary, type FamilyEvidence } f
 import { hasExplicitActScopeCue } from './goal-splitter.js';
 import {
   candidateMatchesExplicitPersonIdentityQuery,
+  extractStrictActScopeReferenceSignals,
   hasActTitleSupportOverlap,
   isExplicitlyHintedSupportActCandidate,
   isInterrogativePrimaryLawLocatorQuery,
@@ -2033,7 +2033,7 @@ export async function resolveSingleGoalSelectedActs(
   const explicitActTitleReference =
     (
       !interrogativePrimaryLawLocatorQuery &&
-      extractActReferenceSignals(query).length > 0
+      extractStrictActScopeReferenceSignals(query).length > 0
     ) ||
     extractQuotedActTitleFragments(query).length > 0;
   const titleRichActScopeReference =

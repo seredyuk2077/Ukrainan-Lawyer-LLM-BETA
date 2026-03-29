@@ -85,6 +85,7 @@ import {
   shouldConfirmSoftProceduralSingleAct,
 } from '../../retrieval/single-goal-selected-acts.js';
 import {
+  extractStrictActScopeReferenceSignals,
   isInterrogativePrimaryLawLocatorQuery,
   isMetadataGroundedActCandidate,
   resolveSingleActScopeSelection,
@@ -12645,6 +12646,16 @@ function testInterrogativePrimaryLawLocatorQueryDetectsSpecialLawLocators(): voi
   console.log('[OK] primary-law locator detector distinguishes special-law queries from generic legal questions');
 }
 
+function testExtractStrictActScopeReferenceSignalsIgnoresTaxNoticeDecisionCompound(): void {
+  const signals = extractStrictActScopeReferenceSignals(
+    'Компанія отримала податкове повідомлення-рішення і хоче зрозуміти строки адміністративного оскарження та звернення до суду.'
+  );
+  if (signals.length > 0) {
+    throw new Error(`Expected tax-notice soft query to stay outside strict act-scope signals, got ${JSON.stringify(signals)}`);
+  }
+  console.log('[OK] strict act-scope reference signals ignore compound decision nouns in soft tax queries');
+}
+
 function testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle(): void {
   const { entities } = extractEntities('Що регулює Указ про призначення Кубраков?');
   const lawTitles = entities.filter((entity) => entity.type === 'law_title').map((entity) => entity.value);
@@ -14730,6 +14741,10 @@ function testResolveExplicitPrimaryActMultiGoalSelectionAllowsAnchoredThinLaw():
       { goal_id: 'goal_0', goal_type: 'compliance_check', act_candidates_top3: ['4805-20', '4804-20'] },
       { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['984_011', '4805-20'] },
     ],
+    goalSupportByAct: new Map([
+      ['4805-20', new Set(['goal_0', 'goal_1'])],
+      ['984_011', new Set(['goal_1'])],
+    ]),
   });
   if (!result.allowSingleActCoverage) {
     throw new Error(`Expected explicit anchored thin law to allow single-act coverage, got ${JSON.stringify(result)}`);
@@ -14838,6 +14853,11 @@ function testResolveExplicitPrimaryActMultiGoalSelectionRecoversThinLawAndTrimsU
       { goal_id: 'goal_0', goal_type: 'compliance_check', act_candidates_top3: ['4800-20', '4803-20', '4804-20'] },
       { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['4801-20', '984_011', '4804-20'] },
     ],
+    goalSupportByAct: new Map([
+      ['4800-20', new Set(['goal_0', 'goal_1'])],
+      ['984_011', new Set(['goal_1'])],
+      ['z0841-01', new Set(['goal_0'])],
+    ]),
   });
   const selectedNregs = result.selectedActs.map((act) => act.rada_nreg);
   if (!selectedNregs.includes('4800-20')) {
@@ -14917,6 +14937,10 @@ function testResolveExplicitPrimaryActMultiGoalSelectionPrefersQuotedAmendmentLa
       { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['848-19', '4794-20'] },
       { goal_id: 'goal_1', goal_type: 'compliance_check', act_candidates_top3: ['848-19', '4794-20'] },
     ],
+    goalSupportByAct: new Map([
+      ['848-19', new Set(['goal_0', 'goal_1'])],
+      ['4794-20', new Set(['goal_0', 'goal_1'])],
+    ]),
   });
   if (!result.allowSingleActCoverage) {
     throw new Error(`Expected quoted amendment law to allow anchored single-act coverage, got ${JSON.stringify(result)}`);
@@ -15004,6 +15028,10 @@ function testResolveExplicitPrimaryActMultiGoalSelectionTrimsUnhintedTreatyTailF
       { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['4799-20', '995_153'] },
       { goal_id: 'goal_1', goal_type: 'definition', act_candidates_top3: ['4799-20', '995_153'] },
     ],
+    goalSupportByAct: new Map([
+      ['4799-20', new Set(['goal_0', 'goal_1'])],
+      ['995_153', new Set(['goal_0', 'goal_1'])],
+    ]),
   });
   if (!result.allowSingleActCoverage) {
     throw new Error(`Expected quoted ratification law to keep anchored single-act coverage, got ${JSON.stringify(result)}`);
@@ -15089,6 +15117,10 @@ function testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxGenericMixed
       { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['2341-14', '4651-17'] },
       { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['4651-17', '2341-14'] },
     ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
   });
   if (result.allowSingleActCoverage) {
     throw new Error(`Did not expect generic mixed bundle to relax into explicit single-act coverage, got ${JSON.stringify(result)}`);
@@ -15142,6 +15174,9 @@ function testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxUngroundedSp
       { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['322-08'] },
       { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['322-08'] },
     ],
+    goalSupportByAct: new Map([
+      ['322-08', new Set(['goal_0', 'goal_1'])],
+    ]),
   });
   if (result.allowSingleActCoverage) {
     throw new Error(`Expected ungrounded special-law locator to avoid generic single-act relaxation, got ${JSON.stringify(result)}`);
@@ -15195,6 +15230,9 @@ function testResolveExplicitPrimaryActMultiGoalSelectionAllowsSemanticSpecialLaw
       { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['2136-20'] },
       { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['2136-20'] },
     ],
+    goalSupportByAct: new Map([
+      ['2136-20', new Set(['goal_0', 'goal_1'])],
+    ]),
   });
   if (!result.allowSingleActCoverage) {
     throw new Error(`Expected semantic special-law locator to allow single-act coverage when the act exists, got ${JSON.stringify(result)}`);
@@ -15203,6 +15241,95 @@ function testResolveExplicitPrimaryActMultiGoalSelectionAllowsSemanticSpecialLaw
     throw new Error(`Expected semantic special-law locator to keep the specialized law, got ${JSON.stringify(result.selectedActs)}`);
   }
   console.log('[OK] explicit primary relaxation still allows semantic special-law locator when the target law exists');
+}
+
+function testResolveExplicitPrimaryActMultiGoalSelectionPreservesGoalDistinctPrimaryCompanion(): void {
+  const result = resolveExplicitPrimaryActMultiGoalSelection({
+    query: 'За Кримінальним кодексом України що таке бандитизм і хто це розслідує на практиці?',
+    documentTypeHints: ['Закон'],
+    selectedActs: [
+      {
+        rada_nreg: '2341-14',
+        act_title: 'Кримінальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal',
+        document_type: 'Кодекс',
+        score: 0.68,
+      },
+      {
+        rada_nreg: '4651-17',
+        act_title: 'Кримінальний процесуальний кодекс України',
+        act_kind: 'PRIMARY_LAW',
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        score: 0.64,
+      },
+    ],
+    selectedActsSourcesBreakdown: {
+      from_taxonomy: [],
+      from_acts_search: [],
+      from_chunks_evidence: ['2341-14', '4651-17'],
+    },
+    actCandidatesTop: [
+      {
+        rada_nreg: '2341-14',
+        title: 'Кримінальний кодекс України',
+        score: 2.9,
+        reasons: ['exact_title_match'],
+        category: 'criminal',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+      {
+        rada_nreg: '4651-17',
+        title: 'Кримінальний процесуальний кодекс України',
+        score: 2.4,
+        reasons: ['title_match'],
+        category: 'criminal_procedure',
+        document_type: 'Кодекс',
+        document_type_slug: 'code',
+      },
+    ],
+    chunksEvidenceTopActs: [
+      {
+        rada_nreg: '2341-14',
+        count_in_top30: 9,
+        avg_score_in_top30: 0.61,
+        max_score: 0.66,
+        best_rank_in_top30: 1,
+        rank_mass_top30: 2.1,
+        max_ordering_score: 0.66,
+      },
+      {
+        rada_nreg: '4651-17',
+        count_in_top30: 8,
+        avg_score_in_top30: 0.58,
+        max_score: 0.63,
+        best_rank_in_top30: 2,
+        rank_mass_top30: 1.85,
+        max_ordering_score: 0.63,
+      },
+    ],
+    goalsSummary: [
+      { goal_id: 'goal_0', goal_type: 'definition', act_candidates_top3: ['2341-14', '4651-17'] },
+      { goal_id: 'goal_1', goal_type: 'procedure', act_candidates_top3: ['4651-17', '2341-14'] },
+    ],
+    goalSupportByAct: new Map([
+      ['2341-14', new Set(['goal_0'])],
+      ['4651-17', new Set(['goal_1'])],
+    ]),
+  });
+  const selectedNregs = result.selectedActs.map((act) => act.rada_nreg).sort();
+  if (JSON.stringify(selectedNregs) !== JSON.stringify(['2341-14', '4651-17'])) {
+    throw new Error(`Expected distinct-goal criminal bundle to preserve both primary acts, got ${JSON.stringify(result.selectedActs)}`);
+  }
+  if (result.allowSingleActCoverage) {
+    throw new Error(`Expected distinct-goal criminal bundle to block single-act coverage relaxation, got ${JSON.stringify(result)}`);
+  }
+  if (!result.reasonCodes.includes('MULTI_GOAL_EXPLICIT_PRIMARY_COMPANION_PRESERVED')) {
+    throw new Error(`Expected explicit primary companion preservation reason, got ${JSON.stringify(result.reasonCodes)}`);
+  }
+  console.log('[OK] explicit primary multi-goal resolution preserves a strong companion primary act with unique goal coverage');
 }
 
 function testTrimUngroundedMultiGoalFallbackSelectionCollapsesOffFamilyTwoActBundle(): void {
@@ -16422,6 +16549,7 @@ async function main(): Promise<void> {
   testMetadataGroundedActCandidateRejectsKsuDecisionForPresidentialRepresentationQuery();
   testMetadataGroundedActCandidateRejectsBoilerplateRepealLocator();
   testInterrogativePrimaryLawLocatorQueryDetectsSpecialLawLocators();
+  testExtractStrictActScopeReferenceSignalsIgnoresTaxNoticeDecisionCompound();
   testEntityExtractorCapturesExplicitDecreeTitleAsLawTitle();
   testExtractStructuredActIdentifiersIgnoresDates();
   testExtractStructuredActIdentifiersIgnoresTemporalHyphenatedTerms();
@@ -16462,6 +16590,7 @@ async function main(): Promise<void> {
   testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxGenericMixedBundle();
   testResolveExplicitPrimaryActMultiGoalSelectionDoesNotRelaxUngroundedSpecialLawLocator();
   testResolveExplicitPrimaryActMultiGoalSelectionAllowsSemanticSpecialLawLocator();
+  testResolveExplicitPrimaryActMultiGoalSelectionPreservesGoalDistinctPrimaryCompanion();
   testTrimUngroundedMultiGoalFallbackSelectionCollapsesOffFamilyTwoActBundle();
   testTrimUngroundedMultiGoalFallbackSelectionPreservesUniqueMixedCoverageWhenCompatible();
   testTrimUngroundedMultiGoalFallbackSelectionPrefersUniqueGoalCoverageOverRedundantEvidence();

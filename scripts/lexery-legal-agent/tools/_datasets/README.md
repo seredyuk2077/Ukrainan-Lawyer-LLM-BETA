@@ -31,6 +31,10 @@
 | `lldbi_absent_present_systemic_cases.json` | verify_lldbi_absent_present | Історичний systemic regression batch; часто вже present у LLDBI |
 | `lldbi_absent_present_live_absent_cases.json` | verify_lldbi_absent_present | Поточний rotating live-absent batch з реально відсутніх substantive laws для truthful `likely_missing_act` → ingest → grounded-retrieval перевірки |
 | `lldbi_absent_present_live_absent_shard_b_cases.json` | verify_lldbi_absent_present | Другий shard live-absent batch для окремого прогону без конфлікту зі старими історичними absent datasets |
+| `lldbi_absent_present_soft_live_2026_03_28_cases.json` | verify_lldbi_absent_present | Soft/natural live absent→present batch без прямих `за законом X` phrasing: date-scoped NBU acts + CMU bylaw locators для rehearsing truthful corpus-gap → ingest → grounded retrieval |
+| `lldbi_absent_present_diverse_live_2026_03_28_cases.json` | verify_lldbi_absent_present | Diverse live absent→present batch з різними issuer-ами (`НБУ`, `КМУ`, `Голова ВРУ`, `Президент`) і soft legal wording без прямого naming акту; корисний для DocList-ready roundtrip rehearsal |
+| `soft_legal_prod_queries_2026_03_29.json` | run_final_manual_audit | Curated warm/lawyer-style soft production pack: law+bylaw, code+procedure, law+KSU, bylaw+bylaw, honest likely-missing-act surface |
+| `soft_legal_prod_queries_subagent_2026_03_29.json` | run_final_manual_audit | Subagent-generated soft production pack із природними lawyer-style питаннями по `code+procedure`, `law+procedure`, `law+bylaw`, `consumer/civil`, `admin/criminal contrast` |
 
 ## Оновлення датасетів
 
@@ -69,5 +73,8 @@ pnpm exec tsx scripts/lexery-legal-agent/tools/u4/verify_rag_golden.ts
 
 - `verify_lldbi_absent_present` тепер явно показує `stale_pre_dataset=true`, якщо всі кейси вже були present до старту run. У такому стані dataset більше не доводить honest missing-act path, а лише працює як post-ingest regression archive.
 - Для реального missing-act benchmark використовуйте `lldbi_absent_present_live_absent_cases.json` і нові rotating shards, зібрані з `u4/list_absent_lldbi_candidates.ts`.
+- Для soft production-like missing-act rehearsal тримайте окремий wording-diverse pack без direct-act phrasing. `lldbi_absent_present_soft_live_2026_03_28_cases.json` саме для цього: там soft/date-scoped queries повинні спочатку чесно йти в `likely_missing_act`, а після LLDBI ingest — ground-итися на конкретний акт без зміни wording.
+- Коли треба перевірити не лише “soft phrasing”, а й breadth по різних issuer-ах та типах актів, використовуйте `lldbi_absent_present_diverse_live_2026_03_28_cases.json`: він спеціально змішує `НБУ` daily acts, `КМУ` personnel/order cases, внутрішній акт Голови ВРУ і президентський personnel act.
 - `seed` / `fresh` / `diverse` / `systemic` корисні для історичної regression-пам'яті, але їх треба періодично ротаційно оновлювати або замінювати новими live-absent packs.
 - Якщо soft legal query не називає конкретний `rada_nreg`, але в LLDBI є historical predecessor і current in-force successor з тим самим legal regime, `verify_lldbi_absent_present` може приймати successor через `acceptable_post_selected_acts`. Це потрібне для правдивих regression-перевірок current-law retrieval, а не для маскування missing-act path.
+- Post-import success у `verify_lldbi_absent_present` тепер вимагає не лише наявності правильного акту десь у `selected_acts`, а й того, щоб lead `selected_act` входив у очікуваний набір (`rada_nreg` або `acceptable_post_selected_acts`). Це захищає absent→present rehearsal від noisy companion bundles.

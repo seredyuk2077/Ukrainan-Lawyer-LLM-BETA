@@ -9,6 +9,7 @@ import {
   normalizeActReferenceCue,
   type ActMeta,
 } from './act-taxonomy-store.js';
+import { hasInterrogativeActLocatorCue } from './descriptive-act-title.js';
 import {
   hasDistinctProceduralSupportBundleCue,
   hasExplicitActScopeCue,
@@ -230,6 +231,14 @@ const PRIMARY_LAW_LIKE_ACT_CUES = new Set([
   'договір',
   'статут',
 ]);
+const STRICT_IDENTITY_NON_PRIMARY_ACT_CUES = new Set([
+  'постанова',
+  'наказ',
+  'розпорядження',
+  'указ',
+  'рішення',
+]);
+const EXPLICIT_ACT_REFERENCE_NUMBER_REGEX = /(?:^|[\s(])(?:№|N|No\.?|#)\s*[\p{L}\d][\p{L}\d./-]{1,}\b/iu;
 
 const INTERROGATIVE_PRIMARY_LAW_LOCATOR_REGEX =
   /(?:^|[?!.]\s*)я(?:кий|ка|ке|кі|кого|кої|кому|кими|ких)(?:\s+саме)?\s+(?:(?:спеціальн|профільн)\p{L}*\s+)?(?:закон\p{L}*|кодекс\p{L}*|конвенц\p{L}*|договор\p{L}*|статут\p{L}*)(?=$|\s)/iu;
@@ -396,6 +405,46 @@ function trimActReferenceSignalTail(signal: string): string {
     .trim();
 }
 
+function splitActReferenceCueAndTail(signal: string): { cue: string | null; tailTokens: string[] } {
+  const tokens = signal.normalize('NFC').match(/[\p{L}\p{N}/-]+/gu) ?? [];
+  const cueIndex = tokens.findIndex((token) => normalizeActReferenceCue(token) !== null);
+  if (cueIndex < 0) return { cue: null, tailTokens: [] };
+  return {
+    cue: normalizeActReferenceCue(tokens[cueIndex] ?? null),
+    tailTokens: tokens.slice(cueIndex + 1),
+  };
+}
+
+function extractInformativeActReferenceTailTokens(signal: string): string[] {
+  const { cue, tailTokens } = splitActReferenceCueAndTail(signal);
+  if (!cue || tailTokens.length === 0) return [];
+  return tailTokens
+    .map((token) => token.normalize('NFC').toLowerCase().trim())
+    .filter((token) => token.length >= 4)
+    .filter((token) => !GENERIC_SUPPORT_HINT_TOKENS.has(token))
+    .filter((token) => normalizeActReferenceCue(token) === null);
+}
+
+function isStrictExplicitActReferenceSignal(query: string, signal: string): boolean {
+  const trimmedSignal = trimActReferenceSignalTail(signal);
+  const { cue, tailTokens } = splitActReferenceCueAndTail(trimmedSignal);
+  if (!cue) return false;
+  if (extractStructuredActIdentifiers(trimmedSignal).length > 0) return true;
+  if (extractQuotedActTitleFragments(trimmedSignal).length > 0) return true;
+  if (EXPLICIT_ACT_REFERENCE_NUMBER_REGEX.test(trimmedSignal)) return true;
+
+  const informativeTailTokens = extractInformativeActReferenceTailTokens(trimmedSignal);
+  const hasProTail = tailTokens.some((token) => token.normalize('NFC').toLowerCase() === 'про');
+  if (hasProTail && informativeTailTokens.length >= 2) return true;
+  if (hasInterrogativeActLocatorCue(query) && informativeTailTokens.length >= 2) return true;
+  if (STRICT_IDENTITY_NON_PRIMARY_ACT_CUES.has(cue)) return false;
+  return informativeTailTokens.length >= 2;
+}
+
+export function extractStrictActScopeReferenceSignals(query: string): string[] {
+  return extractActReferenceSignals(query).filter((signal) => isStrictExplicitActReferenceSignal(query, signal));
+}
+
 function hasCompactCueSignalOverlap(
   signals: string[],
   title: string | undefined | null,
@@ -477,7 +526,7 @@ function hasPreCueDiscriminativeTitleTokenOverlap(
 function collectExplicitActTitleSignals(query: string): string[] {
   const extractedSignals = uniqueStrings([
     ...extractQuotedActTitleFragments(query),
-    ...extractActReferenceSignals(query).map((signal) => trimActReferenceSignalTail(signal)),
+    ...extractStrictActScopeReferenceSignals(query).map((signal) => trimActReferenceSignalTail(signal)),
   ]).filter((signal) => tokenizeGroundingWords(signal).length >= 2);
   if (extractedSignals.length > 0) return extractedSignals;
   if (looksLikeCompactActTitleFragmentQuery(query)) return [query];
@@ -543,7 +592,7 @@ export function isTrustedExplicitGroundedActScopeCandidate(
   if (isMetadataGroundedActCandidate(candidate, query, metadataGroundingReasonCodes)) return true;
 
   const explicitActTitleSignals = collectExplicitActTitleSignals(query);
-  const actReferenceSignals = extractActReferenceSignals(query);
+  const actReferenceSignals = extractStrictActScopeReferenceSignals(query);
   const signals = uniqueStrings([
     ...explicitActTitleSignals,
     ...actReferenceSignals,
@@ -809,7 +858,7 @@ function deriveEvidenceSingleActConvergence(input: {
   metadataGroundingReasonCodes: Set<string>;
 }): string | null {
   const explicitActTitleSignals = collectExplicitActTitleSignals(input.query);
-  const extractedActReferenceSignals = extractActReferenceSignals(input.query);
+  const extractedActReferenceSignals = extractStrictActScopeReferenceSignals(input.query);
   const referenceSignals =
     explicitActTitleSignals.length > 0 ? explicitActTitleSignals : extractedActReferenceSignals;
   const explicitActScopeCueQuery =
@@ -997,7 +1046,7 @@ export function isMetadataGroundedActCandidate(
     candidate.document_type
   );
   const requestedCue =
-    extractActReferenceSignals(query)
+    extractStrictActScopeReferenceSignals(query)
       .map((signal) => normalizeActReferenceCue(signal))
       .find(Boolean) ??
     normalizeActReferenceCue(query);
@@ -1045,7 +1094,7 @@ export function isMetadataGroundedActCandidate(
   const candidateDocumentTypeTokens = tokenizeGroundingWords(candidate.document_type ?? '');
   if (candidateTitleTokens.length === 0) return false;
 
-  const actReferenceSignals = extractActReferenceSignals(query);
+  const actReferenceSignals = extractStrictActScopeReferenceSignals(query);
   const signalsToCheck =
     actReferenceSignals.length > 0 || !looksLikeCompactActTitleFragmentQuery(query)
       ? uniqueStrings([...actReferenceSignals, query])
@@ -1164,7 +1213,7 @@ export async function resolveSingleActScopeSelection(
   const rawGroundedActNregSet = new Set(groundedActNregs.map((value) => normalizeRadaNreg(value)).filter(Boolean));
   const rawGroundedSingleActConverged = rawGroundedActNregSet.size === 1;
   const explicitActTitleSignals = collectExplicitActTitleSignals(query);
-  const extractedActReferenceSignals = extractActReferenceSignals(query);
+  const extractedActReferenceSignals = extractStrictActScopeReferenceSignals(query);
   const explicitActScopeCueQuery =
     hasExplicitActScopeCue(query) ||
     extractStructuredActIdentifiers(query).length >= 1 ||

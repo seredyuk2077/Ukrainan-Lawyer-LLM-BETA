@@ -79,6 +79,7 @@ import { buildSampleHits, payloadToRawHit } from './raw-hit-helpers.js';
 import { extractQueryCitationSelectors } from './structural-citation.js';
 import { deriveCoverageGap } from './coverage-gap.js';
 import { resolveSingleGoalSelectedActs } from './single-goal-selected-acts.js';
+import { queryHasExplicitCalendarDate } from './single-goal-act-scope.js';
 import { buildSingleGoalDegradedTrace } from './single-goal-degraded-trace.js';
 import { buildSingleGoalRetrievalTrace } from './single-goal-trace.js';
 import {
@@ -658,6 +659,7 @@ async function runOneGoal(
       grounded_act_hit_count: taxonomyResult.grounded_act_hit_count ?? 0,
       category_hint_count: goalCategoryHints.length,
       document_type_hint_count: lldbiHints?.documentTypeHints?.length ?? 0,
+      has_explicit_calendar_date: queryHasExplicitCalendarDate(goal.subquery),
     },
     descriptiveActTitleScope: looksLikeCompactActTitleFragmentQuery(goal.subquery),
   });
@@ -1104,13 +1106,14 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     documentTypeHints,
     taxonomySnapshotSummary,
     taxonomyStrength: !isMultiGoal
-      ? {
+        ? {
           taxonomy_act_count: taxonomyResultEarly?.rada_nreg_candidates?.length ?? 0,
           alias_hit_count: taxonomyResultEarly?.alias_hits?.length ?? 0,
           exact_act_hit_count: taxonomyResultEarly?.exact_act_hit_count ?? 0,
           grounded_act_hit_count: taxonomyResultEarly?.grounded_act_hit_count ?? 0,
           category_hint_count: taxonomyResultEarly?.category_hints?.length ?? 0,
           document_type_hint_count: documentTypeHints.length,
+          has_explicit_calendar_date: queryHasExplicitCalendarDate(query),
         }
       : undefined,
     run_id,
@@ -1365,6 +1368,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
       actCandidatesTop: multiActCandidatesTopHydrated,
       chunksEvidenceTopActs: selectedActsMulti.chunks_evidence_top_acts,
       goalsSummary,
+      goalSupportByAct,
     });
     if (
       explicitPrimaryActMultiGoalResolution.changed ||
@@ -1723,6 +1727,7 @@ export async function runCacheRag(input: RunCacheRagInput): Promise<RunCacheRagR
     grounded_act_hit_count: taxonomyResult.grounded_act_hit_count ?? 0,
     category_hint_count: taxonomyResult.category_hints?.length ?? 0,
     document_type_hint_count: documentTypeHints.length,
+    has_explicit_calendar_date: queryHasExplicitCalendarDate(query),
   };
 
   let actPlannerOutput: ActPlannerOutput | null = null;
